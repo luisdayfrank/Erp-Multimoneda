@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro de Compras - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; }
+        .card { border: none; box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075); }
+        .table-hover tbody tr:hover { background-color: #f1f3f5; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
+        <div class="container-fluid">
+            <div class="dropdown me-3">
+                <button class="btn btn-dark dropdown-toggle fs-5 fw-bold border-0" type="button" id="menuERP" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-grid-3x3-gap-fill me-2 text-primary"></i> ERP
+                </button>
+                <ul class="dropdown-menu dropdown-menu-dark shadow-lg" aria-labelledby="menuERP">
+                    <li><a class="dropdown-item" href="dashboard.html"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
+                    <li><a class="dropdown-item" href="pos.html"><i class="bi bi-shop me-2"></i> Punto de Venta</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="clientes.html"><i class="bi bi-people-fill me-2"></i> Clientes</a></li>
+                    <li><a class="dropdown-item" href="proveedores.html"><i class="bi bi-truck me-2"></i> Proveedores</a></li>
+                    <li><a class="dropdown-item" href="inventario.html"><i class="bi bi-box-seam me-2"></i> Inventario</a></li>
+                    <li><a class="dropdown-item active" href="compras.html"><i class="bi bi-bag-plus-fill me-2"></i> Registro de Compras</a></li>
+                </ul>
+            </div>
+            <span class="navbar-brand mb-0 h4 border-start border-secondary ps-3">Ingreso de Mercancía</span>
+            <div class="ms-auto d-flex text-white align-items-center">
+                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesion()"><i class="bi bi-box-arrow-right"></i> Salir</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row">
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm mb-3 border-primary">
+                    <div class="card-header bg-primary text-white fw-bold">
+                        <i class="bi bi-receipt me-2"></i>Datos de la Factura
+                    </div>
+                    <div class="card-body bg-light">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold text-muted small">Proveedor</label>
+                            <select class="form-select fw-bold" id="compra-proveedor">
+                                <option value="">Cargando...</option>
+                            </select>
+                        </div>
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label class="form-label fw-bold text-muted small">Condición</label>
+                                <select class="form-select" id="compra-tipo">
+                                    <option value="CONTADO">Contado</option>
+                                    <option value="CREDITO">A Crédito (Generar CxP)</option>
+                                </select>
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label class="form-label fw-bold text-muted small">Tasa de Cambio (BS)</label>
+                                <input type="number" class="form-control text-primary fw-bold" id="compra-tasa" step="0.01">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm">
+                    <div class="card-header bg-dark text-white fw-bold">
+                        <i class="bi bi-search me-2"></i>Buscar Producto
+                    </div>
+                    <div class="card-body">
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" id="buscador-catalogo" placeholder="Nombre o Código...">
+                        </div>
+                        <div class="list-group" id="lista-resultados-busqueda" style="max-height: 300px; overflow-y: auto;">
+                            <div class="text-muted text-center small py-3">Usa el buscador para agregar productos.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-8 mb-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-cart-plus-fill text-success me-2"></i>Detalle de Productos a Ingresar</span>
+                        <button class="btn btn-sm btn-outline-danger" onclick="vaciarCompra()"><i class="bi bi-trash"></i> Vaciar</button>
+                    </div>
+                    <div class="card-body p-0 d-flex flex-column">
+                        <div class="table-responsive" style="flex-grow: 1; max-height: 500px;">
+                            <table class="table table-hover align-middle text-center mb-0">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th class="text-start ps-3">Producto / Presentación</th>
+                                        <th style="width: 120px;">Cantidad</th>
+                                        <th style="width: 150px;">Costo Unit. ($)</th>
+                                        <th>Subtotal</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-compra">
+                                    <tr><td colspan="5" class="text-muted py-5"><i class="bi bi-box-seam fs-1 d-block mb-2"></i>Aún no has agregado productos a esta compra.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="bg-light p-3 border-top mt-auto">
+                            <div class="row align-items-center text-end">
+                                <div class="col-md-6 text-start">
+                                    <h4 class="text-primary fw-bold mb-0" id="compra-total-bs">BS 0.00</h4>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6 class="text-muted mb-0">TOTAL A PAGAR:</h6>
+                                </div>
+                                <div class="col-md-3">
+                                    <h2 class="text-success fw-bold mb-0" id="compra-total-usd">$ 0.00</h2>
+                                </div>
+                            </div>
+                            <hr>
+                            <div class="text-end">
+                                <button class="btn btn-success btn-lg fw-bold shadow-sm px-5" onclick="procesarCompra()" id="btn-procesar-compra">
+                                    <i class="bi bi-check-circle-fill me-2"></i> REGISTRAR COMPRA E INGRESAR STOCK
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+<div class="modal fade" id="modalAlertaCostos" data-bs-backdrop="static" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0">
+            <div class="modal-header bg-warning text-dark fw-bold">
+                <h5 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i> AnÃ¡lisis de VariaciÃ³n de Costos</h5>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Se han detectado diferencias entre los costos actuales de tu catÃ¡logo y los precios suministrados en esta factura. Selecciona cuÃ¡les deseas actualizar en el sistema maestro:</p>
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle text-center">
+                        <thead class="table-dark">
+                            <tr>
+                                <th class="text-start ps-3">Producto / PresentaciÃ³n</th>
+                                <th>Costo CatÃ¡logo</th>
+                                <th>Costo Facturado</th>
+                                <th>VariaciÃ³n</th>
+                                <th>Â¿Actualizar Ficha?</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lista-cambios-costos">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer bg-light">
+                <button type="button" class="btn btn-outline-secondary fw-bold" id="btn-omitir-costos">Omitir e Ir a Guardar</button>
+                <button type="button" class="btn btn-warning fw-bold text-dark" id="btn-confirmar-costos"><i class="bi bi-arrow-repeat me-1"></i> Aplicar Cambios y Guardar Compra</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/compras.js"></script>
+</body>
+</html>

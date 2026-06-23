@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS Bimonetario - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; height: 100vh; overflow: hidden; }
+        .pos-container { height: calc(100vh - 56px); } 
+        .products-panel { height: 100%; overflow-y: auto; padding: 20px; border-right: 1px solid #dee2e6; }
+        .cart-panel { background-color: white; height: 100%; display: flex; flex-direction: column; }
+        .cart-table-container { flex-grow: 1; overflow-y: auto; }
+        .totals-section { background-color: #f1f3f5; padding: 20px; border-top: 2px solid #dee2e6; }
+        .btn-producto { height: 120px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; cursor: pointer; transition: transform 0.1s; }
+        .btn-producto:active { transform: scale(0.95); }
+        .cliente-item:hover { background-color: #e9ecef; cursor: pointer; }
+
+        #ticket-impresion, #ticket-z-impresion { display: none; }
+
+        @media print {
+            body * { visibility: hidden; }
+            .pos-container, .navbar, .modal { display: none !important; }
+            #ticket-impresion, #ticket-impresion *, #ticket-z-impresion, #ticket-z-impresion * { visibility: visible; }
+            #ticket-impresion, #ticket-z-impresion {
+                position: absolute; left: 0; top: 0; width: 80mm; padding: 5px;
+                font-family: 'Courier New', Courier, monospace; font-size: 12px; color: black;
+            }
+            @page { margin: 0; }
+        }
+        
+        #tablaCarrito td {
+            white-space: nowrap; /* Fuerza a que todo quede en una sola lÃ­nea */
+            vertical-align: middle;
+            padding-top: 4px;
+            padding-bottom: 4px;
+        }
+        #tablaCarrito .form-control-sm {
+            margin-bottom: 0; 
+        }
+        .text-truncate-sm {
+            max-width: 140px;
+            display: inline-block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-dark bg-dark shadow">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1"><i class="bi bi-cpu-fill me-2"></i>ERP Sistema de Ventas</span>
+            <div class="d-flex text-white align-items-center">
+                <span class="badge bg-primary me-3 fs-6" id="tasaDisplay">Tasa: BS 0.00</span>
+                <span class="me-3">Cajero: <b id="nombreCajero">Cargando...</b></span>
+                <button class="btn btn-sm btn-warning fw-bold me-2 text-dark" data-bs-toggle="modal" data-bs-target="#modalEgresos">
+                    <i class="bi bi-box-arrow-up-right"></i> Gastos / Salidas
+                </button>
+                <button class="btn btn-sm btn-danger fw-bold" data-bs-toggle="modal" data-bs-target="#modalCierreCaja">Cerrar Turno</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid pos-container">
+        <div class="row h-100">
+            <div class="col-md-8 products-panel bg-white">
+                <div class="row mb-3 align-items-center">
+                    <div class="col-md-9">
+                        <div class="input-group shadow-sm border-primary">
+                            <span class="input-group-text bg-primary text-white fw-bold"><i class="bi bi-person-fill me-1"></i> Cliente</span>
+                            <select class="form-select text-dark fw-bold" id="select-cliente" disabled>
+                                <option value="1">Cliente Mostrador</option> 
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary w-100 fw-bold shadow-sm" data-bs-toggle="modal" data-bs-target="#modalBuscarCliente">
+                            <i class="bi bi-search me-1"></i> BUSCAR
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <div class="input-group input-group-lg shadow-sm">
+                        <span class="input-group-text bg-white border-primary"><i class="bi bi-barcode"></i></span>
+                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea código o escribe nombre del producto..." autofocus autocomplete="off">
+                    </div>
+                </div>
+            
+                <div class="row g-3" id="gridProductos"></div>
+            </div>
+
+            <div class="col-md-4 cart-panel shadow-lg">
+                <div class="cart-table-container p-3">
+                    <table class="table table-sm table-hover text-center align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th class="text-start">Producto</th>
+                                <th>Cant.</th>
+                                <th>Precio</th>
+                                <th>Subt.</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="tablaCarrito">
+                            <tr>
+                                <td colspan="5" class="text-muted py-5 text-center">
+                                    <i class="bi bi-cart-x fs-1 d-block mb-2"></i>
+                                    El carrito está vacío
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="totals-section">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-muted">Subtotal:</span>
+                        <span id="ui-subtotal" class="fw-bold">$ 0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Impuestos (IVA):</span>
+                        <span id="ui-impuestos" class="fw-bold">$ 0.00</span>
+                    </div>
+                    <hr class="my-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="fs-5 fw-bold">TOTAL USD:</span>
+                        <span class="fs-3 fw-bold text-success" id="ui-total-usd">$ 0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="fs-6 text-muted">TOTAL BS:</span>
+                        <span class="fs-5 fw-bold text-primary" id="ui-total-bs">BS 0.00</span>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <button class="btn btn-outline-danger w-100 py-3 fw-bold" onclick="vaciarCarrito()">
+                                <i class="bi bi-trash"></i> CANCELAR
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-success w-100 py-3 fw-bold shadow" onclick="abrirModalCobro()">
+                                <i class="bi bi-cash-stack"></i> COBRAR (F12)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Buscar Cliente -->
+    <div class="modal fade" id="modalBuscarCliente" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-search me-2"></i>Seleccionar Cliente</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <div class="d-flex mb-3">
+                        <input type="text" class="form-control me-2 border-primary" id="input-buscar-cliente" placeholder="Nombre o Cédula/RIF..." onkeyup="filtrarClientesModal()">
+                        <button class="btn btn-primary fw-bold text-nowrap" data-bs-toggle="modal" data-bs-target="#modalNuevoCliente">
+                            <i class="bi bi-person-plus-fill"></i> + NUEVO
+                        </button>
+                    </div>
+                    <div class="list-group shadow-sm" id="lista-clientes-modal" style="max-height: 400px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Nuevo Cliente -->
+    <div class="modal fade" id="modalNuevoCliente" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold">Registrar Cliente</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Nombre / Razón Social</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-nombre">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Cédula / RIF</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-doc">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Teléfono</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-tlf">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary fw-bold" onclick="guardarNuevoCliente()">GUARDAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Modal Egreso -->
+    <div class="modal fade" id="modalEgresos" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-box-arrow-up-right me-2"></i>Registrar Egreso / Salida</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light p-0">
+                    <ul class="nav nav-tabs nav-fill bg-white pt-2" id="egresosTab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active fw-bold text-dark" id="dinero-tab" data-bs-toggle="tab" data-bs-target="#dinero-pane" type="button" role="tab"><i class="bi bi-cash me-1"></i> Sacar Efectivo</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link fw-bold text-dark" id="inventario-tab" data-bs-toggle="tab" data-bs-target="#inventario-pane" type="button" role="tab"><i class="bi bi-box-seam me-1"></i> Salida de Productos</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content p-4" id="egresosTabContent">
+                        <div class="tab-pane fade show active" id="dinero-pane" role="tabpanel" tabindex="0">
+                            <div class="row g-3">
+                                <div class="col-md-12">
+                                    <label class="form-label fw-bold">Concepto / Motivo</label>
+                                    <select class="form-select border-warning select-concepto-egreso" id="egreso-caja-concepto"></select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Monto ExtraÃ­do</label>
+                                    <input type="number" class="form-control form-control-lg text-center" id="egreso-caja-monto" step="0.01" value="0.00">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Moneda del Billete</label>
+                                    <select class="form-select form-select-lg text-center" id="egreso-caja-moneda">
+                                        <option value="PRINCIPAL">DÃ³lares (USD)</option>
+                                        <option value="SECUNDARIA">BolÃ­vares (BS)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-12">
+                                    <label class="form-label fw-bold">ObservaciÃ³n</label>
+                                    <input type="text" class="form-control" id="egreso-caja-obs" placeholder="Ej: Pago de botellÃ³n de agua, pasaje, etc.">
+                                </div>
+                                <div class="col-12 text-end mt-4">
+                                    <button class="btn btn-warning fw-bold px-5" onclick="procesarEgresoCaja()">RETIRAR DINERO</button>
+                                </div>
+                            </div>
+                        </div>
+
+                            <div class="tab-pane fade" id="inventario-pane" role="tabpanel" tabindex="0">
+                            <div class="row g-2 mb-2 align-items-end">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold small">Concepto</label>
+                                    <select class="form-select form-select-sm border-warning select-concepto-egreso" id="egreso-inv-concepto"></select>
+                                </div>
+                                <div class="col-md-8">
+                                    <label class="form-label fw-bold small">Buscar Producto</label>
+                                    <input type="text" class="form-control form-control-sm border-primary" id="buscador-egreso-inv" placeholder="Escribe el nombre para filtrar la lista...">
+                                </div>
+                            </div>
+                            
+                            <div class="row g-2 mb-3 align-items-end">
+                                <div class="col-md-7">
+                                    <select class="form-select form-select-sm" id="egreso-inv-producto">
+                                        <option value="">-- Buscar Producto Arriba --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="number" class="form-control form-control-sm text-center" id="egreso-inv-cant" step="0.01" value="1" onclick="this.select()">
+                                </div>
+                                <div class="col-md-3">
+                                    <button class="btn btn-sm btn-primary w-100 fw-bold" onclick="agregarAEgresoInv()">+ AÃ‘ADIR</button>
+                                </div>
+                            </div>
+                            
+                            <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+                                <table class="table table-sm table-bordered text-center align-middle">
+                                    <thead class="table-light">
+                                        <tr><th>Producto</th><th>Cant.</th><th>Costo Unit.</th><th></th></tr>
+                                    </thead>
+                                    <tbody id="tabla-egreso-inv">
+                                        <tr><td colspan="4" class="text-muted small">Agrega productos a la lista de salida</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="row mt-2">
+                                <div class="col-md-8">
+                                    <input type="text" class="form-control form-control-sm" id="egreso-inv-obs" placeholder="Nota o persona que autoriza...">
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <button class="btn btn-sm btn-danger fw-bold w-100" onclick="procesarEgresoInventario()">DESCONTAR STOCK</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cobro -->
+    <div class="modal fade" id="modalCobro" data-bs-backdrop="static" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content border-success">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-check2-circle me-2"></i>Finalizar Venta</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <div class="row mb-3 text-center bg-white p-3 rounded shadow-sm mx-1">
+                        <div class="col-6 border-end">
+                            <h5 class="text-muted mb-0">TOTAL USD</h5>
+                            <h2 class="text-success fw-bold mb-0" id="cobro-total-usd">$ 0.00</h2>
+                        </div>
+                        <div class="col-6">
+                            <h5 class="text-muted mb-0">TOTAL BS</h5>
+                            <h3 class="text-primary fw-bold mb-0" id="cobro-total-bs">BS 0.00</h3>
+                        </div>
+                    </div>
+                    <div class="mb-4 text-center">
+                        <div class="btn-group shadow-sm" role="group">
+                            <input type="radio" class="btn-check" name="tipoVenta" id="btn-contado" value="CONTADO" checked onchange="evaluarEstadoPago()">
+                            <label class="btn btn-outline-success fw-bold px-5 py-2" for="btn-contado">CONTADO</label>
+                            <input type="radio" class="btn-check" name="tipoVenta" id="btn-credito" value="CREDITO" onchange="evaluarEstadoPago()">
+                            <label class="btn btn-outline-warning fw-bold px-5 py-2" for="btn-credito">CRÉDITO</label>
+                        </div>
+                    </div>
+                    <h6 class="fw-bold text-secondary mb-2">Métodos de Pago (Abonos)</h6>
+                    <div id="contenedor-pagos" class="mb-3"></div>
+                    <div class="text-center mb-4">
+                        <button class="btn btn-sm btn-outline-primary fw-bold" onclick="agregarLineaPago()">+ AÑADIR OTRO MÉTODO</button>
+                    </div>
+                    <div class="row bg-dark text-white p-3 rounded mx-1 align-items-center shadow">
+                        <div class="col-6"><h5 class="mb-0">Restante por pagar:</h5></div>
+                        <div class="col-6 text-end"><h3 class="text-warning fw-bold mb-0" id="cobro-restante-usd">$ 0.00</h3></div>
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">REGRESAR</button>
+                    <button type="button" class="btn btn-success fw-bold px-5 py-2" id="btn-procesar-factura" onclick="ejecutarFacturacionFinal()" disabled>FACTURAR AHORA</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Apertura Caja -->
+    <div class="modal fade" id="modalAperturaCaja" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-success">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title fw-bold">Apertura de Turno</h5>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <p class="text-muted">Ingresa el fondo inicial de la gaveta.</p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Fondo USD</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="apertura-usd" value="0.00">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Fondo BS</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="apertura-bs" value="0.00">
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button class="btn btn-outline-danger" onclick="cerrarSesion()">Salir</button>
+                    <button class="btn btn-success fw-bold px-4" onclick="procesarAperturaCaja()">ABRIR CAJA</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cierre Obligatorio -->
+    <div class="modal fade" id="modalCierreObligatorio" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-danger">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold">?? Turno Pendiente de Ayer</h5>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-danger fw-bold">Debes cerrar el turno del día anterior antes de continuar.</p>
+                    <div class="mb-3 text-center">
+                        <label class="form-label fw-bold">Total Físico en Gaveta (USD)</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-usd" value="0.00">
+                    </div>
+                    <div class="mb-3 text-center">
+                        <label class="form-label fw-bold">Total Físico en Gaveta (BS)</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-bs" value="0.00">
+                    </div>
+                </div>
+                <div class="modal-footer text-center">
+                    <button class="btn btn-danger w-100 fw-bold" onclick="procesarCierreObligatorio()">CERRAR CAJA VIEJA Y RECARGAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cierre Caja -->
+    <div class="modal fade" id="modalCierreCaja" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title">Cierre de Turno</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Efectivo USD</label>
+                        <input type="number" class="form-control" id="cierre-usd" value="0.00">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Efectivo BS</label>
+                        <input type="number" class="form-control" id="cierre-bs" value="0.00">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-danger w-100 fw-bold" onclick="procesarCierreCaja()">CONFIRMAR CIERRE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ticket de Venta -->
+    <div id="ticket-impresion">
+        <div style="text-align: center; margin-bottom: 10px;">
+            <h3 style="margin: 0;">MI EMPRESA C.A.</h3>
+            <p style="margin: 0; font-size: 10px;">RIF: J-12345678-9</p>
+            <p style="margin: 0; font-size: 10px;">Av. Principal, Local 4</p>
+            <p style="margin: 0; font-size: 10px;">Tel: 0414-1234567</p>
+            <hr style="border-top: 1px dashed black; margin: 5px 0;">
+            <p style="margin: 0; font-weight: bold;">TICKET DE VENTA #<span id="ticket-id">---</span></p>
+            <p style="margin: 0; font-size: 10px;" id="ticket-fecha"></p>
+        </div>
+        <table style="width: 100%; text-align: left; font-size: 11px; margin-bottom: 5px;">
+            <thead>
+                <tr><th style="width: 15%;">CANT</th><th style="width: 55%;">DESCRIPCIÓN</th><th style="width: 30%; text-align: right;">TOTAL</th></tr>
+            </thead>
+            <tbody id="ticket-items"></tbody>
+        </table>
+        <hr style="border-top: 1px dashed black; margin: 5px 0;">
+        <div style="text-align: right; font-weight: bold; font-size: 12px;">
+            <p style="margin: 0;">SUBTOTAL: $ <span id="ticket-subtotal">0.00</span></p>
+            <p style="margin: 0;">IVA: $ <span id="ticket-iva">0.00</span></p>
+            <p style="margin: 0; font-size: 14px;">TOTAL: $ <span id="ticket-total-usd">0.00</span></p>
+            <p style="margin: 0;">TOTAL BS: <span id="ticket-total-bs">0.00</span></p>
+            <p style="margin: 0; font-size: 10px;">Tasa: <span id="ticket-tasa">0.00</span> BS/USD</p>
+        </div>
+        <div style="text-align: center; margin-top: 15px;">
+            <p style="margin: 0;">¡Gracias por su compra!</p>
+            <p style="margin: 0;">Cajero: <span id="ticket-cajero">Admin</span></p>
+        </div>
+    </div>
+
+    <!-- Corte Z -->
+    <div id="ticket-z-impresion">
+        <div style="text-align: center; margin-bottom: 10px;">
+            <h3 style="margin: 0;">MI EMPRESA C.A.</h3>
+            <h2 style="margin: 5px 0;">CORTE Z</h2>
+            <p style="margin: 0; font-size: 10px;" id="z-fecha-cierre"></p>
+            <p style="margin: 0; font-size: 12px;">Cajero: <span id="z-cajero"></span></p>
+            <hr style="border-top: 1px dashed black; margin: 10px 0;">
+        </div>
+        <div style="font-size: 12px; margin-bottom: 15px;">
+            <p><strong>Fondo Inicial:</strong> $ <span id="z-fondo"></span></p>
+            <p><strong>Ventas del Turno:</strong> $ <span id="z-ventas"></span></p>
+            <p class="text-danger"><strong>(-) Gastos/Egresos:</strong> $ <span id="z-gastos"></span></p>
+            <p><strong>Total Esperado:</strong> $ <span id="z-esperado"></span></p>
+            <hr style="border-top: 1px dashed black; margin: 5px 0;">
+            <hr style="border-top: 1px dashed black; margin: 5px 0;">
+            <p><strong>Declarado (USD):</strong> $ <span id="z-declarado-usd"></span></p>
+            <p><strong>Declarado (BS):</strong> BS <span id="z-declarado-bs"></span></p>
+            <hr style="border-top: 1px dashed black; margin: 5px 0;">
+            <p style="font-size: 14px; font-weight: bold;">DESCUADRE: <span id="z-descuadre"></span></p>
+        </div>
+        <div style="text-align: center; margin-top: 30px;">
+            <p style="margin: 0;">_______________________</p>
+            <p style="margin: 0; font-size: 10px;">Firma del Cajero</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/pos.js?v=4.5"></script>
+</body>
+</html>

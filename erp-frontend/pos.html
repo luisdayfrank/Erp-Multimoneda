@@ -17,21 +17,8 @@
         .btn-producto:active { transform: scale(0.95); }
         .cliente-item:hover { background-color: #e9ecef; cursor: pointer; }
 
-        #ticket-impresion, #ticket-z-impresion { display: none; }
-
-        @media print {
-            body * { visibility: hidden; }
-            .pos-container, .navbar, .modal { display: none !important; }
-            #ticket-impresion, #ticket-impresion *, #ticket-z-impresion, #ticket-z-impresion * { visibility: visible; }
-            #ticket-impresion, #ticket-z-impresion {
-                position: absolute; left: 0; top: 0; width: 80mm; padding: 5px;
-                font-family: 'Courier New', Courier, monospace; font-size: 12px; color: black;
-            }
-            @page { margin: 0; }
-        }
-        
         #tablaCarrito td {
-            white-space: nowrap; /* Fuerza a que todo quede en una sola lÃ­nea */
+            white-space: nowrap;
             vertical-align: middle;
             padding-top: 4px;
             padding-bottom: 4px;
@@ -45,6 +32,177 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        /* ============================================================
+           TICKET DE IMPRESIÃ“N 58mm - ESTILOS PANTALLA (oculto)
+           ============================================================ */
+        .ticket-impresion {
+            display: none;
+            width: 58mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 10px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            padding: 2mm;
+            box-sizing: border-box;
+        }
+        .ticket-impresion * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        .ticket-encabezado {
+            text-align: center;
+            margin-bottom: 3mm;
+            border-bottom: 1px dashed #000;
+            padding-bottom: 2mm;
+        }
+        .ticket-encabezado h3 {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 1mm;
+        }
+        .ticket-encabezado p {
+            font-size: 9px;
+            margin-bottom: 0.5mm;
+        }
+        .ticket-info {
+            margin-bottom: 2mm;
+            font-size: 9px;
+        }
+        .ticket-info p {
+            margin-bottom: 0.5mm;
+        }
+        .ticket-items {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2mm;
+            font-size: 9px;
+        }
+        .ticket-items th {
+            border-bottom: 1px dashed #000;
+            text-align: left;
+            padding: 1mm 0;
+            font-weight: bold;
+        }
+        .ticket-items td {
+            padding: 0.5mm 0;
+            vertical-align: top;
+        }
+        .ticket-items td:nth-child(1) { width: 8mm; text-align: center; }
+        .ticket-items td:nth-child(2) { width: 32mm; }
+        .ticket-items td:nth-child(3) { width: 18mm; text-align: right; }
+        .ticket-totales {
+            border-top: 1px dashed #000;
+            padding-top: 2mm;
+            margin-bottom: 2mm;
+            font-size: 9px;
+        }
+        .ticket-totales .fila-total {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5mm;
+        }
+        .ticket-totales .total-final {
+            font-size: 12px;
+            font-weight: bold;
+            border-top: 1px solid #000;
+            padding-top: 1mm;
+            margin-top: 1mm;
+        }
+        .ticket-pagos {
+            border-top: 1px dashed #000;
+            padding-top: 2mm;
+            margin-bottom: 2mm;
+            font-size: 9px;
+        }
+        .ticket-pagos .fila-pago {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5mm;
+        }
+        .ticket-vuelto {
+            font-size: 10px;
+            font-weight: bold;
+            color: #006400;
+            margin-bottom: 1mm;
+        }
+        .ticket-credito {
+            font-size: 10px;
+            font-weight: bold;
+            color: #cc0000;
+            border: 1px solid #cc0000;
+            padding: 1mm;
+            text-align: center;
+            margin-bottom: 2mm;
+        }
+        .ticket-footer {
+            text-align: center;
+            border-top: 1px dashed #000;
+            padding-top: 2mm;
+            font-size: 9px;
+        }
+        .ticket-footer p {
+            margin-bottom: 0.5mm;
+        }
+
+        /* ============================================================
+           TICKET CORTE Z - ESTILOS PANTALLA (oculto)
+           ============================================================ */
+        .ticket-z-impresion {
+            display: none;
+            width: 58mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 10px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            padding: 2mm;
+            box-sizing: border-box;
+        }
+        .ticket-z-impresion * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* ============================================================
+           CSS DE IMPRESIÃ“N - SOLO SE APLICA AL IMPRIMIR
+           ============================================================ */
+        @media print {
+            /* Ocultar TODO el contenido de la pÃ¡gina */
+            .pos-container, 
+            .navbar, 
+            .modal,
+            .modal-backdrop {
+                display: none !important;
+            }
+
+            /* Mostrar SOLO el ticket activo */
+            .ticket-impresion.activo,
+            .ticket-z-impresion.activo {
+                display: block !important;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 58mm;
+                margin: 0;
+                padding: 2mm;
+            }
+
+            /* Asegurar que el body no tenga mÃ¡rgenes */
+            body {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+            }
+
+            @page {
+                size: 58mm auto;
+                margin: 0;
+            }
         }
     </style>
 </head>
@@ -86,10 +244,10 @@
                 <div class="mb-4">
                     <div class="input-group input-group-lg shadow-sm">
                         <span class="input-group-text bg-white border-primary"><i class="bi bi-barcode"></i></span>
-                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea código o escribe nombre del producto..." autofocus autocomplete="off">
+                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea cÃ³digo o escribe nombre del producto..." autofocus autocomplete="off">
                     </div>
                 </div>
-            
+
                 <div class="row g-3" id="gridProductos"></div>
             </div>
 
@@ -109,7 +267,7 @@
                             <tr>
                                 <td colspan="5" class="text-muted py-5 text-center">
                                     <i class="bi bi-cart-x fs-1 d-block mb-2"></i>
-                                    El carrito está vacío
+                                    El carrito estÃ¡ vacÃ­o
                                 </td>
                             </tr>
                         </tbody>
@@ -161,7 +319,7 @@
                 </div>
                 <div class="modal-body bg-light">
                     <div class="d-flex mb-3">
-                        <input type="text" class="form-control me-2 border-primary" id="input-buscar-cliente" placeholder="Nombre o Cédula/RIF..." onkeyup="filtrarClientesModal()">
+                        <input type="text" class="form-control me-2 border-primary" id="input-buscar-cliente" placeholder="Nombre o CÃ©dula/RIF..." onkeyup="filtrarClientesModal()">
                         <button class="btn btn-primary fw-bold text-nowrap" data-bs-toggle="modal" data-bs-target="#modalNuevoCliente">
                             <i class="bi bi-person-plus-fill"></i> + NUEVO
                         </button>
@@ -182,15 +340,15 @@
                 </div>
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Nombre / Razón Social</label>
+                        <label class="form-label fw-bold">Nombre / RazÃ³n Social</label>
                         <input type="text" class="form-control" id="nuevo-cliente-nombre">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Cédula / RIF</label>
+                        <label class="form-label fw-bold">CÃ©dula / RIF</label>
                         <input type="text" class="form-control" id="nuevo-cliente-doc">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Teléfono</label>
+                        <label class="form-label fw-bold">TelÃ©fono</label>
                         <input type="text" class="form-control" id="nuevo-cliente-tlf">
                     </div>
                 </div>
@@ -201,6 +359,7 @@
             </div>
         </div>
     </div>
+
     <!-- Modal Egreso -->
     <div class="modal fade" id="modalEgresos" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -247,7 +406,7 @@
                             </div>
                         </div>
 
-                            <div class="tab-pane fade" id="inventario-pane" role="tabpanel" tabindex="0">
+                        <div class="tab-pane fade" id="inventario-pane" role="tabpanel" tabindex="0">
                             <div class="row g-2 mb-2 align-items-end">
                                 <div class="col-md-4">
                                     <label class="form-label fw-bold small">Concepto</label>
@@ -258,7 +417,7 @@
                                     <input type="text" class="form-control form-control-sm border-primary" id="buscador-egreso-inv" placeholder="Escribe el nombre para filtrar la lista...">
                                 </div>
                             </div>
-                            
+
                             <div class="row g-2 mb-3 align-items-end">
                                 <div class="col-md-7">
                                     <select class="form-select form-select-sm" id="egreso-inv-producto">
@@ -272,7 +431,7 @@
                                     <button class="btn btn-sm btn-primary w-100 fw-bold" onclick="agregarAEgresoInv()">+ AÃ‘ADIR</button>
                                 </div>
                             </div>
-                            
+
                             <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
                                 <table class="table table-sm table-bordered text-center align-middle">
                                     <thead class="table-light">
@@ -322,13 +481,13 @@
                             <input type="radio" class="btn-check" name="tipoVenta" id="btn-contado" value="CONTADO" checked onchange="evaluarEstadoPago()">
                             <label class="btn btn-outline-success fw-bold px-5 py-2" for="btn-contado">CONTADO</label>
                             <input type="radio" class="btn-check" name="tipoVenta" id="btn-credito" value="CREDITO" onchange="evaluarEstadoPago()">
-                            <label class="btn btn-outline-warning fw-bold px-5 py-2" for="btn-credito">CRÉDITO</label>
+                            <label class="btn btn-outline-warning fw-bold px-5 py-2" for="btn-credito">CRÃ‰DITO</label>
                         </div>
                     </div>
-                    <h6 class="fw-bold text-secondary mb-2">Métodos de Pago (Abonos)</h6>
+                    <h6 class="fw-bold text-secondary mb-2">MÃ©todos de Pago (Abonos)</h6>
                     <div id="contenedor-pagos" class="mb-3"></div>
                     <div class="text-center mb-4">
-                        <button class="btn btn-sm btn-outline-primary fw-bold" onclick="agregarLineaPago()">+ AÑADIR OTRO MÉTODO</button>
+                        <button class="btn btn-sm btn-outline-primary fw-bold" onclick="agregarLineaPago()">+ AÃ‘ADIR OTRO MÃ‰TODO</button>
                     </div>
                     <div class="row bg-dark text-white p-3 rounded mx-1 align-items-center shadow">
                         <div class="col-6"><h5 class="mb-0">Restante por pagar:</h5></div>
@@ -374,16 +533,16 @@
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content border-danger">
                 <div class="modal-header bg-danger text-white">
-                    <h5 class="modal-title fw-bold">?? Turno Pendiente de Ayer</h5>
+                    <h5 class="modal-title fw-bold">âš  Turno Pendiente de Ayer</h5>
                 </div>
                 <div class="modal-body p-4">
-                    <p class="text-danger fw-bold">Debes cerrar el turno del día anterior antes de continuar.</p>
+                    <p class="text-danger fw-bold">Debes cerrar el turno del dÃ­a anterior antes de continuar.</p>
                     <div class="mb-3 text-center">
-                        <label class="form-label fw-bold">Total Físico en Gaveta (USD)</label>
+                        <label class="form-label fw-bold">Total FÃ­sico en Gaveta (USD)</label>
                         <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-usd" value="0.00">
                     </div>
                     <div class="mb-3 text-center">
-                        <label class="form-label fw-bold">Total Físico en Gaveta (BS)</label>
+                        <label class="form-label fw-bold">Total FÃ­sico en Gaveta (BS)</label>
                         <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-bs" value="0.00">
                     </div>
                 </div>
@@ -419,66 +578,120 @@
         </div>
     </div>
 
-    <!-- Ticket de Venta -->
-    <div id="ticket-impresion">
-        <div style="text-align: center; margin-bottom: 10px;">
-            <h3 style="margin: 0;">MI EMPRESA C.A.</h3>
-            <p style="margin: 0; font-size: 10px;">RIF: J-12345678-9</p>
-            <p style="margin: 0; font-size: 10px;">Av. Principal, Local 4</p>
-            <p style="margin: 0; font-size: 10px;">Tel: 0414-1234567</p>
-            <hr style="border-top: 1px dashed black; margin: 5px 0;">
-            <p style="margin: 0; font-weight: bold;">TICKET DE VENTA #<span id="ticket-id">---</span></p>
-            <p style="margin: 0; font-size: 10px;" id="ticket-fecha"></p>
+    <!-- ============================================================
+         TICKET DE VENTA - 58mm - VERSIÃ“N CORREGIDA
+         ============================================================ -->
+    <div id="ticket-impresion" class="ticket-impresion">
+        <div class="ticket-encabezado">
+            <h3>ERP Bimonetario</h3>
+            <p>RIF: J-12345678-9</p>
+            <p>Av. Principal, Local 4</p>
+            <p>Tel: 0414-1234567</p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 11px;">TICKET DE VENTA</p>
+            <p style="font-size: 10px; font-weight: bold;">#<span id="ticket-id">---</span></p>
+            <p id="ticket-fecha" style="font-size: 8px;"></p>
         </div>
-        <table style="width: 100%; text-align: left; font-size: 11px; margin-bottom: 5px;">
+
+        <div class="ticket-info">
+            <p><strong>Cliente:</strong> <span id="ticket-cliente">Cliente Mostrador</span></p>
+            <p><strong>Cajero:</strong> <span id="ticket-cajero">Admin</span></p>
+            <p><strong>Tipo:</strong> <span id="ticket-tipo-venta">CONTADO</span></p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+        </div>
+
+        <table class="ticket-items">
             <thead>
-                <tr><th style="width: 15%;">CANT</th><th style="width: 55%;">DESCRIPCIÓN</th><th style="width: 30%; text-align: right;">TOTAL</th></tr>
+                <tr>
+                    <th>Cant</th>
+                    <th>DescripciÃ³n</th>
+                    <th style="text-align: right;">Total</th>
+                </tr>
             </thead>
             <tbody id="ticket-items"></tbody>
         </table>
-        <hr style="border-top: 1px dashed black; margin: 5px 0;">
-        <div style="text-align: right; font-weight: bold; font-size: 12px;">
-            <p style="margin: 0;">SUBTOTAL: $ <span id="ticket-subtotal">0.00</span></p>
-            <p style="margin: 0;">IVA: $ <span id="ticket-iva">0.00</span></p>
-            <p style="margin: 0; font-size: 14px;">TOTAL: $ <span id="ticket-total-usd">0.00</span></p>
-            <p style="margin: 0;">TOTAL BS: <span id="ticket-total-bs">0.00</span></p>
-            <p style="margin: 0; font-size: 10px;">Tasa: <span id="ticket-tasa">0.00</span> BS/USD</p>
+
+        <div class="ticket-totales">
+            <div class="fila-total">
+                <span>Subtotal:</span>
+                <span>$ <span id="ticket-subtotal">0.00</span></span>
+            </div>
+            <div class="fila-total">
+                <span>IVA:</span>
+                <span>$ <span id="ticket-iva">0.00</span></span>
+            </div>
+            <div class="fila-total total-final">
+                <span>TOTAL USD:</span>
+                <span>$ <span id="ticket-total-usd">0.00</span></span>
+            </div>
+            <div class="fila-total" style="font-size: 10px;">
+                <span>TOTAL BS:</span>
+                <span>BS <span id="ticket-total-bs">0.00</span></span>
+            </div>
+            <div style="font-size: 8px; text-align: center; margin-top: 1mm;">
+                Tasa: <span id="ticket-tasa">0.00</span> BS/USD
+            </div>
         </div>
-        <div style="text-align: center; margin-top: 15px;">
-            <p style="margin: 0;">¡Gracias por su compra!</p>
-            <p style="margin: 0;">Cajero: <span id="ticket-cajero">Admin</span></p>
+
+        <div id="ticket-pagos-section" class="ticket-pagos" style="display: none;">
+            <p style="font-weight: bold; margin-bottom: 1mm;">MÃ‰TODOS DE PAGO:</p>
+            <div id="ticket-pagos-lista"></div>
+        </div>
+
+        <div id="ticket-vuelto-section" class="ticket-vuelto" style="display: none;">
+            <div class="fila-total">
+                <span>VUELTO:</span>
+                <span>$ <span id="ticket-vuelto">0.00</span></span>
+            </div>
+        </div>
+
+        <div id="ticket-credito-section" class="ticket-credito" style="display: none;">
+            âœ“ VENTA A CRÃ‰DITO<br>
+            <span style="font-size: 8px;">Saldo pendiente registrado en CxC</span>
+        </div>
+
+        <div class="ticket-footer">
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <p style="font-weight: bold;">Â¡Gracias por su compra!</p>
+            <p style="font-size: 8px;">Documento no vÃ¡lido como factura fiscal</p>
+            <p style="font-size: 7px; margin-top: 2mm;">ERP Bimonetario v1.0</p>
         </div>
     </div>
 
-    <!-- Corte Z -->
-    <div id="ticket-z-impresion">
-        <div style="text-align: center; margin-bottom: 10px;">
-            <h3 style="margin: 0;">MI EMPRESA C.A.</h3>
-            <h2 style="margin: 5px 0;">CORTE Z</h2>
-            <p style="margin: 0; font-size: 10px;" id="z-fecha-cierre"></p>
-            <p style="margin: 0; font-size: 12px;">Cajero: <span id="z-cajero"></span></p>
-            <hr style="border-top: 1px dashed black; margin: 10px 0;">
+    <!-- ============================================================
+         TICKET CORTE Z - 58mm
+         ============================================================ -->
+    <div id="ticket-z-impresion" class="ticket-z-impresion">
+        <div class="ticket-encabezado">
+            <h3>ERP Bimonetario</h3>
+            <p style="font-size: 12px; font-weight: bold;">CORTE Z</p>
+            <p id="z-fecha-cierre" style="font-size: 8px;"></p>
+            <p style="font-size: 9px;">Cajero: <span id="z-cajero"></span></p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
         </div>
-        <div style="font-size: 12px; margin-bottom: 15px;">
-            <p><strong>Fondo Inicial:</strong> $ <span id="z-fondo"></span></p>
-            <p><strong>Ventas del Turno:</strong> $ <span id="z-ventas"></span></p>
-            <p class="text-danger"><strong>(-) Gastos/Egresos:</strong> $ <span id="z-gastos"></span></p>
-            <p><strong>Total Esperado:</strong> $ <span id="z-esperado"></span></p>
-            <hr style="border-top: 1px dashed black; margin: 5px 0;">
-            <hr style="border-top: 1px dashed black; margin: 5px 0;">
-            <p><strong>Declarado (USD):</strong> $ <span id="z-declarado-usd"></span></p>
-            <p><strong>Declarado (BS):</strong> BS <span id="z-declarado-bs"></span></p>
-            <hr style="border-top: 1px dashed black; margin: 5px 0;">
-            <p style="font-size: 14px; font-weight: bold;">DESCUADRE: <span id="z-descuadre"></span></p>
+        <div style="font-size: 9px; margin-bottom: 2mm;">
+            <div class="fila-total"><span>Fondo Inicial:</span><span>$ <span id="z-fondo">0.00</span></span></div>
+            <div class="fila-total"><span>Ventas del Turno:</span><span>$ <span id="z-ventas">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Gastos:</span><span>$ <span id="z-gastos">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
+                <span>Total Esperado:</span><span>$ <span id="z-esperado">0.00</span></span>
+            </div>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <div class="fila-total"><span>Declarado (USD):</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
+            <div class="fila-total"><span>Declarado (BS):</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <div class="fila-total" style="font-size: 11px; font-weight: bold;">
+                <span>DESCUADRE:</span><span id="z-descuadre">CUADRE PERFECTO</span>
+            </div>
         </div>
-        <div style="text-align: center; margin-top: 30px;">
+        <div style="text-align: center; margin-top: 5mm;">
             <p style="margin: 0;">_______________________</p>
-            <p style="margin: 0; font-size: 10px;">Firma del Cajero</p>
+            <p style="margin: 0; font-size: 8px;">Firma del Cajero</p>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js"></script>
-    <script src="assets/js/pos.js?v=4.5"></script>
+    <script src="assets/js/pos.js?v=5.0"></script>
 </body>
 </html>

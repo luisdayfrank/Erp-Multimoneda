@@ -1,0 +1,11 @@
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+.\venv\Scripts\activate
+
+Escribe:
+python manage.py makemigrations y presiona Enter.
+
+Y luego:
+python manage.py migrate y presiona Enter.
+
+python manage.py createsuperuser

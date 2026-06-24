@@ -94,6 +94,33 @@ class Cliente(EntidadComercial):
         max_digits=15, decimal_places=2, default=Decimal('0.00'),
         help_text="Saldo positivo acumulado por abonos superiores a la deuda. Se aplica automáticamente en próximas compras a crédito."
     )
+    # >>> NUEVO: Deuda inicial para migrar clientes antiguos sin crear venta <<<
+    deuda_inicial = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Deuda previa del cliente antes de usar el sistema. Se convierte en CxC al guardar."
+    )
+
+    def save(self, *args, **kwargs):
+        # Detectar si es creación o actualización
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        # Si tiene deuda_inicial > 0, crear/actualizar CxC de deuda inicial
+        if self.deuda_inicial > Decimal('0.00'):
+            from .models import CuentaPorCobrar
+            cxc, created = CuentaPorCobrar.objects.update_or_create(
+                cliente=self,
+                venta=None,  # Deuda sin venta asociada
+                defaults={
+                    'monto_total': self.deuda_inicial,
+                    'saldo_pendiente': self.deuda_inicial,
+                    'estado': 'PENDIENTE',
+                    'fecha_vencimiento': timezone.now().date(),
+                }
+            )
+        elif self.deuda_inicial <= Decimal('0.00') and not is_new:
+            # Si la deuda se puso en 0, eliminar la CxC inicial si existe
+            CuentaPorCobrar.objects.filter(cliente=self, venta=None).delete()
 
     def __str__(self):
         return f"Cliente: {self.nombre}"
@@ -124,6 +151,32 @@ class Producto(models.Model):
     unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.RESTRICT, help_text="Unidad mínima de control")
     impuesto = models.ForeignKey(Impuesto, on_delete=models.RESTRICT)
     costo_base_moneda_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    # >>> NUEVO: Stock inicial al crear el producto <<<
+    stock_inicial = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Stock con el que inicia este producto en el sistema."
+    )
+    # >>> NUEVO: Almacén donde se deposita el stock inicial <<<
+    almacen_inicial = models.ForeignKey(
+        Almacen, on_delete=models.RESTRICT, null=True, blank=True,
+        help_text="Almacén donde se depositará el stock inicial. Si no se selecciona, se usará el primer almacén activo."
+    )
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        # Si es nuevo producto y tiene stock_inicial > 0, crear inventario
+        if is_new and self.stock_inicial > Decimal('0.00'):
+            almacen = self.almacen_inicial or Almacen.objects.filter(activo=True).first()
+            if almacen:
+                InventarioAlmacen.objects.create(
+                    producto=self,
+                    almacen=almacen,
+                    stock_actual_unidades_base=self.stock_inicial
+                )
 
     def __str__(self):
         return f"{self.codigo_base} - {self.nombre}"
@@ -139,20 +192,6 @@ class PresentacionProducto(models.Model):
 
     class Meta:
         verbose_name_plural = "Presentaciones de Productos"
-
-    @property
-    def precio_venta_secundaria(self):
-        """
-        Calcula dinámicamente el precio en la moneda débil (Ej. BS) 
-        usando la tasa de cambio activa en este instante.
-        """
-        # Evitamos importaciones circulares en la cabecera
-        from .models import ConfiguracionGlobal 
-
-        config = ConfiguracionGlobal.objects.first()
-        if config and self.precio_venta_principal:
-            return self.precio_venta_principal * config.tasa_cambio_actual
-        return Decimal('0.00')
 
     @property
     def costo_presentacion(self):
@@ -194,7 +233,6 @@ class InventarioAlmacen(models.Model):
         verbose_name_plural = "Inventarios en Almacenes"
 
     def __str__(self):
-        # >>> CORREGIDO <<<
         return f"{self.producto.nombre} en {self.almacen.nombre}: {self.stock_actual_unidades_base} {self.producto.unidad_medida.sigla}"
 # ==============================================================================
 # 3.5. CONTROL DE CAJA Y TURNOS
@@ -548,11 +586,14 @@ class CuentaBase(models.Model):
         abstract = True
 
 class CuentaPorCobrar(CuentaBase):
-    venta = models.OneToOneField(Venta, on_delete=models.CASCADE)
+    # >>> MODIFICADO: venta es opcional para permitir deudas iniciales <<<
+    venta = models.OneToOneField(Venta, on_delete=models.CASCADE, null=True, blank=True)
     cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE)
 
     def __str__(self):
-        return f"CxC Venta #{self.venta.id} - Saldo: {self.saldo_pendiente}"
+        if self.venta:
+            return f"CxC Venta #{self.venta.id} - Saldo: {self.saldo_pendiente}"
+        return f"CxC Deuda Inicial - {self.cliente.nombre} - Saldo: {self.saldo_pendiente}"
 
 class CuentaPorPagar(CuentaBase):
     compra = models.OneToOneField(Compra, on_delete=models.CASCADE)

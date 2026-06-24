@@ -68,7 +68,6 @@ class CatalogoPosAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # >>> CORREGIDO: Cálculo directo en el modelo, no en el serializer <<<
         hoy = timezone.localtime().date()
         fecha_apertura_dia = timezone.localtime(sesion.fecha_apertura).date()
 
@@ -78,7 +77,7 @@ class CatalogoPosAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        print(f"\n📦 CATÁLOGO SOLICITADO POR: {request.user.username} (Caja OK)\n")
+        print(f"📦 CATÁLOGO SOLICITADO POR: {request.user.username} (Caja OK)")
 
         presentaciones = PresentacionProducto.objects.all()
         serializer = PresentacionProductoSerializer(presentaciones, many=True)
@@ -139,12 +138,7 @@ class ProcesarCompraAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# >>> NUEVO ENDPOINT: ABONO MASIVO CON DISTRIBUCIÓN AUTOMÁTICA <<<
 class RegistrarAbonoMasivoAPIView(APIView):
-    """
-    Permite registrar un abono que se distribuye automáticamente entre las facturas pendientes
-    del cliente (de más antigua a más reciente). Si sobra dinero, puede guardarse como saldo a favor.
-    """
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     @transaction.atomic
@@ -163,7 +157,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
         except Cliente.DoesNotExist:
             return Response({"error": "Cliente no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
-        # 1. Calcular el monto total del abono en USD
         total_abono_usd = Decimal('0.00')
         for pago in pagos_data:
             monto = Decimal(str(pago['monto_pagado']))
@@ -175,7 +168,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 monto_usd = monto
             total_abono_usd += monto_usd
 
-        # 2. Obtener facturas pendientes ordenadas por fecha (más antigua primero)
         facturas_pendientes = CuentaPorCobrar.objects.filter(
             cliente=cliente,
             estado__in=['PENDIENTE', 'VENCIDA']
@@ -189,7 +181,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
                     "monto_sobrante": float(total_abono_usd)
                 }, status=status.HTTP_400_BAD_REQUEST)
             else:
-                # Guardar todo como saldo a favor
                 cliente.saldo_a_favor += total_abono_usd
                 cliente.save(update_fields=['saldo_a_favor'])
                 return Response({
@@ -198,7 +189,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
                     "monto_guardado": float(total_abono_usd)
                 }, status=status.HTTP_200_OK)
 
-        # 3. Distribuir el abono entre las facturas
         abono_restante = total_abono_usd
         facturas_pagadas = []
 
@@ -209,17 +199,15 @@ class RegistrarAbonoMasivoAPIView(APIView):
             saldo_antes = cxc.saldo_pendiente
             monto_aplicar = min(abono_restante, saldo_antes)
 
-            # Crear el pago individual
             PagoCuentaCobrar.objects.create(
                 cuenta=cxc,
                 usuario=request.user,
                 monto_abono_principal=monto_aplicar,
-                monto_entregado_secundaria=Decimal('0.00'),  # Se calcula proporcionalmente si es necesario
+                monto_entregado_secundaria=Decimal('0.00'),
                 tasa_cambio_pago=tasa_cambio,
                 referencia=f"Abono distribuido automáticamente"
             )
 
-            # Actualizar la cuenta
             cxc.saldo_pendiente -= monto_aplicar
             if cxc.saldo_pendiente <= Decimal('0.00'):
                 cxc.saldo_pendiente = Decimal('0.00')
@@ -229,13 +217,12 @@ class RegistrarAbonoMasivoAPIView(APIView):
             abono_restante -= monto_aplicar
             facturas_pagadas.append({
                 "cxc_id": cxc.id,
-                "venta_id": cxc.venta.id,
+                "venta_id": cxc.venta.id if cxc.venta else None,
                 "monto_aplicado": float(monto_aplicar),
                 "saldo_restante": float(cxc.saldo_pendiente),
                 "estado": cxc.estado
             })
 
-        # 4. Si sobra dinero después de pagar todas las facturas
         saldo_sobrante = Decimal('0.00')
         if abono_restante > Decimal('0.00'):
             if guardar_saldo_favor:
@@ -259,7 +246,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
-# >>> ENDPOINT LEGADO: Mantiene compatibilidad con abonos a factura específica <<<
 class RegistrarAbonoCxCAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 
@@ -364,7 +350,6 @@ class ClienteListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     def get(self, request):
-        # Usamos annotate para sumar rápidamente el saldo pendiente de las CxC directamente en la base de datos
         clientes = Cliente.objects.annotate(
             deuda_total=Coalesce(
                 Sum('cuentaporcobrar__saldo_pendiente', filter=Q(cuentaporcobrar__estado__in=['PENDIENTE', 'VENCIDA'])),
@@ -373,7 +358,6 @@ class ClienteListCreateAPIView(APIView):
             )
         ).order_by('nombre')
 
-        # Armamos la respuesta incluyendo el nuevo campo "deuda_total"
         data = []
         for c in clientes:
             data.append({
@@ -383,7 +367,8 @@ class ClienteListCreateAPIView(APIView):
                 "telefono": c.telefono,
                 "limite_credito": float(c.limite_credito),
                 "deuda_total": float(c.deuda_total),
-                "saldo_a_favor": float(c.saldo_a_favor)  # >>> NUEVO <<<
+                "saldo_a_favor": float(c.saldo_a_favor),
+                "deuda_inicial": float(c.deuda_inicial)
             })
         return Response(data, status=status.HTTP_200_OK)
 
@@ -403,35 +388,36 @@ class ClienteDetalleHistorialAPIView(APIView):
             ventas = Venta.objects.filter(cliente=cliente).order_by('-fecha')
             pagos = PagoCuentaCobrar.objects.filter(cuenta__cliente=cliente).order_by('-fecha')
 
-            # Buscamos facturas con deuda
             cxc_pendientes = CuentaPorCobrar.objects.filter(cliente=cliente, estado__in=['PENDIENTE', 'VENCIDA'])
 
-            # Obtenemos la tasa actual
             config = ConfiguracionGlobal.objects.first()
             tasa_actual = float(config.tasa_cambio_actual) if config else 1.00
 
             data_cliente = ClienteSerializer(cliente).data
             deuda_total = cxc_pendientes.aggregate(total=Sum('saldo_pendiente'))['total'] or 0.00
 
+            # >>> NUEVO: Incluimos deuda_inicial en la respuesta <<<
             return Response({
                 "cliente": data_cliente,
                 "deuda_total": float(deuda_total),
                 "limite_credito": float(cliente.limite_credito),
-                "saldo_a_favor": float(cliente.saldo_a_favor),  # >>> NUEVO <<<
+                "saldo_a_favor": float(cliente.saldo_a_favor),
+                "deuda_inicial": float(cliente.deuda_inicial),
                 "tasa_actual": tasa_actual,
                 "facturas_pendientes": [{
                     "cxc_id": c.id,
-                    "venta_id": c.venta.id,
+                    "venta_id": c.venta.id if c.venta else None,
+                    "tipo_origen": "VENTA" if c.venta else "DEUDA_INICIAL",
                     "saldo_pendiente": float(c.saldo_pendiente),
-                    "fecha": c.venta.fecha,
+                    "fecha": c.venta.fecha if c.venta else c.fecha_vencimiento,
                     "monto_total": float(c.monto_total),
-                    "tipo_venta": c.venta.tipo  # >>> NUEVO <<<
+                    "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
                 } for c in cxc_pendientes],
                 "ventas": [
                     {
                         "id": v.id, 
                         "fecha": v.fecha, 
-                        "tipo": v.tipo,  # CONTADO/CREDITO
+                        "tipo": v.tipo,
                         "monto": float(v.total_principal), 
                         "estado": v.estado
                     } for v in ventas
@@ -442,7 +428,7 @@ class ClienteDetalleHistorialAPIView(APIView):
                         "fecha": p.fecha, 
                         "monto": float(p.monto_abono_principal), 
                         "referencia": p.referencia, 
-                        "factura_id": p.cuenta.venta.id
+                        "factura_id": p.cuenta.venta.id if p.cuenta.venta else None
                     } for p in pagos
                 ]
             })
@@ -470,7 +456,6 @@ class ProductoInventarioAPIView(APIView):
         productos = Producto.objects.all().select_related('categoria', 'unidad_medida')
         data = []
         for p in productos:
-            # Sumamos el stock de todos los almacenes
             stock_total = InventarioAlmacen.objects.filter(producto=p).aggregate(total=Sum('stock_actual_unidades_base'))['total'] or 0.00
             data.append({
                 "id": p.id,
@@ -479,6 +464,7 @@ class ProductoInventarioAPIView(APIView):
                 "categoria": p.categoria.nombre if p.categoria else "S/C",
                 "costo": float(p.costo_base_moneda_principal),
                 "stock_total": float(stock_total),
+                "stock_inicial": float(p.stock_inicial),
                 "unidad": p.unidad_medida.sigla if p.unidad_medida else "und"
             })
         return Response(data, status=status.HTTP_200_OK)
@@ -490,20 +476,19 @@ class ProductoDetalleHistorialAPIView(APIView):
         try:
             producto = Producto.objects.get(pk=pk)
 
-            # 1. Stock detallado por almacén
             stock_almacenes = InventarioAlmacen.objects.filter(producto=producto).select_related('almacen')
             data_stock = [{"almacen": s.almacen.nombre, "cantidad": float(s.stock_actual_unidades_base)} for s in stock_almacenes]
 
-            # 2. Presentaciones y Precios
             presentaciones = PresentacionProducto.objects.filter(producto=producto).select_related('unidad_medida')
             data_pres = [{
                 "nombre": p.unidad_medida.nombre if p.unidad_medida else "Base", 
                 "factor": float(p.factor_conversion), 
-                "precio_usd": float(p.precio_venta_principal)
+                "precio_usd": float(p.precio_venta_principal),
+                "costo": float(p.costo_presentacion),
+                "margen": float(p.margen_ganancia_porcentaje)
             } for p in presentaciones]
 
-            # 3. Historial de Movimientos (Unificamos Ventas, Compras y Egresos)
-            # Solo tomamos las transacciones PROCESADAS
+            # Historial de Movimientos
             ventas = DetalleVenta.objects.filter(
                 presentacion__producto=producto, 
                 venta__estado='PROCESADA'
@@ -514,13 +499,22 @@ class ProductoDetalleHistorialAPIView(APIView):
                 compra__estado='PROCESADA'
             ).select_related('compra').order_by('-compra__fecha')[:30]
 
-            # >>> CONSULTA DE EGRESOS <<<
             egresos = DetalleEgresoInventario.objects.filter(
                 presentacion__producto=producto, 
                 egreso__estado='PROCESADO'
             ).select_related('egreso').order_by('-egreso__fecha')[:30]
 
             movimientos = []
+
+            # >>> NUEVO: Stock inicial como primer movimiento <<<
+            if producto.stock_inicial > Decimal('0.00'):
+                almacen_inicial = producto.almacen_inicial.nombre if producto.almacen_inicial else "Almacén por defecto"
+                movimientos.append({
+                    "fecha": producto.fecha_creacion,
+                    "tipo": "ENTRADA",
+                    "motivo": f"Stock Inicial - {almacen_inicial}",
+                    "cantidad": float(producto.stock_inicial)
+                })
 
             for v in ventas:
                 cantidad_base = v.cantidad_presentacion * v.presentacion.factor_conversion
@@ -540,7 +534,6 @@ class ProductoDetalleHistorialAPIView(APIView):
                     "cantidad": float(cantidad_base)
                 })
 
-            # >>> BUCLE DE EGRESOS <<<
             for e in egresos:
                 cantidad_base = e.cantidad * e.presentacion.factor_conversion
                 movimientos.append({
@@ -550,14 +543,14 @@ class ProductoDetalleHistorialAPIView(APIView):
                     "cantidad": float(cantidad_base)
                 })
 
-            # Ordenamos todo cronológicamente
             movimientos.sort(key=lambda x: x['fecha'], reverse=True)
 
             return Response({
                 "producto": {
                     "nombre": producto.nombre,
                     "codigo": producto.codigo_base,
-                    "unidad": producto.unidad_medida.sigla if producto.unidad_medida else ""
+                    "unidad": producto.unidad_medida.sigla if producto.unidad_medida else "",
+                    "stock_inicial": float(producto.stock_inicial)
                 },
                 "stock_por_almacen": data_stock,
                 "presentaciones": data_pres,
@@ -643,7 +636,6 @@ class RegistrarAbonoCxPAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ConceptoEgresoListAPIView(APIView):
-    """Lista los motivos de egreso para llenar el select del POS."""
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     def get(self, request):
@@ -652,7 +644,6 @@ class ConceptoEgresoListAPIView(APIView):
         return Response(serializer.data)
 
 class RegistrarEgresoCajaAPIView(APIView):
-    """Procesa una salida de efectivo de la gaveta."""
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     @transaction.atomic
@@ -664,7 +655,6 @@ class RegistrarEgresoCajaAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class RegistrarEgresoInventarioAPIView(APIView):
-    """Procesa una salida de productos (Donación/Consumo) y descuenta stock."""
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     @transaction.atomic
@@ -673,7 +663,7 @@ class RegistrarEgresoInventarioAPIView(APIView):
         if serializer.is_valid():
             try:
                 egreso = serializer.save()
-                egreso.procesar_egreso() # Aquí es donde se descuenta el stock real
+                egreso.procesar_egreso()
                 return Response({
                     "mensaje": "Egreso de inventario procesado con éxito.",
                     "egreso_id": egreso.id
@@ -694,11 +684,9 @@ class ActualizarCostosProductosAPIView(APIView):
             nuevo_costo_pres = Decimal(str(cambio.get('nuevo_costo')))
 
             try:
-                # Obtenemos la presentación y su producto base
                 presentacion = PresentacionProducto.objects.select_related('producto').get(pk=presentacion_id)
                 producto = presentacion.producto
 
-                # Norma contable: el nuevo costo base es el costo de la presentación / factor_conversion
                 if presentacion.factor_conversion > 0:
                     producto.costo_base_moneda_principal = nuevo_costo_pres / presentacion.factor_conversion
                     producto.save(update_fields=['costo_base_moneda_principal'])

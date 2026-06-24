@@ -39,11 +39,9 @@ from .models import (
 
 @admin.register(ConfiguracionGlobal)
 class ConfiguracionGlobalAdmin(admin.ModelAdmin):
-    # Añadimos el campo a list_display y a list_editable para un acceso rápido
     list_display = ('moneda_principal', 'moneda_secundaria', 'tasa_cambio_actual', 'permitir_stock_negativo')
     list_editable = ('permitir_stock_negativo',)
-    
-    # Protegemos para que desde el admin no puedan agregar múltiples configuraciones
+
     def has_add_permission(self, request):
         if ConfiguracionGlobal.objects.exists():
             return False
@@ -69,7 +67,7 @@ class MetodoPagoAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'moneda_referencia', 'activo')
     list_filter = ('moneda_referencia', 'activo')
     search_fields = ('nombre',)
-    
+
 # ==============================================================================
 # 2. USUARIOS Y ENTIDADES
 # ==============================================================================
@@ -78,15 +76,24 @@ class MetodoPagoAdmin(admin.ModelAdmin):
 class CustomUserAdmin(UserAdmin):
     list_display = ('username', 'email', 'first_name', 'last_name', 'rol', 'is_staff')
     list_filter = ('rol', 'is_staff', 'is_superuser')
-    # Añadimos nuestro campo 'rol' al panel de edición del usuario
     fieldsets = UserAdmin.fieldsets + (
         ('Rol en el ERP', {'fields': ('rol',)}),
     )
 
 @admin.register(Cliente)
 class ClienteAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'documento', 'telefono', 'limite_credito')
+    list_display = ('nombre', 'documento', 'telefono', 'limite_credito', 'saldo_a_favor', 'deuda_inicial')
     search_fields = ('nombre', 'documento')
+    # >>> NUEVO: Incluimos deuda_inicial en el formulario <<<
+    fieldsets = (
+        (None, {
+            'fields': ('nombre', 'documento', 'telefono', 'direccion')
+        }),
+        ('Crédito', {
+            'fields': ('limite_credito', 'saldo_a_favor', 'deuda_inicial'),
+            'description': 'Deuda Inicial: Registra deudas de clientes antiguos sin necesidad de crear una venta. Se convierte automáticamente en Cuenta por Cobrar.'
+        }),
+    )
 
 @admin.register(Proveedor)
 class ProveedorAdmin(admin.ModelAdmin):
@@ -106,9 +113,12 @@ class CategoriaAdmin(admin.ModelAdmin):
 class PresentacionProductoInline(admin.TabularInline):
     model = PresentacionProducto
     extra = 1
-    # Añadimos get_precio_secundaria a la vista
-    fields = ('unidad_medida', 'factor_conversion', 'precio_venta_principal', 'get_precio_secundaria', 'get_costo', 'get_margen')
-    readonly_fields = ('get_precio_secundaria', 'get_costo', 'get_margen')
+    # >>> SIMPLIFICADO: Sin precio secundario, con JS dinámico <<<
+    fields = ('unidad_medida', 'factor_conversion', 'precio_venta_principal', 'get_costo', 'get_margen')
+    readonly_fields = ('get_costo', 'get_margen')
+
+    class Media:
+        js = ('nucleo/js/presentacion_admin.js',)
 
     def get_costo(self, obj):
         return obj.costo_presentacion
@@ -118,26 +128,31 @@ class PresentacionProductoInline(admin.TabularInline):
         return f"{obj.margen_ganancia_porcentaje:.2f}%"
     get_margen.short_description = 'Margen Ganancia'
 
-    def get_precio_secundaria(self, obj):
-        # Evita error si el objeto aún no se ha guardado
-        if obj.pk: 
-            return f"{obj.precio_venta_secundaria:.2f}"
-        return "0.00"
-    get_precio_secundaria.short_description = 'Precio Ref. Secundario'
-
 @admin.register(Producto)
 class ProductoAdmin(admin.ModelAdmin):
-    list_display = ('codigo_base', 'nombre', 'categoria', 'costo_base_moneda_principal')
+    list_display = ('codigo_base', 'nombre', 'categoria', 'costo_base_moneda_principal', 'stock_inicial')
     list_filter = ('categoria', 'impuesto')
     search_fields = ('codigo_base', 'nombre')
-    inlines = [PresentacionProductoInline] # Acoplamos las presentaciones aquí
+    inlines = [PresentacionProductoInline]
+    # >>> NUEVO: Campos stock_inicial y almacen_inicial en el formulario <<<
+    fieldsets = (
+        (None, {
+            'fields': ('codigo_base', 'nombre', 'categoria', 'unidad_medida', 'impuesto')
+        }),
+        ('Costos', {
+            'fields': ('costo_base_moneda_principal',)
+        }),
+        ('Stock Inicial', {
+            'fields': ('stock_inicial', 'almacen_inicial'),
+            'description': 'Define el stock inicial al crear el producto. Se deposita automáticamente en el almacén seleccionado (o el primero activo si no se elige).'
+        }),
+    )
 
 @admin.register(InventarioAlmacen)
 class InventarioAlmacenAdmin(admin.ModelAdmin):
     list_display = ('producto', 'almacen', 'stock_actual_unidades_base')
     list_filter = ('almacen', 'producto__categoria')
     search_fields = ('producto__nombre', 'producto__codigo_base')
-    # El stock solo debería moverse por compras, ventas o ajustes formales
     readonly_fields = ('stock_actual_unidades_base',) 
 
 
@@ -163,15 +178,12 @@ class DetalleCompraInline(admin.TabularInline):
     )
     readonly_fields = ("porcentaje_impuesto_aplicado", "subtotal")
 
-# 1. Agrega esta clase arriba de SesionCajaAdmin
 class EgresoCajaInline(admin.TabularInline):
     model = EgresoCaja
     extra = 0
-    # Protegemos los datos para que el administrador no pueda alterar un retiro que ya se hizo
     readonly_fields = ('fecha', 'usuario', 'concepto', 'monto_extraido', 'moneda_extraida', 'monto_equivalente_principal', 'observacion')
     can_delete = False
 
-# 2. Modifica tu SesionCajaAdmin existente para incluir el inline
 @admin.register(SesionCaja)
 class SesionCajaAdmin(admin.ModelAdmin):
     list_display = (
@@ -180,8 +192,6 @@ class SesionCajaAdmin(admin.ModelAdmin):
     )
     list_filter = ('estado', 'usuario', 'fecha_apertura')
     readonly_fields = ('fecha_apertura', 'fecha_cierre', 'get_ventas', 'get_descuadre')
-    
-    # === AÑADIMOS ESTA LÍNEA ===
     inlines = [EgresoCajaInline] 
 
     def get_ventas(self, obj):
@@ -199,9 +209,9 @@ class SesionCajaAdmin(admin.ModelAdmin):
 
 class PagoVentaInline(admin.TabularInline):
     model = PagoVenta
-    extra = 0 # No mostrar filas vacías por defecto
+    extra = 0
     readonly_fields = ('metodo', 'monto_pagado', 'monto_equivalente_principal', 'tasa_cambio_pago', 'referencia')
-    can_delete = False # Evitar que se borren pagos individuales desde aquí por seguridad
+    can_delete = False
 
 @admin.register(Venta)
 class VentaAdmin(admin.ModelAdmin):
@@ -228,26 +238,19 @@ class CompraAdmin(admin.ModelAdmin):
     inlines = [DetalleCompraInline]
 
     def save_model(self, request, obj, form, change):
-        """
-        - Asigna automáticamente el usuario que crea/modifica la compra.
-        - Si la tasa de cambio NO se indicó manualmente, toma la tasa actual de ConfiguracionGlobal.
-        """
         if not obj.usuario_id:
             obj.usuario = request.user
 
-        # Si el usuario no escribió una tasa, usamos la configuración global como valor por defecto.
         if not obj.tasa_cambio_historica:
             config = ConfiguracionGlobal.objects.first()
             if not config:
                 from django.core.exceptions import ValidationError
-
                 raise ValidationError(
                     "Debe existir una Configuración Global con una tasa de cambio actual "
                     "para poder registrar compras."
                 )
             obj.tasa_cambio_historica = config.tasa_cambio_actual
 
-        # Necesitamos saber el estado anterior para decidir si aplicamos movimientos
         estado_anterior = None
         if obj.pk:
             try:
@@ -257,19 +260,10 @@ class CompraAdmin(admin.ModelAdmin):
 
         super().save_model(request, obj, form, change)
 
-        # Si el usuario marcó la compra como PROCESADA y antes no lo estaba,
-        # aplicamos los movimientos de inventario y la CxP SIN volver a cambiar el estado.
         if obj.estado == "PROCESADA" and estado_anterior != "PROCESADA":
             obj._aplicar_movimientos_compra()
 
     def save_related(self, request, form, formsets, change):
-        """
-        Después de guardar los detalles de la compra recalculamos:
-        - subtotal_principal
-        - total_impuestos_principal
-        - total_principal
-        - total_secundaria (usando la tasa_cambio_historica)
-        """
         super().save_related(request, form, formsets, change)
 
         compra = form.instance
@@ -303,11 +297,6 @@ class CompraAdmin(admin.ModelAdmin):
         )
 
     class Media:
-        """
-        JS para que, mientras se captura la compra y sus detalles en el admin,
-        se vayan recalculando subtotales y totales en tiempo real.
-        """
-
         js = ("nucleo/js/compra_admin.js",)
 
 
@@ -315,7 +304,6 @@ class CompraAdmin(admin.ModelAdmin):
 # 5. CUENTAS Y CRÉDITOS
 # ==============================================================================
 
-# Inlines para ver los abonos dentro de la cuenta
 class PagoCuentaCobrarInline(admin.TabularInline):
     model = PagoCuentaCobrar
     extra = 0
@@ -326,14 +314,19 @@ class PagoCuentaPagarInline(admin.TabularInline):
     extra = 0
     readonly_fields = ('fecha', 'usuario')
 
-# Modificamos los Admin que ya tenías para inyectarles los inlines
 @admin.register(CuentaPorCobrar)
 class CuentaPorCobrarAdmin(admin.ModelAdmin):
-    list_display = ('id', 'venta', 'cliente', 'monto_total', 'saldo_pendiente', 'estado')
+    list_display = ('id', 'get_venta_info', 'cliente', 'monto_total', 'saldo_pendiente', 'estado')
     list_filter = ('estado', 'fecha_vencimiento')
     search_fields = ('cliente__nombre',)
-    readonly_fields = ('monto_total', 'saldo_pendiente', 'estado') # Protegemos para que solo se baje con pagos reales
+    readonly_fields = ('monto_total', 'saldo_pendiente', 'estado')
     inlines = [PagoCuentaCobrarInline]
+
+    def get_venta_info(self, obj):
+        if obj.venta:
+            return f"Venta #{obj.venta.id}"
+        return "Deuda Inicial"
+    get_venta_info.short_description = 'Origen'
 
 @admin.register(CuentaPorPagar)
 class CuentaPorPagarAdmin(admin.ModelAdmin):

@@ -101,27 +101,28 @@ class Cliente(EntidadComercial):
     )
 
     def save(self, *args, **kwargs):
-        # Detectar si es creación o actualización
-        is_new = self.pk is None
-        super().save(*args, **kwargs)
-
-        # Si tiene deuda_inicial > 0, crear/actualizar CxC de deuda inicial
-        if self.deuda_inicial > Decimal('0.00'):
+            # 1. Mover el import aquí arriba para que siempre esté disponible en el scope local
             from .models import CuentaPorCobrar
-            cxc, created = CuentaPorCobrar.objects.update_or_create(
-                cliente=self,
-                venta=None,  # Deuda sin venta asociada
-                defaults={
-                    'monto_total': self.deuda_inicial,
-                    'saldo_pendiente': self.deuda_inicial,
-                    'estado': 'PENDIENTE',
-                    'fecha_vencimiento': timezone.now().date(),
-                }
-            )
-        elif self.deuda_inicial <= Decimal('0.00') and not is_new:
-            # Si la deuda se puso en 0, eliminar la CxC inicial si existe
-            CuentaPorCobrar.objects.filter(cliente=self, venta=None).delete()
+            
+            # Detectar si es creación o actualización
+            is_new = self.pk is None
+            super().save(*args, **kwargs)
 
+            # Si tiene deuda_inicial > 0, crear/actualizar CxC de deuda inicial
+            if self.deuda_inicial > Decimal('0.00'):
+                cxc, created = CuentaPorCobrar.objects.update_or_create(
+                    cliente=self,
+                    venta=None,  # Deuda sin venta asociada
+                    defaults={
+                        'monto_total': self.deuda_inicial,
+                        'saldo_pendiente': self.deuda_inicial,
+                        'estado': 'PENDIENTE',
+                        'fecha_vencimiento': timezone.now().date(),
+                    }
+                )
+            elif self.deuda_inicial <= Decimal('0.00') and not is_new:
+                # Si la deuda se puso en 0, eliminar la CxC inicial si existe
+                CuentaPorCobrar.objects.filter(cliente=self, venta=None).delete()
     def __str__(self):
         return f"Cliente: {self.nombre}"
 

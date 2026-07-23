@@ -34,87 +34,94 @@ async function inicializarPOS() {
 
     try {
         await cargarDatosIniciales();
-
-        let sesion = null;
-        try {
-            sesion = await apiFetch('/pos/caja/', 'GET');
-
-            if (sesion.requiere_cierre_obligatorio === true) {
-                console.warn("Bloqueo activado: Desplegando modal de cierre obligatorio.");
-                sesionCajaId = sesion.id;
-                const modalCierre = new bootstrap.Modal(document.getElementById('modalCierreObligatorio'));
-                modalCierre.show();
-                return;
-            }
-
-            sessionCajaAbierta = true;
-            sesionCajaId = sesion.id;
-
-            if (sesion.rol_usuario === 'ADMIN' || sesion.rol_usuario === 'GERENTE') {
-                puedeCambiarPrecio = true;
-            } else {
-                puedeCambiarPrecio = (sesion.cajero_puede_cambiar_precio === true);
-            }
-
-            console.log("Permiso de cambio de precio activo: " + puedeCambiarPrecio);
-            document.getElementById('nombreCajero').innerText = sesion.cajero || 'Admin';
-            iniciarKeepAlive();
-
-        } catch (cajaError) {
-            console.error("ERROR REAL DETECTADO DENTRO DEL BLOQUE DE CAJA:", cajaError);
-
-            if (cajaError instanceof TypeError || cajaError instanceof ReferenceError) {
-                alert("Error de codigo en el POS: " + cajaError.message + ". Revisa la consola.");
-                return;
-            }
-
-            const msg = String(cajaError?.messageForUser || cajaError?.detail || cajaError?.error || cajaError?.mensaje || '');
-
-            const tokenProblem =
-                cajaError?.code === 'token_not_valid' ||
-                msg.toLowerCase().includes('token') ||
-                msg.toLowerCase().includes('sesion') ||
-                msg.toLowerCase().includes('expired') ||
-                msg.toLowerCase().includes('authentication') || 
-                msg.toLowerCase().includes('credentials');
-
-            if (tokenProblem) {
-                alert(msg || 'Tu sesion expiro o es invalida. Inicia sesion nuevamente.');
-                window.location.href = 'index.html';
-                return;
-            }
-
-            console.warn("No se encontro caja abierta. Solicitando apertura...");
-            const modalApertura = new bootstrap.Modal(document.getElementById('modalAperturaCaja'));
-            modalApertura.show();
-            return;
-        }
-
-        const clienteGenerico = clientesCache.find(c => String(c.documento).toLowerCase() === 'generico');
-        if (clienteGenerico) {
-            seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
-            console.log("Cliente por defecto asignado: " + clienteGenerico.nombre + " (ID: " + clienteGenerico.id + ")");
-        } else {
-            console.warn("No se encontro un cliente con documento 'generico'. Usando ID fallback.");
-            seleccionarCliente(CLIENTE_MOSTRADOR_ID, "Cliente Generico");
-        }
-
-        const respuestaCatalogo = await apiFetch('/pos/catalogo/', 'GET');
-        catalogo = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
-
-        tasaCambio = parseFloat(sesion.tasa_cambio_actual) || 0;
-        console.log("Tasa cargada:", tasaCambio.toFixed(2));
-        document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
-
-        renderizarCatalogoHTML();
-        restaurarCarritoSiHay();
-        inicializarBuscador();
-        inicializarModalClientes();
-
+        
+        // >>> FASE 2: VERIFICAR TASA DIARIA <<<
+        const tasaOK = await verificarTasaDiaria();
+        if (!tasaOK) return; // El modal de tasa se encargará de continuar
+        
+        await continuarInicializacionPOS();
     } catch (error) {
         console.error("Error critico al iniciar el POS:", error);
         alert("Error critico al iniciar el sistema. Revisa la consola.");
     }
+}
+
+async function continuarInicializacionPOS() {
+    let sesion = null;
+    try {
+        sesion = await apiFetch('/pos/caja/', 'GET');
+
+        if (sesion.requiere_cierre_obligatorio === true) {
+            console.warn("Bloqueo activado: Desplegando modal de cierre obligatorio.");
+            sesionCajaId = sesion.id;
+            const modalCierre = new bootstrap.Modal(document.getElementById('modalCierreObligatorio'));
+            modalCierre.show();
+            return;
+        }
+
+        sessionCajaAbierta = true;
+        sesionCajaId = sesion.id;
+
+        if (sesion.rol_usuario === 'ADMIN' || sesion.rol_usuario === 'GERENTE') {
+            puedeCambiarPrecio = true;
+        } else {
+            puedeCambiarPrecio = (sesion.cajero_puede_cambiar_precio === true);
+        }
+
+        console.log("Permiso de cambio de precio activo: " + puedeCambiarPrecio);
+        document.getElementById('nombreCajero').innerText = sesion.cajero || 'Admin';
+        iniciarKeepAlive();
+
+    } catch (cajaError) {
+        console.error("ERROR REAL DETECTADO DENTRO DEL BLOQUE DE CAJA:", cajaError);
+
+        if (cajaError instanceof TypeError || cajaError instanceof ReferenceError) {
+            alert("Error de codigo en el POS: " + cajaError.message + ". Revisa la consola.");
+            return;
+        }
+
+        const msg = String(cajaError?.messageForUser || cajaError?.detail || cajaError?.error || cajaError?.mensaje || '');
+
+        const tokenProblem =
+            cajaError?.code === 'token_not_valid' ||
+            msg.toLowerCase().includes('token') ||
+            msg.toLowerCase().includes('sesion') ||
+            msg.toLowerCase().includes('expired') ||
+            msg.toLowerCase().includes('authentication') || 
+            msg.toLowerCase().includes('credentials');
+
+        if (tokenProblem) {
+            alert(msg || 'Tu sesion expiro o es invalida. Inicia sesion nuevamente.');
+            window.location.href = 'index.html';
+            return;
+        }
+
+        console.warn("No se encontro caja abierta. Solicitando apertura...");
+        const modalApertura = new bootstrap.Modal(document.getElementById('modalAperturaCaja'));
+        modalApertura.show();
+        return;
+    }
+
+    const clienteGenerico = clientesCache.find(c => String(c.documento).toLowerCase() === 'generico');
+    if (clienteGenerico) {
+        seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
+        console.log("Cliente por defecto asignado: " + clienteGenerico.nombre + " (ID: " + clienteGenerico.id + ")");
+    } else {
+        console.warn("No se encontro un cliente con documento 'generico'. Usando ID fallback.");
+        seleccionarCliente(CLIENTE_MOSTRADOR_ID, "Cliente Generico");
+    }
+
+    const respuestaCatalogo = await apiFetch('/pos/catalogo/', 'GET');
+    catalogo = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
+
+    tasaCambio = parseFloat(sesion.tasa_cambio_actual) || 0;
+    console.log("Tasa cargada:", tasaCambio.toFixed(2));
+    document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
+
+    renderizarCatalogoHTML();
+    restaurarCarritoSiHay();
+    inicializarBuscador();
+    inicializarModalClientes();
 }
 
 // ==============================================================================
@@ -1212,6 +1219,195 @@ function iniciarKeepAlive() {
             clearInterval(keepAliveTimer);
         }
     }, 240000); 
+}
+
+// ==============================================================================
+// TASA DIARIA
+// ==============================================================================
+
+async function verificarTasaDiaria() {
+    try {
+        const resp = await apiFetch('/config/tasa-status/', 'GET');
+        tasaCambio = parseFloat(resp.tasa_cambio_actual) || 0;
+        document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
+        document.getElementById('tasa-anterior-display').innerText = tasaCambio.toFixed(2);
+        
+        if (resp.requiere_actualizacion === true) {
+            const modalTasa = new bootstrap.Modal(document.getElementById('modalActualizarTasa'));
+            modalTasa.show();
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.error("Error verificando tasa:", e);
+        alert("No se pudo verificar la tasa del día. Intenta recargar.");
+        return false;
+    }
+}
+
+async function procesarActualizacionTasa() {
+    const nuevaTasa = parseFloat(document.getElementById('nueva-tasa-input').value);
+    if (isNaN(nuevaTasa) || nuevaTasa <= 0) {
+        alert("Ingresa una tasa válida mayor a 0.");
+        return;
+    }
+    
+    try {
+        await apiFetch('/config/actualizar-tasa/', 'PUT', { tasa_cambio_actual: nuevaTasa.toFixed(2) });
+        tasaCambio = nuevaTasa;
+        document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
+        
+        const modalEl = document.getElementById('modalActualizarTasa');
+        const modalInst = bootstrap.Modal.getInstance(modalEl);
+        if (modalInst) modalInst.hide();
+        
+        await continuarInicializacionPOS();
+    } catch (e) {
+        alert("Error al actualizar tasa: " + (e.detail || e.error || "Error desconocido"));
+    }
+}
+
+// ==============================================================================
+// BORRADORES DE FACTURA
+// ==============================================================================
+
+function abrirModalGuardarBorrador() {
+    if (carrito.length === 0) {
+        alert("El carrito está vacío. No hay nada que guardar.");
+        return;
+    }
+    const totales = calcularTotales();
+    document.getElementById('borrador-cliente-nombre').innerText = clienteSeleccionadoNombre;
+    document.getElementById('borrador-total-usd').innerText = '$ ' + totales.total_usd;
+    document.getElementById('borrador-nombre').value = '';
+    
+    const modal = new bootstrap.Modal(document.getElementById('modalGuardarBorrador'));
+    modal.show();
+}
+
+async function ejecutarGuardarBorrador() {
+    const nombre = document.getElementById('borrador-nombre').value.trim();
+    const totales = calcularTotales();
+    
+    const payload = {
+        nombre: nombre,
+        carrito_json: carrito,
+        cliente: clienteSeleccionadoId,
+        total_principal: totales.total_usd,
+        total_secundaria: totales.total_bs,
+        tasa_cambio: tasaCambio.toFixed(2)
+    };
+    
+    try {
+        await apiFetch('/borradores/', 'POST', payload);
+        alert("Borrador guardado correctamente.");
+        
+        // Limpiar carrito para atender al siguiente cliente
+        carrito = [];
+        calcularTotales();
+        renderizarCarritoHTML();
+        guardarCarritoEnStorage();
+        
+        const modalEl = document.getElementById('modalGuardarBorrador');
+        const modalInst = bootstrap.Modal.getInstance(modalEl);
+        if (modalInst) modalInst.hide();
+        
+        // Volver a cliente genérico
+        const clienteGenerico = clientesCache.find(c => String(c.documento).toLowerCase() === 'generico');
+        if (clienteGenerico) {
+            seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
+        } else {
+            seleccionarCliente(CLIENTE_MOSTRADOR_ID, "Cliente Generico");
+        }
+    } catch (e) {
+        alert("Error al guardar borrador: " + (e.detail || e.error || "Error desconocido"));
+    }
+}
+
+function abrirModalBorradores() {
+    cargarListaBorradores();
+    const bsModal = new bootstrap.Modal(document.getElementById('modalBorradores'));
+    bsModal.show();
+}
+
+async function cargarListaBorradores() {
+    const cont = document.getElementById('lista-borradores');
+    cont.innerHTML = '<div class="list-group-item text-muted text-center">Cargando...</div>';
+    
+    try {
+        const borradores = await apiFetch('/borradores/', 'GET');
+        cont.innerHTML = '';
+        
+        if (borradores.length === 0) {
+            cont.innerHTML = '<div class="list-group-item text-muted text-center">No hay borradores guardados</div>';
+            return;
+        }
+        
+        borradores.forEach(b => {
+            const item = document.createElement('a');
+            item.href = '#';
+            item.className = 'list-group-item list-group-item-action';
+            item.innerHTML = 
+                '<div class="d-flex w-100 justify-content-between">' +
+                    '<h6 class="mb-1 fw-bold">' + (b.nombre || 'Borrador #' + b.id) + '</h6>' +
+                    '<small class="text-muted">' + new Date(b.creado_el).toLocaleString('es-VE') + '</small>' +
+                '</div>' +
+                '<p class="mb-1">Cliente: <b>' + b.cliente_nombre + '</b> | Total: $' + parseFloat(b.total_principal).toFixed(2) + '</p>' +
+                '<small class="text-muted">Guardado por: ' + b.cajero_nombre + '</small>';
+            item.onclick = (e) => {
+                e.preventDefault();
+                if (confirm('¿Cargar este borrador? El carrito actual se reemplazará.')) {
+                    ejecutarCargarBorrador(b.id);
+                }
+            };
+            cont.appendChild(item);
+        });
+    } catch (e) {
+        cont.innerHTML = '<div class="list-group-item text-danger text-center">Error al cargar borradores.</div>';
+        console.error(e);
+    }
+}
+
+async function ejecutarCargarBorrador(id) {
+    try {
+        const resp = await apiFetch('/borradores/' + id + '/cargar/', 'POST');
+        
+        carrito = resp.carrito_json || [];
+        if (!Array.isArray(carrito)) {
+            alert("El borrador tiene datos inválidos.");
+            return;
+        }
+        
+        if (resp.cliente) {
+            const cliente = clientesCache.find(c => c.id === resp.cliente);
+            if (cliente) {
+                seleccionarCliente(cliente.id, cliente.nombre);
+            } else {
+                clienteSeleccionadoId = resp.cliente;
+                clienteSeleccionadoNombre = "Cliente #" + resp.cliente;
+                const select = document.getElementById('select-cliente');
+                select.innerHTML = '<option value="' + resp.cliente + '">' + clienteSeleccionadoNombre + '</option>';
+                select.value = resp.cliente;
+            }
+        }
+        
+        if (resp.tasa_cambio) {
+            tasaCambio = parseFloat(resp.tasa_cambio);
+            document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
+        }
+        
+        calcularTotales();
+        renderizarCarritoHTML();
+        guardarCarritoEnStorage();
+        
+        const modalEl = document.getElementById('modalBorradores');
+        const modalInst = bootstrap.Modal.getInstance(modalEl);
+        if (modalInst) modalInst.hide();
+        
+        alert("Borrador cargado correctamente.");
+    } catch (e) {
+        alert("Error al cargar borrador: " + (e.detail || e.error || "No encontrado"));
+    }
 }
 
 // ==============================================================================

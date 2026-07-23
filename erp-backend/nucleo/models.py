@@ -21,6 +21,11 @@ class ConfiguracionGlobal(models.Model):
         help_text="Permite a los usuarios con rol 'Cajero' modificar el precio de los productos en el POS"
     )
 
+    tasa_actualizada_el = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Fecha y hora de la última actualización de la tasa"
+    )
+
 
     class Meta:
         verbose_name = "Configuración Global"
@@ -769,3 +774,21 @@ class DetalleEgresoInventario(models.Model):
     # Registramos el costo para saber cuánto dinero "salió" en mercancía
     costo_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
     subtotal_costo = models.DecimalField(max_digits=15, decimal_places=2)
+
+class BorradorFactura(models.Model):
+    carrito_json = models.JSONField(default=list)
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE)
+    cajero = models.ForeignKey(Usuario, on_delete=models.CASCADE, null=True, blank=True)
+    nombre = models.CharField(max_length=100, blank=True)
+    total_principal = models.DecimalField(max_digits=15, decimal_places=2)
+    total_secundaria = models.DecimalField(max_digits=15, decimal_places=2)
+    tasa_cambio = models.DecimalField(max_digits=15, decimal_places=2)
+    creado_el = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-creado_el']
+        verbose_name = "Borrador de Factura"
+        verbose_name_plural = "Borradores de Facturas"
+
+    def __str__(self):
+        return f"Borrador #{self.id} - {self.cliente.nombre}"

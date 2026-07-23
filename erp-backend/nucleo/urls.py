@@ -4,6 +4,8 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 from .api import (
+    TasaStatusAPIView,
+    ActualizarTasaAPIView,
     CatalogoPosAPIView, 
     ProcesarVentaAPIView, 
     GestionCajaAPIView, 
@@ -25,6 +27,8 @@ from .api import (
     RegistrarEgresoCajaAPIView,        
     RegistrarEgresoInventarioAPIView,   
     ActualizarCostosProductosAPIView,
+    BorradorFacturaListCreateAPIView,
+    CargarBorradorAPIView,
     DetalleVentaFacturaAPIView
 )
 
@@ -67,4 +71,12 @@ urlpatterns = [
 
     # Dashboard
     path('api/v1/dashboard/resumen/', DashboardResumenAPIView.as_view(), name='api_dashboard_resumen'),
+    
+    # tasa
+    path('api/v1/config/tasa-status/', TasaStatusAPIView.as_view(), name='api_tasa_status'),
+    path('api/v1/config/actualizar-tasa/', ActualizarTasaAPIView.as_view(), name='api_actualizar_tasa'),
+
+    # borradores
+    path('api/v1/borradores/', BorradorFacturaListCreateAPIView.as_view(), name='api_borradores'),
+    path('api/v1/borradores/<int:pk>/cargar/', CargarBorradorAPIView.as_view(), name='api_borrador_cargar'),
 ]

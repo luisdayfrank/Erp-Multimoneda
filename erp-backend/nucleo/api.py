@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.db.models.functions import Coalesce
 from datetime import timedelta
 from .models import (
+    ConfiguracionGlobal, BorradorFactura,
     PresentacionProducto, Venta, Compra, CuentaPorCobrar, 
     CuentaPorPagar, InventarioAlmacen, SesionCaja, Cliente,
     MetodoPago, PagoCuentaCobrar, ConfiguracionGlobal, DetalleVenta, DetalleCompra,
@@ -19,7 +20,7 @@ from .serializers import (
     SesionCajaSerializer, PagoCuentaCobrarSerializer, ClienteSerializer, 
     MetodoPagoSerializer, PagoCuentaPagarSerializer, ProveedorSerializer,
     ConceptoEgresoSerializer, EgresoCajaSerializer, EgresoInventarioSerializer,
-    AbonoMasivoSerializer
+    BorradorFacturaSerializer, AbonoMasivoSerializer
 )
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
@@ -738,3 +739,76 @@ class DetalleVentaFacturaAPIView(APIView):
             }, status=status.HTTP_200_OK)
         except Venta.DoesNotExist:
             return Response({"error": "Factura no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+
+class TasaStatusAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        config = ConfiguracionGlobal.objects.first()
+        if not config:
+            return Response({"error": "No existe configuración global"}, status=status.HTTP_400_BAD_REQUEST)
+
+        hoy = timezone.now().date()
+        requiere = True
+        if config.tasa_actualizada_el:
+            requiere = config.tasa_actualizada_el.date() != hoy
+
+        return Response({
+            "tasa_cambio_actual": float(config.tasa_cambio_actual),
+            "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
+            "requiere_actualizacion": requiere
+        })
+
+
+class ActualizarTasaAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def put(self, request):
+        config = ConfiguracionGlobal.objects.first()
+        if not config:
+            return Response({"error": "No existe configuración global"}, status=status.HTTP_400_BAD_REQUEST)
+
+        nueva_tasa = request.data.get('tasa_cambio_actual')
+        if nueva_tasa is None:
+            return Response({"error": "Debes enviar tasa_cambio_actual"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            config.tasa_cambio_actual = Decimal(str(nueva_tasa))
+            config.tasa_actualizada_el = timezone.now()
+            config.save()
+            return Response({
+                "mensaje": "Tasa actualizada correctamente",
+                "tasa_cambio_actual": float(config.tasa_cambio_actual),
+                "tasa_actualizada_el": config.tasa_actualizada_el.isoformat()
+            })
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class BorradorFacturaListCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        borradores = BorradorFactura.objects.all().select_related('cliente', 'cajero')
+        serializer = BorradorFacturaSerializer(borradores, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = BorradorFacturaSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(cajero=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CargarBorradorAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def post(self, request, pk):
+        try:
+            borrador = BorradorFactura.objects.get(pk=pk)
+            data = BorradorFacturaSerializer(borrador).data
+            data['carrito_json'] = borrador.carrito_json
+            borrador.delete()
+            return Response(data)
+        except BorradorFactura.DoesNotExist:
+            return Response({"error": "Borrador no encontrado"}, status=status.HTTP_404_NOT_FOUND)

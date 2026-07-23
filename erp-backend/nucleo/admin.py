@@ -30,7 +30,8 @@ from .models import (
     ConceptoEgreso,           
     EgresoCaja,               
     EgresoInventario,         
-    DetalleEgresoInventario   
+    DetalleEgresoInventario,
+    BorradorFactura
 )
 
 # ==============================================================================
@@ -357,3 +358,9 @@ class EgresoInventarioAdmin(admin.ModelAdmin):
 class EgresoCajaAdmin(admin.ModelAdmin):
     list_display = ('fecha', 'sesion_caja', 'concepto', 'monto_extraido', 'moneda_extraida', 'usuario')
     list_filter = ('moneda_extraida', 'concepto', 'fecha')
+
+@admin.register(BorradorFactura)
+class BorradorFacturaAdmin(admin.ModelAdmin):
+    list_display = ('id', 'nombre', 'cliente', 'cajero', 'total_principal', 'creado_el')
+    list_filter = ('creado_el', 'cajero')
+    search_fields = ('nombre', 'cliente__nombre')

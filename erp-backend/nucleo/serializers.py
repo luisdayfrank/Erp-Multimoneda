@@ -3,7 +3,8 @@ from rest_framework import serializers
 from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, SesionCaja,
     PagoCuentaCobrar,MetodoPago, PagoVenta, Cliente, Proveedor, PagoCuentaPagar, ConfiguracionGlobal,
     ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario, SesionCaja, ConceptoEgreso,
-    Compra, DetalleCompra, ConfiguracionGlobal, ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario
+    Compra, DetalleCompra, ConfiguracionGlobal, ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario,
+    BorradorFactura
     )
 from django.utils import timezone
 
@@ -374,3 +375,12 @@ class EgresoInventarioSerializer(serializers.ModelSerializer):
             DetalleEgresoInventario.objects.create(egreso=egreso, **detalle)
 
         return egreso
+
+class BorradorFacturaSerializer(serializers.ModelSerializer):
+    cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
+    cajero_nombre = serializers.CharField(source='cajero.username', read_only=True)
+
+    class Meta:
+        model = BorradorFactura
+        fields = ['id', 'nombre', 'carrito_json', 'cliente', 'cliente_nombre', 'cajero_nombre',
+                  'total_principal', 'total_secundaria', 'tasa_cambio', 'creado_el']

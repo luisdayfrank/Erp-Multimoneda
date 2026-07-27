@@ -164,7 +164,24 @@ REST_FRAMEWORK = {
 # CORS_ALLOWED_ORIGINS = [
 #     "http://mi-dominio-frontend.com",
 # ]
+# =============================================================================
+# CONFIGURACIÓN DE JWT (JSON Web Tokens)
+# =============================================================================
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': False,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
 
 # --- LA SOLUCIÓN AL ERROR "403 CREDENTIALS NOT PROVIDED" ---
 # El navegador, por seguridad, no envía cabeceras "peligrosas" como 'Authorization'
@@ -185,3 +202,6 @@ CORS_ALLOW_HEADERS = [
 
 # Define el tipo de clave primaria por defecto
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+if DEBUG:
+    # En desarrollo, desactivar cache de static files
+    from django.middleware.common import CommonMiddleware

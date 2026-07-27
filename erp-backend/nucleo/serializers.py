@@ -4,6 +4,11 @@ from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, Sesion
     PagoCuentaCobrar,MetodoPago, PagoVenta, Cliente, Proveedor, PagoCuentaPagar, ConfiguracionGlobal,
     ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario, SesionCaja, ConceptoEgreso,
     Compra, DetalleCompra, ConfiguracionGlobal, ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario,
+    RutaMercado,
+    RutaMercadoDetalle,
+    RutaMercadoCredito,
+    RutaMercadoPago,
+    RutaMercadoGasto,
     BorradorFactura
     )
 from django.utils import timezone
@@ -384,3 +389,139 @@ class BorradorFacturaSerializer(serializers.ModelSerializer):
         model = BorradorFactura
         fields = ['id', 'nombre', 'carrito_json', 'cliente', 'cliente_nombre', 'cajero_nombre',
                   'total_principal', 'total_secundaria', 'tasa_cambio', 'creado_el']
+                  
+# ==============================================================================
+# SERIALIZADORES DE RUTAS DE MERCADO
+# ==============================================================================
+
+class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(source='presentacion.producto.nombre', read_only=True)
+    nombre_presentacion = serializers.CharField(source='presentacion.nombre_presentacion', read_only=True)
+    presentacion_id = serializers.IntegerField(write_only=True)
+    cantidad_vendida = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    subtotal_bs = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    subtotal_usd = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = RutaMercadoDetalle
+        fields = [
+            'id', 'presentacion', 'presentacion_id', 'nombre_producto', 'nombre_presentacion',
+            'cantidad_salida', 'cantidad_entrada', 'cantidad_vendida',
+            'precio_venta_bs', 'subtotal_bs', 'subtotal_usd'
+        ]
+
+
+class RutaMercadoCreditoSerializer(serializers.ModelSerializer):
+    cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
+    cliente_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = RutaMercadoCredito
+        fields = ['id', 'cliente', 'cliente_id', 'cliente_nombre', 'monto_bs', 'descripcion', 'cuenta_cobrar']
+
+
+class RutaMercadoPagoSerializer(serializers.ModelSerializer):
+    metodo_nombre = serializers.CharField(source='metodo.nombre', read_only=True)
+    metodo_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = RutaMercadoPago
+        fields = ['id', 'metodo', 'metodo_id', 'metodo_nombre', 'monto_bs', 'monto_usd_equivalente', 'referencia']
+
+
+class RutaMercadoGastoSerializer(serializers.ModelSerializer):
+    concepto_nombre = serializers.CharField(source='concepto.nombre', read_only=True)
+    concepto_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = RutaMercadoGasto
+        fields = ['id', 'concepto', 'concepto_id', 'concepto_nombre', 'monto_bs', 'descripcion']
+
+
+class RutaMercadoSerializer(serializers.ModelSerializer):
+    detalles = RutaMercadoDetalleSerializer(many=True, required=False)
+    creditos = RutaMercadoCreditoSerializer(many=True, required=False)
+    pagos = RutaMercadoPagoSerializer(many=True, required=False)
+    gastos = RutaMercadoGastoSerializer(many=True, required=False)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+
+    class Meta:
+        model = RutaMercado
+        fields = [
+            'id', 'fecha', 'usuario', 'usuario_nombre', 'estado', 'almacen', 'tasa_cambio',
+            'total_venta_bs', 'total_venta_usd',
+            'total_efectivo_bs', 'total_pago_movil_bs', 'total_punto_venta_bs',
+            'total_cobranzas_bs', 'total_creditos_bs', 'total_gastos_bs',
+            'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs',
+            'observacion',
+            'detalles', 'creditos', 'pagos', 'gastos'
+        ]
+        read_only_fields = [
+            'total_venta_bs', 'total_venta_usd',
+            'total_efectivo_bs', 'total_pago_movil_bs', 'total_punto_venta_bs',
+            'total_creditos_bs', 'total_gastos_bs',
+            'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
+        ]
+
+    def create(self, validated_data):
+        detalles_data = validated_data.pop('detalles', [])
+        creditos_data = validated_data.pop('creditos', [])
+        pagos_data = validated_data.pop('pagos', [])
+        gastos_data = validated_data.pop('gastos', [])
+
+        ruta = RutaMercado.objects.create(**validated_data)
+
+        for d in detalles_data:
+            RutaMercadoDetalle.objects.create(ruta=ruta, **d)
+        for c in creditos_data:
+            RutaMercadoCredito.objects.create(ruta=ruta, **c)
+        for p in pagos_data:
+            RutaMercadoPago.objects.create(ruta=ruta, **p)
+        for g in gastos_data:
+            RutaMercadoGasto.objects.create(ruta=ruta, **g)
+
+        ruta.calcular_totales()
+        ruta.save()
+        return ruta
+
+    def update(self, instance, validated_data):
+        # Si está cerrada, solo permitir editar pagos/creditos/gastos/observacion
+        es_cerrada = instance.estado == 'CERRADA'
+
+        detalles_data = validated_data.pop('detalles', None)
+        creditos_data = validated_data.pop('creditos', None)
+        pagos_data = validated_data.pop('pagos', None)
+        gastos_data = validated_data.pop('gastos', None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        if not es_cerrada and detalles_data is not None:
+            instance.detalles.all().delete()
+            for d in detalles_data:
+                RutaMercadoDetalle.objects.create(ruta=instance, **d)
+
+        if creditos_data is not None:
+            instance.creditos.all().delete()
+            for c in creditos_data:
+                RutaMercadoCredito.objects.create(ruta=instance, **c)
+
+        if pagos_data is not None:
+            instance.pagos.all().delete()
+            for p in pagos_data:
+                RutaMercadoPago.objects.create(ruta=instance, **p)
+
+        if gastos_data is not None:
+            instance.gastos.all().delete()
+            for g in gastos_data:
+                RutaMercadoGasto.objects.create(ruta=instance, **g)
+
+        instance.calcular_totales()
+        instance.save()
+        return instance
+
+
+class ImportarExcelRutaSerializer(serializers.Serializer):
+    """Serializer para recibir el archivo Excel y devolver JSON pre-llenado."""
+    archivo = serializers.FileField()
+    tasa_cambio = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)

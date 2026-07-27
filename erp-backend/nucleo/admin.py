@@ -31,6 +31,11 @@ from .models import (
     EgresoCaja,               
     EgresoInventario,         
     DetalleEgresoInventario,
+    RutaMercado,
+    RutaMercadoDetalle,
+    RutaMercadoCredito,
+    RutaMercadoPago,
+    RutaMercadoGasto,
     BorradorFactura
 )
 
@@ -364,3 +369,35 @@ class BorradorFacturaAdmin(admin.ModelAdmin):
     list_display = ('id', 'nombre', 'cliente', 'cajero', 'total_principal', 'creado_el')
     list_filter = ('creado_el', 'cajero')
     search_fields = ('nombre', 'cliente__nombre')
+
+# ==============================================================================
+# RUTAS DE MERCADO
+# ==============================================================================
+
+class RutaMercadoDetalleInline(admin.TabularInline):
+    model = RutaMercadoDetalle
+    extra = 0
+
+class RutaMercadoCreditoInline(admin.TabularInline):
+    model = RutaMercadoCredito
+    extra = 0
+
+class RutaMercadoPagoInline(admin.TabularInline):
+    model = RutaMercadoPago
+    extra = 0
+
+class RutaMercadoGastoInline(admin.TabularInline):
+    model = RutaMercadoGasto
+    extra = 0
+
+@admin.register(RutaMercado)
+class RutaMercadoAdmin(admin.ModelAdmin):
+    list_display = ('id', 'fecha', 'usuario', 'estado', 'total_venta_usd', 'diferencia_bs')
+    list_filter = ('estado', 'fecha')
+    readonly_fields = (
+        'total_venta_bs', 'total_venta_usd',
+        'total_efectivo_bs', 'total_pago_movil_bs', 'total_punto_venta_bs',
+        'total_cobranzas_bs', 'total_creditos_bs', 'total_gastos_bs',
+        'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
+    )
+    inlines = [RutaMercadoDetalleInline, RutaMercadoCreditoInline, RutaMercadoPagoInline, RutaMercadoGastoInline]

@@ -29,7 +29,14 @@ from .api import (
     ActualizarCostosProductosAPIView,
     BorradorFacturaListCreateAPIView,
     CargarBorradorAPIView,
-    DetalleVentaFacturaAPIView
+    DetalleVentaFacturaAPIView,
+    GenerarExcelRutaAPIView,
+    ImportarExcelRutaAPIView,
+    RutaMercadoListCreateAPIView,
+    RutaMercadoDetalleAPIView,
+    CerrarRutaMercadoAPIView,
+    ReabrirRutaMercadoAPIView,
+    AlmacenListAPIView,
 )
 
 urlpatterns = [
@@ -79,4 +86,14 @@ urlpatterns = [
     # borradores
     path('api/v1/borradores/', BorradorFacturaListCreateAPIView.as_view(), name='api_borradores'),
     path('api/v1/borradores/<int:pk>/cargar/', CargarBorradorAPIView.as_view(), name='api_borrador_cargar'),
+
+    # Rutas de Mercado
+    path('api/v1/rutas/', RutaMercadoListCreateAPIView.as_view(), name='api_rutas'),
+    path('api/v1/rutas/<int:pk>/', RutaMercadoDetalleAPIView.as_view(), name='api_ruta_detalle'),
+    path('api/v1/rutas/<int:pk>/cerrar/', CerrarRutaMercadoAPIView.as_view(), name='api_ruta_cerrar'),
+    path('api/v1/rutas/<int:pk>/reabrir/', ReabrirRutaMercadoAPIView.as_view(), name='api_ruta_reabrir'),
+    path('api/v1/rutas/generar-excel/', GenerarExcelRutaAPIView.as_view(), name='api_generar_excel_ruta'),
+    path('api/v1/rutas/importar-excel/', ImportarExcelRutaAPIView.as_view(), name='api_importar_excel_ruta'),
+
+    path('api/v1/almacenes/', AlmacenListAPIView.as_view(), name='api_almacenes'),
 ]

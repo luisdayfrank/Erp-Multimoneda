@@ -792,3 +792,218 @@ class BorradorFactura(models.Model):
 
     def __str__(self):
         return f"Borrador #{self.id} - {self.cliente.nombre}"
+
+# ==============================================================================
+# 7. RUTAS DE MERCADO (Venta Ambulante / Consignación)
+# ==============================================================================
+
+class RutaMercado(models.Model):
+    ESTADOS = (
+        ('BORRADOR', 'Borrador'),
+        ('CERRADA', 'Cerrada'),
+    )
+
+    fecha = models.DateTimeField(default=timezone.now)
+    usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
+    estado = models.CharField(max_length=15, choices=ESTADOS, default='BORRADOR')
+    almacen = models.ForeignKey(Almacen, on_delete=models.RESTRICT)
+
+    # Tasa histórica del día de la ruta (crítico para cuadre)
+    tasa_cambio = models.DecimalField(max_digits=15, decimal_places=2)
+
+    # Totales de productos vendidos
+    total_venta_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    total_venta_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Pagos recibidos en la ruta
+    total_efectivo_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    total_pago_movil_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    total_punto_venta_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Cobranzas = pagos de deudas anteriores (no es venta del día)
+    total_cobranzas_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Créditos nuevos = fiado en esta ruta
+    total_creditos_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Gastos de la ruta
+    total_gastos_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Cuadre
+    recaudado_esperado_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    recaudado_real_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    diferencia_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    observacion = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = "Ruta de Mercado"
+        verbose_name_plural = "Rutas de Mercado"
+
+    def __str__(self):
+        return f"Ruta #{self.id} - {self.fecha.strftime('%d/%m/%Y')} - {self.estado}"
+
+    @property
+    def total_pagos_recibidos_bs(self):
+        """Suma de efectivo + pago móvil + punto de venta"""
+        return self.total_efectivo_bs + self.total_pago_movil_bs + self.total_punto_venta_bs
+
+    def calcular_totales(self):
+        """Recalcula totales desde los detalles y pagos."""
+        # Productos
+        total_bs = Decimal('0.00')
+        total_usd = Decimal('0.00')
+        for d in self.detalles.all():
+            total_bs += d.subtotal_bs
+            total_usd += d.subtotal_usd
+        self.total_venta_bs = total_bs
+        self.total_venta_usd = total_usd
+
+        # Pagos
+        pagos = self.pagos.all()
+        self.total_efectivo_bs = sum(p.monto_bs for p in pagos if p.metodo and 'efectivo' in p.metodo.nombre.lower()) or Decimal('0.00')
+        self.total_pago_movil_bs = sum(p.monto_bs for p in pagos if p.metodo and 'movil' in p.metodo.nombre.lower()) or Decimal('0.00')
+        self.total_punto_venta_bs = sum(p.monto_bs for p in pagos if p.metodo and 'punto' in p.metodo.nombre.lower()) or Decimal('0.00')
+
+        # Créditos
+        self.total_creditos_bs = sum(c.monto_bs for c in self.creditos.all()) or Decimal('0.00')
+
+        # Gastos
+        self.total_gastos_bs = sum(g.monto_bs for g in self.gastos.all()) or Decimal('0.00')
+
+        # Cuadre: lo que deberías tener en mano
+        # Venta - Créditos - Gastos + Cobranzas = Esperado
+        self.recaudado_esperado_bs = self.total_venta_bs - self.total_creditos_bs - self.total_gastos_bs + self.total_cobranzas_bs
+        self.recaudado_real_bs = self.total_pagos_recibidos_bs + self.total_cobranzas_bs
+        self.diferencia_bs = self.recaudado_real_bs - self.recaudado_esperado_bs
+
+    def cerrar_ruta(self):
+        """Procesa el cierre: descuenta inventario, crea CxC, bloquea edición."""
+        from django.db import transaction
+
+        with transaction.atomic():
+            if self.estado == 'CERRADA':
+                raise ValueError("La ruta ya está cerrada.")
+
+            self.calcular_totales()
+
+            # 1. Descontar del inventario SOLO lo vendido (salida - entrada)
+            for detalle in self.detalles.all():
+                cantidad_vendida = detalle.cantidad_vendida
+                if cantidad_vendida <= Decimal('0.00'):
+                    continue
+
+                inventario, _ = InventarioAlmacen.objects.get_or_create(
+                    producto=detalle.presentacion.producto,
+                    almacen=self.almacen,
+                    defaults={'stock_actual_unidades_base': Decimal('0.00')}
+                )
+
+                # Convertir cantidad vendida a unidades base
+                cantidad_base = cantidad_vendida * detalle.presentacion.factor_conversion
+
+                if inventario.stock_actual_unidades_base < cantidad_base:
+                    raise ValueError(
+                        f"Stock insuficiente para '{detalle.presentacion}'. "
+                        f"Disponible: {inventario.stock_actual_unidades_base}, "
+                        f"Requerido: {cantidad_base}"
+                    )
+
+                inventario.stock_actual_unidades_base -= cantidad_base
+                inventario.save()
+
+            # 2. Crear Cuentas por Cobrar por cada crédito
+            for credito in self.creditos.all():
+                if credito.cuenta_cobrar:
+                    continue  # Ya fue creada
+
+                cxc = CuentaPorCobrar.objects.create(
+                    venta=None,  # Deuda sin venta asociada (como deuda_inicial)
+                    cliente=credito.cliente,
+                    monto_total=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
+                    saldo_pendiente=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
+                    estado='PENDIENTE',
+                    fecha_vencimiento=timezone.now().date(),
+                )
+                credito.cuenta_cobrar = cxc
+                credito.save()
+
+            # 3. Cambiar estado
+            self.estado = 'CERRADA'
+            self.save()
+
+
+class RutaMercadoDetalle(models.Model):
+    ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='detalles')
+    presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT)
+
+    cantidad_salida = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    class Meta:
+        verbose_name = "Detalle de Ruta"
+        verbose_name_plural = "Detalles de Ruta"
+
+    @property
+    def cantidad_vendida(self):
+        vendido = self.cantidad_salida - self.cantidad_entrada
+        return vendido if vendido > Decimal('0.00') else Decimal('0.00')
+
+    @property
+    def precio_venta_usd(self):
+        if self.ruta.tasa_cambio > 0:
+            return self.precio_venta_bs / self.ruta.tasa_cambio
+        return Decimal('0.00')
+
+    @property
+    def subtotal_bs(self):
+        return self.cantidad_vendida * self.precio_venta_bs
+
+    @property
+    def subtotal_usd(self):
+        return self.cantidad_vendida * self.precio_venta_usd
+
+
+class RutaMercadoCredito(models.Model):
+    ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='creditos')
+    cliente = models.ForeignKey(Cliente, on_delete=models.RESTRICT)
+    monto_bs = models.DecimalField(max_digits=15, decimal_places=2)
+    descripcion = models.CharField(max_length=200, blank=True)
+
+    # Se vincula automáticamente al cerrar la ruta
+    cuenta_cobrar = models.ForeignKey(
+        CuentaPorCobrar, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='origen_ruta'
+    )
+
+    class Meta:
+        verbose_name = "Crédito de Ruta"
+        verbose_name_plural = "Créditos de Ruta"
+
+    def __str__(self):
+        return f"Crédito {self.cliente.nombre} - BS {self.monto_bs}"
+
+
+class RutaMercadoPago(models.Model):
+    ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='pagos')
+    metodo = models.ForeignKey(MetodoPago, on_delete=models.RESTRICT)
+    monto_bs = models.DecimalField(max_digits=15, decimal_places=2)
+    monto_usd_equivalente = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    referencia = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        verbose_name = "Pago de Ruta"
+        verbose_name_plural = "Pagos de Ruta"
+
+
+class RutaMercadoGasto(models.Model):
+    ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='gastos')
+    concepto = models.ForeignKey(ConceptoEgreso, on_delete=models.RESTRICT)
+    monto_bs = models.DecimalField(max_digits=15, decimal_places=2)
+    descripcion = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        verbose_name = "Gasto de Ruta"
+        verbose_name_plural = "Gastos de Ruta"

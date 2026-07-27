@@ -1,3 +1,4 @@
+import io
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -13,14 +14,21 @@ from .models import (
     PresentacionProducto, Venta, Compra, CuentaPorCobrar, 
     CuentaPorPagar, InventarioAlmacen, SesionCaja, Cliente,
     MetodoPago, PagoCuentaCobrar, ConfiguracionGlobal, DetalleVenta, DetalleCompra,
-    Producto, Proveedor, PagoCuentaPagar, ConceptoEgreso, DetalleEgresoInventario
+    Producto, Proveedor, PagoCuentaPagar, ConceptoEgreso, DetalleEgresoInventario,
+    RutaMercado,
+    RutaMercadoDetalle,
+    RutaMercadoCredito,
+    RutaMercadoPago,
+    RutaMercadoGasto
 )
 from .serializers import (
     PresentacionProductoSerializer, VentaSerializer, CompraSerializer, 
     SesionCajaSerializer, PagoCuentaCobrarSerializer, ClienteSerializer, 
     MetodoPagoSerializer, PagoCuentaPagarSerializer, ProveedorSerializer,
     ConceptoEgresoSerializer, EgresoCajaSerializer, EgresoInventarioSerializer,
-    BorradorFacturaSerializer, AbonoMasivoSerializer
+    BorradorFacturaSerializer, AbonoMasivoSerializer,
+    RutaMercadoSerializer,
+    ImportarExcelRutaSerializer
 )
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
@@ -812,3 +820,329 @@ class CargarBorradorAPIView(APIView):
             return Response(data)
         except BorradorFactura.DoesNotExist:
             return Response({"error": "Borrador no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+# ==============================================================================
+# RUTAS DE MERCADO
+# ==============================================================================
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Protection
+from openpyxl.utils import get_column_letter
+from django.http import HttpResponse
+from django.db import transaction
+
+
+class GenerarExcelRutaAPIView(APIView):
+    """
+    POST /api/v1/rutas/generar-excel/
+    Genera un .xlsx listo para llevar al mercado.
+    Body: {"tipo": "TODOS"|"CON_STOCK"|"MANUAL", "productos_ids": [], "incluir_precio_sugerido": true, "tasa_cambio": 742.22}
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def post(self, request):
+        tipo = request.data.get('tipo', 'TODOS')
+        incluir_precio = request.data.get('incluir_precio_sugerido', True)
+        tasa = Decimal(str(request.data.get('tasa_cambio', 1)))
+
+        # Obtener presentaciones según filtro
+        if tipo == 'CON_STOCK':
+            presentaciones = PresentacionProducto.objects.filter(
+                producto__stock_por_almacen__stock_actual_unidades_base__gt=0
+            ).distinct().select_related('producto', 'unidad_medida')
+        elif tipo == 'MANUAL':
+            ids = request.data.get('productos_ids', [])
+            presentaciones = PresentacionProducto.objects.filter(id__in=ids).select_related('producto', 'unidad_medida')
+        else:
+            presentaciones = PresentacionProducto.objects.all().select_related('producto', 'unidad_medida')
+
+        if not presentaciones.exists():
+            return Response({"error": "No se encontraron productos con el filtro seleccionado."}, status=400)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Ruta de Mercado"
+
+        # Hoja oculta con tasa
+        ws_config = wb.create_sheet(title="Config")
+        ws_config['A1'] = 'TASA_CAMBIO'
+        ws_config['B1'] = float(tasa)
+        ws_config.sheet_state = 'hidden'
+
+        # Encabezados
+        headers = ['PRODUCTO', 'SALIDA', 'ENTRADA', 'VENDIDO', 'PRECIO BS', 'PRECIO $', 'TOTAL $']
+        ws.append(headers)
+
+        # Estilo header
+        header_fill = PatternFill(start_color='2C3E50', end_color='2C3E50', fill_type='solid')
+        header_font = Font(bold=True, color='FFFFFF')
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # Filas de productos
+        for idx, pres in enumerate(presentaciones, start=2):
+            nombre = f"{pres.producto.nombre} ({pres.nombre_presentacion})"
+            precio_bs = ''
+            if incluir_precio:
+                # Precio sugerido: precio_venta_principal (USD) * tasa = BS
+                precio_bs = float(pres.precio_venta_principal) * float(tasa)
+
+            ws.append([
+                nombre,
+                None,  # Salida (editable)
+                None,  # Entrada (editable)
+                f'=B{idx}-C{idx}',           # Vendido
+                precio_bs,                    # Precio BS (editable, sugerido)
+                f'=E{idx}/Config!B$1',        # Precio $
+                f'=D{idx}*F{idx}',            # Total $
+            ])
+
+        # Ajustar anchos
+        ws.column_dimensions['A'].width = 45
+        for col in ['B', 'C', 'D', 'E', 'F', 'G']:
+            ws.column_dimensions[col].width = 16
+
+        # Proteger fórmulas (solo Salida, Entrada, Precio BS son editables)
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            row[0].protection = Protection(locked=True)   # Producto
+            row[1].protection = Protection(locked=False)  # Salida
+            row[2].protection = Protection(locked=False)  # Entrada
+            row[3].protection = Protection(locked=True)   # Vendido (fórmula)
+            row[4].protection = Protection(locked=False)  # Precio BS
+            row[5].protection = Protection(locked=True)   # Precio $ (fórmula)
+            row[6].protection = Protection(locked=True)   # Total $ (fórmula)
+
+        ws.protection.sheet = True
+        ws.protection.password = None  # Solo protección visual, sin contraseña
+
+        # Respuesta como descarga
+        fecha_str = timezone.now().strftime('%Y%m%d_%H%M')
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename=ruta_mercado_{fecha_str}.xlsx'
+        wb.save(response)
+        return response
+
+
+class ImportarExcelRutaAPIView(APIView):
+    """
+    POST /api/v1/rutas/importar-excel/
+    Recibe un archivo .xlsx y devuelve JSON con los detalles pre-llenados.
+    Form-data: archivo=<file>, tasa_cambio=742.22
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def post(self, request):
+        archivo = request.FILES.get('archivo')
+        if not archivo:
+            return Response({"error": "Debes subir un archivo .xlsx"}, status=400)
+
+        tasa = Decimal(str(request.data.get('tasa_cambio', 1)))
+
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(filename=io.BytesIO(archivo.read()), data_only=False)
+        except Exception as e:
+            return Response({"error": f"No se pudo leer el archivo: {str(e)}"}, status=400)
+
+        # Leer tasa de la hoja Config si existe
+        if 'Config' in wb.sheetnames:
+            ws_config = wb['Config']
+            tasa_excel = ws_config['B1'].value
+            if tasa_excel:
+                try:
+                    tasa = Decimal(str(tasa_excel))
+                except:
+                    pass
+
+        ws = wb['Ruta de Mercado'] if 'Ruta de Mercado' in wb.sheetnames else wb.active
+
+        detalles = []
+        no_encontrados = []
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+
+            nombre_producto = str(row[0]).strip()
+            salida = Decimal(str(row[1])) if row[1] is not None else Decimal('0.00')
+            entrada = Decimal(str(row[2])) if row[2] is not None else Decimal('0.00')
+            precio_bs = Decimal(str(row[4])) if row[4] is not None else Decimal('0.00')
+
+            # Buscar presentación por nombre (fuzzy match)
+            presentacion = PresentacionProducto.objects.filter(
+                models.Q(producto__nombre__icontains=nombre_producto) |
+                models.Q(nombre_presentacion__icontains=nombre_producto)
+            ).select_related('producto').first()
+
+            if not presentacion:
+                no_encontrados.append(nombre_producto)
+                continue
+
+            vendido = salida - entrada if salida > entrada else Decimal('0.00')
+            precio_usd = precio_bs / tasa if tasa > 0 else Decimal('0.00')
+            subtotal_usd = vendido * precio_usd
+
+            detalles.append({
+                "presentacion_id": presentacion.id,
+                "nombre_producto": f"{presentacion.producto.nombre} ({presentacion.nombre_presentacion})",
+                "cantidad_salida": float(salida),
+                "cantidad_entrada": float(entrada),
+                "cantidad_vendida": float(vendido),
+                "precio_venta_bs": float(precio_bs),
+                "precio_venta_usd": float(precio_usd),
+                "subtotal_usd": float(subtotal_usd),
+            })
+
+        return Response({
+            "tasa_cambio": float(tasa),
+            "detalles_encontrados": len(detalles),
+            "detalles": detalles,
+            "no_encontrados": no_encontrados
+        })
+
+
+class RutaMercadoListCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        rutas = RutaMercado.objects.all().select_related('usuario', 'almacen').prefetch_related(
+            'detalles__presentacion__producto',
+            'creditos__cliente',
+            'pagos__metodo',
+            'gastos__concepto'
+        )
+        serializer = RutaMercadoSerializer(rutas, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = RutaMercadoSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(usuario=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RutaMercadoDetalleAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            ruta = RutaMercado.objects.prefetch_related(
+                'detalles__presentacion__producto',
+                'creditos__cliente',
+                'pagos__metodo',
+                'gastos__concepto'
+            ).get(pk=pk)
+            serializer = RutaMercadoSerializer(ruta)
+            return Response(serializer.data)
+        except RutaMercado.DoesNotExist:
+            return Response({"error": "Ruta no encontrada"}, status=404)
+
+    def put(self, request, pk):
+        try:
+            ruta = RutaMercado.objects.get(pk=pk)
+            if ruta.estado == 'CERRADA' and 'estado' not in request.data:
+                # Si está cerrada, no permitir cambiar detalles de productos
+                pass  # El serializer maneja la lógica
+            serializer = RutaMercadoSerializer(ruta, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=400)
+        except RutaMercado.DoesNotExist:
+            return Response({"error": "Ruta no encontrada"}, status=404)
+
+    def delete(self, request, pk):
+        try:
+            ruta = RutaMercado.objects.get(pk=pk)
+            if ruta.estado == 'CERRADA':
+                return Response({"error": "No puedes eliminar una ruta cerrada."}, status=400)
+            ruta.delete()
+            return Response({"mensaje": "Ruta eliminada."}, status=204)
+        except RutaMercado.DoesNotExist:
+            return Response({"error": "Ruta no encontrada"}, status=404)
+
+
+class CerrarRutaMercadoAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    def post(self, request, pk):
+        try:
+            ruta = RutaMercado.objects.prefetch_related('detalles', 'creditos').get(pk=pk)
+            ruta.cerrar_ruta()
+            return Response({
+                "mensaje": "Ruta cerrada exitosamente.",
+                "ruta": RutaMercadoSerializer(ruta).data
+            })
+        except RutaMercado.DoesNotExist:
+            return Response({"error": "Ruta no encontrada"}, status=404)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+        except Exception as e:
+            return Response({"error": f"Error al cerrar la ruta: {str(e)}"}, status=500)
+
+
+class ReabrirRutaMercadoAPIView(APIView):
+    """
+    Reabre una ruta cerrada (solo ADMIN/GERENTE).
+    Revierte inventario y elimina CxC generadas (si no tienen pagos).
+    """
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    def post(self, request, pk):
+        try:
+            with transaction.atomic():
+                ruta = RutaMercado.objects.prefetch_related('detalles', 'creditos__cuenta_cobrar').get(pk=pk)
+
+                if ruta.estado != 'CERRADA':
+                    return Response({"error": "La ruta no está cerrada."}, status=400)
+
+                # 1. Revertir inventario (sumar de vuelta lo vendido)
+                for detalle in ruta.detalles.all():
+                    cantidad_base = detalle.cantidad_vendida * detalle.presentacion.factor_conversion
+                    if cantidad_base > 0:
+                        inventario = InventarioAlmacen.objects.get(
+                            producto=detalle.presentacion.producto,
+                            almacen=ruta.almacen
+                        )
+                        inventario.stock_actual_unidades_base += cantidad_base
+                        inventario.save()
+
+                # 2. Eliminar CxC generadas (solo si no tienen pagos)
+                for credito in ruta.creditos.all():
+                    if credito.cuenta_cobrar:
+                        # Verificar que no tenga pagos
+                        if not credito.cuenta_cobrar.pagos.exists():
+                            credito.cuenta_cobrar.delete()
+                            credito.cuenta_cobrar = None
+                            credito.save()
+                        else:
+                            return Response({
+                                "error": f"No se puede reabrir: el crédito de {credito.cliente.nombre} ya tiene pagos registrados."
+                            }, status=400)
+
+                # 3. Cambiar estado
+                ruta.estado = 'BORRADOR'
+                ruta.save()
+
+                return Response({
+                    "mensaje": "Ruta reabierta. Inventario restaurado y CxC eliminadas.",
+                    "ruta": RutaMercadoSerializer(ruta).data
+                })
+        except RutaMercado.DoesNotExist:
+            return Response({"error": "Ruta no encontrada"}, status=404)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+class AlmacenListAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        almacenes = Almacen.objects.filter(activo=True)
+        data = [{"id": a.id, "nombre": a.nombre} for a in almacenes]
+        return Response(data)

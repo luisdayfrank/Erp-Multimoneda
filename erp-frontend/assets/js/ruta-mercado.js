@@ -14,6 +14,31 @@ let creditos = [];
 let gastos = [];
 let rutaActualId = null;
 
+function formatearErrorDRF(error, profundidad = 0) {
+    if (!error) return 'Error desconocido';
+    if (typeof error === 'string') return error;
+    if (typeof error !== 'object') return String(error);
+    if (error.messageForUser && typeof error.messageForUser === 'string') return error.messageForUser;
+    if (error.detail && typeof error.detail === 'string') return error.detail;
+
+    const partes = [];
+    for (const [campo, valor] of Object.entries(error)) {
+        if (valor === null || valor === undefined) continue;
+        if (typeof valor === 'string') {
+            partes.push(`${campo}: ${valor}`);
+        } else if (Array.isArray(valor)) {
+            // Puede ser array de strings u objetos (errores nested de DRF)
+            const msgs = valor.map(v => typeof v === 'string' ? v : formatearErrorDRF(v, profundidad + 1)).filter(Boolean);
+            if (msgs.length) partes.push(`${campo}: ${msgs.join(', ')}`);
+        } else if (typeof valor === 'object') {
+            const nested = formatearErrorDRF(valor, profundidad + 1);
+            if (nested) partes.push(`${campo}: {${nested}}`);
+        }
+    }
+    if (partes.length) return partes.join(' | ');
+    return JSON.stringify(error);
+}
+
 // ==============================================================================
 // INICIALIZACI”N
 // ==============================================================================
@@ -28,43 +53,62 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function inicializarRutaMercado() {
+    // 1. Cat√°logo de rutas (NO depende de caja abierta)
     try {
-        // Cargar cat·logo, clientes, mÈtodos, conceptos, almacenes
-        const [catalogoResp, datosResp, conceptosResp] = await Promise.all([
-            apiFetch('/pos/catalogo/', 'GET'),
-            apiFetch('/pos/datos-iniciales/', 'GET'),
-            apiFetch('/egresos/conceptos/', 'GET')
-        ]);
-
+        const catalogoResp = await apiFetch('/rutas/catalogo/', 'GET');
         catalogo = Array.isArray(catalogoResp) ? catalogoResp : (catalogoResp.results || []);
-        clientesCache = datosResp.clientes || [];
-        metodosPagoCache = datosResp.metodos_pago || [];
-        conceptosGastoCache = conceptosResp || [];
+    } catch (e) {
+        console.error('Error cargando cat√°logo de rutas:', e);
+        alert('No se pudo cargar el cat√°logo de productos. Revisa tu conexi√≥n.');
+        return; // Sin cat√°logo no podemos operar
+    }
 
-        // Cargar almacenes (usamos el mismo endpoint o asumimos almacÈn 1 por defecto)
-        // Cargar almacenes reales
-        try {
-            const almResp = await apiFetch('/almacenes/', 'GET');
-            almacenesCache = almResp;
-        } catch (e) {
-            almacenesCache = [{id: 1, nombre: 'AlmacÈn Principal'}];
-        }
+    // 2. Datos auxiliares en paralelo pero sin bloquearse entre s√≠
+    const resultados = await Promise.allSettled([
+        apiFetch('/pos/datos-iniciales/', 'GET'),
+        apiFetch('/egresos/conceptos/', 'GET'),
+        apiFetch('/almacenes/', 'GET'),
+        apiFetch('/config/tasa-status/', 'GET')
+    ]);
 
-        llenarSelects();
-        agregarPago(); // Una lÌnea de pago por defecto
+    // Clientes + m√©todos de pago
+    if (resultados[0].status === 'fulfilled') {
+        clientesCache = resultados[0].value.clientes || [];
+        metodosPagoCache = resultados[0].value.metodos_pago || [];
+    } else {
+        console.warn('No se cargaron clientes/m√©todos:', resultados[0].reason);
+        clientesCache = []; metodosPagoCache = [];
+    }
 
-        // Cargar tasa actual
-        const tasaResp = await apiFetch('/config/tasa-status/', 'GET');
-        const tasa = parseFloat(tasaResp.tasa_cambio_actual) || 0;
+    // Conceptos de gasto
+    if (resultados[1].status === 'fulfilled') {
+        conceptosGastoCache = resultados[1].value || [];
+    } else {
+        console.warn('No se cargaron conceptos:', resultados[1].reason);
+        conceptosGastoCache = [];
+    }
+
+    // Almacenes
+    if (resultados[2].status === 'fulfilled') {
+        almacenesCache = resultados[2].value || [];
+    } else {
+        console.warn('No se cargaron almacenes:', resultados[2].reason);
+        almacenesCache = [{id: 1, nombre: 'Almac√©n Principal'}];
+    }
+
+    // Tasa de cambio
+    if (resultados[3].status === 'fulfilled') {
+        const tasa = parseFloat(resultados[3].value.tasa_cambio_actual) || 0;
         document.getElementById('ruta-tasa').value = tasa.toFixed(2);
         document.getElementById('tasaDisplay').innerText = 'Tasa: BS ' + tasa.toFixed(2);
-
-    } catch (e) {
-        console.error('Error inicializando:', e);
-        alert('Error al cargar datos iniciales.');
+    } else {
+        console.warn('No se carg√≥ la tasa:', resultados[3].reason);
+        document.getElementById('tasaDisplay').innerText = 'Tasa: BS ???';
     }
-}
 
+    llenarSelects();
+    agregarPago(); // l√≠nea de pago por defecto
+}
 function llenarSelects() {
     // AlmacÈn
     const selAlmacen = document.getElementById('ruta-almacen');
@@ -197,7 +241,8 @@ async function subirExcel(file) {
         }
 
     } catch (e) {
-        alert('? Error al subir Excel:\n' + e.message);
+        const mensaje = formatearErrorDRF(e);
+        alert('‚ùå Error al subir Excel:\n' + mensaje);
         console.error(e);
     }
 }
@@ -215,26 +260,78 @@ function renderizarTablaProductos() {
         return;
     }
 
+    const tasa = parseFloat(document.getElementById('ruta-tasa').value) || 0;
+
     filasProducto.forEach((fila, index) => {
+        const c = calcularFila(fila);
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>
-                <select class="form-select form-select-sm" onchange="cambiarProducto(${index}, this.value)">
-                    <option value="">-- Seleccionar --</option>
-                    ${catalogo.map(p => `<option value="${p.id}" ${p.id == fila.presentacion_id ? 'selected' : ''}>${p.producto.nombre} (${p.nombre_presentacion})</option>`).join('')}
-                </select>
+            <td style="position:relative;">
+                ${fila.presentacion_id ? 
+                    `<div class="d-flex align-items-center">
+                        <span class="fw-bold flex-grow-1">${fila.nombre}</span>
+                        <button class="btn btn-sm btn-link text-danger p-0" onclick="limpiarProductoFila(${index})"><i class="bi bi-x-lg"></i></button>
+                     </div>` :
+                    `<input type="text" class="form-control form-control-sm" id="buscar-prod-${index}" 
+                        placeholder="Escribe nombre o cÛdigo..." autocomplete="off"
+                        oninput="autocompleteProducto(${index}, this.value)"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();seleccionarPrimero(${index});}">
+                     <div class="list-group position-absolute w-100 shadow-sm" id="lista-autocomplete-${index}" style="z-index:1050; max-height:200px; overflow-y:auto; display:none;"></div>`
+                }
             </td>
             <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.salida}" onchange="actualizarFila(${index}, 'salida', this.value)"></td>
             <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.entrada}" onchange="actualizarFila(${index}, 'entrada', this.value)"></td>
-            <td class="text-center fw-bold text-primary">${calcularFila(fila).vendido.toFixed(2)}</td>
+            <td class="text-center fw-bold text-primary">${c.vendido.toFixed(2)}</td>
             <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.precio_bs}" onchange="actualizarFila(${index}, 'precio_bs', this.value)"></td>
-            <td class="text-center">${calcularFila(fila).precioUSD.toFixed(2)}</td>
-            <td class="text-center fw-bold">${calcularFila(fila).totalBS.toFixed(2)}</td>
-            <td class="text-center fw-bold text-success">${calcularFila(fila).totalUSD.toFixed(2)}</td>
+            <td class="text-center">${c.precioUSD.toFixed(2)}</td>
+            <td class="text-center fw-bold">${c.totalBS.toFixed(2)}</td>
+            <td class="text-center fw-bold text-success">${c.totalUSD.toFixed(2)}</td>
             <td><button class="btn btn-sm btn-outline-danger" onclick="eliminarFila(${index})"><i class="bi bi-trash"></i></button></td>
         `;
         tbody.appendChild(tr);
     });
+}
+
+function autocompleteProducto(index, texto) {
+    const lista = document.getElementById(`lista-autocomplete-${index}`);
+    if (!lista) return;
+    if (!texto || texto.length < 2) { lista.style.display = 'none'; return; }
+    
+    const filtrados = catalogo.filter(p => {
+        const nom = (p.producto.nombre + ' ' + p.nombre_presentacion).toLowerCase();
+        const cod = (p.producto.codigo_base || '').toLowerCase();
+        return nom.includes(texto.toLowerCase()) || cod.includes(texto.toLowerCase());
+    }).slice(0, 8); // m·ximo 8 resultados
+    
+    if (filtrados.length === 0) { lista.style.display = 'none'; return; }
+    
+    lista.innerHTML = filtrados.map(p => 
+        `<a href="#" class="list-group-item list-group-item-action py-1 px-2 small" 
+            onclick="event.preventDefault(); seleccionarProductoAutocomplete(${index}, ${p.id});">
+            <strong>${p.producto.nombre}</strong> <span class="text-muted">(${p.nombre_presentacion})</span>
+            <span class="float-end text-primary">BS ${(p.precio_venta_principal * (parseFloat(document.getElementById('ruta-tasa').value)||0)).toFixed(2)}</span>
+        </a>`
+    ).join('');
+    lista.style.display = 'block';
+}
+
+function seleccionarProductoAutocomplete(index, presentacionId) {
+    const lista = document.getElementById(`lista-autocomplete-${index}`);
+    if (lista) lista.style.display = 'none';
+    cambiarProducto(index, presentacionId);
+}
+
+function limpiarProductoFila(index) {
+    filasProducto[index] = { presentacion_id: null, nombre: '', salida: 0, entrada: 0, precio_bs: 0 };
+    renderizarTablaProductos();
+}
+
+function seleccionarPrimero(index) {
+    const lista = document.getElementById(`lista-autocomplete-${index}`);
+    if (lista && lista.style.display !== 'none') {
+        const primero = lista.querySelector('a');
+        if (primero) primero.click();
+    }
 }
 
 function calcularFila(fila) {
@@ -271,8 +368,15 @@ function cambiarProducto(index, presentacionId) {
 }
 
 function agregarFilaVacia() {
+    const index = filasProducto.length;
     filasProducto.push({ presentacion_id: null, nombre: '', salida: 0, entrada: 0, precio_bs: 0 });
     renderizarTablaProductos();
+    
+    // Focus en el input de b˙squeda de la nueva fila
+    setTimeout(() => {
+        const input = document.getElementById(`buscar-prod-${index}`);
+        if (input) input.focus();
+    }, 50);
 }
 
 function eliminarFila(index) {
@@ -435,7 +539,20 @@ function recalcularCuadre() {
 
     const elDif = document.getElementById('cuadre-diferencia-bs');
     elDif.innerText = (diferenciaBS >= 0 ? '+ ' : '- ') + 'BS ' + Math.abs(diferenciaBS).toFixed(2);
-    elDif.className = 'mb-0 ' + (diferenciaBS >= -0.01 ? 'cuadre-positivo' : 'cuadre-negativo');
+    elDif.className = 'mb-0 ' + (Math.abs(diferenciaBS) <= 0.01 ? 'text-success' : (diferenciaBS < 0 ? 'cuadre-negativo' : 'cuadre-positivo'));
+
+    // Alerta visual en el panel sticky
+    const sticky = document.querySelector('.sticky-cuadre .card-body');
+    if (Math.abs(diferenciaBS) <= 0.01) {
+        sticky.style.background = '#d1e7dd'; // verde claro
+        sticky.style.border = '2px solid #198754';
+    } else if (diferenciaBS < 0) {
+        sticky.style.background = '#f8d7da'; // rojo claro
+        sticky.style.border = '2px solid #dc3545';
+    } else {
+        sticky.style.background = '#fff3cd'; // amarillo (sobrante)
+        sticky.style.border = '2px solid #ffc107';
+    }
 }
 
 // ==============================================================================
@@ -499,9 +616,18 @@ function construirPayload() {
 
 async function guardarRuta(estado) {
     const payload = construirPayload();
+    console.log('üì¶ Payload a enviar:', JSON.stringify(payload, null, 2));
     if (payload.detalles.length === 0) {
         alert('Debes tener al menos un producto.');
         return;
+    }
+
+    if (estado === 'CERRADA') {
+        const tasa = parseFloat(document.getElementById('ruta-tasa').value) || 0;
+        if (tasa <= 0) {
+            alert('La tasa debe ser mayor a 0 para cerrar la ruta.');
+            return;
+        }
     }
 
     try {
@@ -512,12 +638,16 @@ async function guardarRuta(estado) {
             resp = await apiFetch('/rutas/', 'POST', payload);
             rutaActualId = resp.id;
         }
-        alert(`Ruta guardada como ${estado}. ID: ${resp.id}`);
+
         if (estado === 'CERRADA') {
-            await cerrarRutaBackend(resp.id);
+            await cerrarRutaBackend(rutaActualId || resp.id);
+        } else {
+            alert(`‚úÖ Ruta guardada como BORRADOR. ID: ${resp.id}`);
         }
     } catch (e) {
-        alert('Error al guardar: ' + (e.detail || e.error || e.message || 'Error desconocido'));
+        console.error('Error guardando (objeto crudo):', JSON.stringify(e, null, 2));
+        const mensaje = formatearErrorDRF(e);
+        alert('‚ùå Error al guardar:\n' + mensaje);
     }
 }
 
@@ -529,11 +659,12 @@ async function cerrarRuta() {
 async function cerrarRutaBackend(id) {
     try {
         const resp = await apiFetch(`/rutas/${id}/cerrar/`, 'POST');
-        alert('Ruta cerrada exitosamente. Inventario actualizado y crÈditos generados.');
+        alert('‚úÖ Ruta cerrada exitosamente. Inventario actualizado y cr√©ditos generados.');
         rutaActualId = null;
         resetearFormulario();
     } catch (e) {
-        alert('Error al cerrar: ' + (e.error || e.detail || 'Error'));
+        const mensaje = formatearErrorDRF(e);
+        alert('‚ùå Error al cerrar:\n' + mensaje);
     }
 }
 
@@ -548,6 +679,116 @@ function resetearFormulario() {
     agregarPago();
     renderizarTablaProductos();
     recalcularCuadre();
+}
+
+// ==============================================================================
+// CARGAR RUTA EXISTENTE (EDITAR BORRADOR / BASE PARA DUPLICAR)
+// ==============================================================================
+async function cargarRutaExistente(id) {
+    try {
+        const r = await apiFetch(`/rutas/${id}/`, 'GET');
+
+        // 1. Cambiar a pesta√±a "Nueva Ruta"
+        document.getElementById('tab-nueva').classList.add('active');
+        document.getElementById('pane-nueva').classList.add('show', 'active');
+        document.getElementById('tab-historial').classList.remove('active');
+        document.getElementById('pane-historial').classList.remove('show', 'active');
+
+        // 2. Limpiar estado previo
+        filasProducto = [];
+        pagos = []; creditos = []; gastos = [];
+        document.getElementById('contenedor-pagos').innerHTML = '';
+        document.getElementById('contenedor-creditos').innerHTML = '';
+        document.getElementById('contenedor-gastos').innerHTML = '';
+        document.getElementById('cobranzas-bs').value = '0.00';
+        document.getElementById('ruta-obs').value = '';
+
+        // 3. Setear ID para que guarde con PUT (si es edici√≥n)
+        rutaActualId = r.id;
+
+        // 4. Datos generales
+        const fecha = new Date(r.fecha);
+        document.getElementById('ruta-fecha').value = fecha.toISOString().split('T')[0];
+
+        const tasa = parseFloat(r.tasa_cambio || 0);
+        document.getElementById('ruta-tasa').value = tasa.toFixed(2);
+        document.getElementById('tasaDisplay').innerText = 'Tasa: BS ' + tasa.toFixed(2);
+
+        if (r.almacen) {
+            document.getElementById('ruta-almacen').value = r.almacen;
+        }
+        document.getElementById('ruta-obs').value = r.observacion || '';
+
+        // 5. Productos
+        filasProducto = (r.detalles || []).map(d => ({
+            presentacion_id: d.presentacion_id || d.presentacion,
+            nombre: d.nombre_producto || d.nombre_presentacion || '',
+            salida: parseFloat(d.cantidad_salida) || 0,
+            entrada: parseFloat(d.cantidad_entrada) || 0,
+            precio_bs: parseFloat(d.precio_venta_bs) || 0
+        }));
+        renderizarTablaProductos();
+
+        // 6. Pagos
+        const pagosData = r.pagos || [];
+        if (pagosData.length > 0) {
+            pagosData.forEach(p => {
+                agregarPago();
+                const idx = pagos.length - 1;
+                const metodoId = p.metodo_id || (p.metodo && p.metodo.id) || p.metodo;
+                const select = document.getElementById(`pago-metodo-${idx}`);
+                if (select) select.value = metodoId;
+                const input = document.getElementById(`pago-monto-${idx}`);
+                if (input) input.value = parseFloat(p.monto_bs || 0).toFixed(2);
+                pagos[idx] = {
+                    metodo_id: parseInt(metodoId) || 0,
+                    monto_bs: parseFloat(p.monto_bs || 0)
+                };
+            });
+        } else {
+            agregarPago(); // al menos uno vac√≠o
+        }
+
+        // 7. Cr√©ditos
+        (r.creditos || []).forEach(c => {
+            agregarCredito();
+            const idx = creditos.length - 1;
+            const clienteId = c.cliente_id || (c.cliente && c.cliente.id) || c.cliente;
+            const select = document.getElementById(`credito-cliente-${idx}`);
+            if (select) select.value = clienteId;
+            const input = document.getElementById(`credito-monto-${idx}`);
+            if (input) input.value = parseFloat(c.monto_bs || 0).toFixed(2);
+            creditos[idx] = {
+                cliente_id: parseInt(clienteId) || 0,
+                monto_bs: parseFloat(c.monto_bs || 0)
+            };
+        });
+
+        // 8. Gastos
+        (r.gastos || []).forEach(g => {
+            agregarGasto();
+            const idx = gastos.length - 1;
+            const conceptoId = g.concepto_id || (g.concepto && g.concepto.id) || g.concepto;
+            const select = document.getElementById(`gasto-concepto-${idx}`);
+            if (select) select.value = conceptoId;
+            const input = document.getElementById(`gasto-monto-${idx}`);
+            if (input) input.value = parseFloat(g.monto_bs || 0).toFixed(2);
+            gastos[idx] = {
+                concepto_id: parseInt(conceptoId) || 0,
+                monto_bs: parseFloat(g.monto_bs || 0)
+            };
+        });
+
+        // 9. Cobranzas
+        document.getElementById('cobranzas-bs').value = parseFloat(r.total_cobranzas_bs || 0).toFixed(2);
+
+        recalcularCuadre();
+
+    } catch (e) {
+        const mensaje = formatearErrorDRF(e);
+        alert('‚ùå Error al cargar ruta:\n' + mensaje);
+        console.error(e);
+    }
 }
 
 // ==============================================================================
@@ -577,7 +818,8 @@ async function cargarHistorial() {
                 <td class="${difClass} fw-bold">BS ${parseFloat(r.diferencia_bs || 0).toFixed(2)}</td>
                 <td>${r.usuario_nombre || 'Admin'}</td>
                 <td>
-                    <button class="btn btn-sm btn-primary" onclick="verRuta(${r.id})"><i class="bi bi-eye"></i></button>
+                    <button class="btn btn-sm btn-primary me-1" onclick="verRuta(${r.id})" title="Ver"><i class="bi bi-eye"></i></button>
+                    ${r.estado === 'BORRADOR' ? `<button class="btn btn-sm btn-warning" onclick="cargarRutaExistente(${r.id})" title="Editar"><i class="bi bi-pencil"></i></button>` : ''}
                 </td>
             `;
             tbody.appendChild(tr);
@@ -670,6 +912,149 @@ async function reabrirRutaActual() {
     } catch (e) {
         alert('Error: ' + (e.error || e.detail || 'No se pudo reabrir'));
     }
+}
+
+// ==============================================================================
+// ATAJOS DE TECLADO
+// ==============================================================================
+document.addEventListener('keydown', function(e) {
+    // F2 = Guardar borrador
+    if (e.key === 'F2') {
+        e.preventDefault();
+        guardarRuta('BORRADOR');
+    }
+    // F9 = Cerrar ruta
+    if (e.key === 'F9') {
+        e.preventDefault();
+        cerrarRuta();
+    }
+    // ESC = Cancelar / Vaciar todo (con confirmaciÛn)
+    if (e.key === 'Escape') {
+        if (filasProducto.length > 0 && confirm('øCancelar todo y empezar de nuevo?')) {
+            resetearFormulario();
+        }
+    }
+    // Ctrl + P = Imprimir resumen de ruta
+    if (e.ctrlKey && e.key === 'p') {
+        e.preventDefault();
+        imprimirResumenRuta();
+    }
+});
+
+function imprimirResumenRuta() {
+    const tasa = parseFloat(document.getElementById('ruta-tasa').value) || 0;
+    const ticket = document.getElementById('ticket-ruta-impresion');
+    ticket.classList.remove('activo');
+
+    document.getElementById('r-ticket-id').innerText = rutaActualId || 'BORRADOR';
+    document.getElementById('r-ticket-fecha').innerText = new Date().toLocaleString('es-VE');
+    document.getElementById('r-ticket-tasa').innerText = tasa.toFixed(2);
+    document.getElementById('r-ticket-obs').innerText = document.getElementById('ruta-obs').value || 'N/A';
+
+    // Productos
+    const tbody = document.getElementById('r-ticket-items');
+    tbody.innerHTML = '';
+    filasProducto.forEach(f => {
+        const c = calcularFila(f);
+        if (c.vendido <= 0) return;
+        const row = document.createElement('tr');
+        row.innerHTML = `<td style="text-align:center;">${c.vendido.toFixed(2)}</td><td>${f.nombre}</td><td style="text-align:right;">BS ${c.totalBS.toFixed(2)}</td>`;
+        tbody.appendChild(row);
+    });
+
+    // Totales
+    const ventaBS = parseFloat(document.getElementById('cuadre-venta-bs').innerText.replace('BS ', '')) || 0;
+    const ventaUSD = parseFloat(document.getElementById('cuadre-venta-usd').innerText.replace('$ ', '')) || 0;
+    const esperado = parseFloat(document.getElementById('cuadre-esperado-bs').innerText.replace('BS ', '')) || 0;
+    const real = parseFloat(document.getElementById('cuadre-real-bs').innerText.replace('BS ', '')) || 0;
+    const dif = parseFloat(document.getElementById('cuadre-diferencia-bs').innerText.replace(/[BS +\-]/g, '')) || 0;
+
+    document.getElementById('r-ticket-venta-bs').innerText = ventaBS.toFixed(2);
+    document.getElementById('r-ticket-venta-usd').innerText = ventaUSD.toFixed(2);
+
+    // Pagos desglosados
+    let efectivo = 0, movil = 0, punto = 0;
+    pagos.forEach(p => {
+        const met = metodosPagoCache.find(m => m.id == p.metodo_id);
+        const nombre = met ? met.nombre.toLowerCase() : '';
+        if (nombre.includes('efectivo')) efectivo += p.monto_bs;
+        else if (nombre.includes('movil')) movil += p.monto_bs;
+        else if (nombre.includes('punto') || nombre.includes('data')) punto += p.monto_bs;
+    });
+
+    document.getElementById('r-ticket-efectivo').innerText = efectivo.toFixed(2);
+    document.getElementById('r-ticket-movil').innerText = movil.toFixed(2);
+    document.getElementById('r-ticket-punto').innerText = punto.toFixed(2);
+
+    const cobranzas = parseFloat(document.getElementById('cobranzas-bs').value) || 0;
+    document.getElementById('r-ticket-cobranzas').innerText = cobranzas.toFixed(2);
+
+    const totalCreditos = creditos.reduce((s, c) => s + c.monto_bs, 0);
+    const totalGastos = gastos.reduce((s, g) => s + g.monto_bs, 0);
+    document.getElementById('r-ticket-creditos').innerText = totalCreditos.toFixed(2);
+    document.getElementById('r-ticket-gastos').innerText = totalGastos.toFixed(2);
+
+    document.getElementById('r-ticket-esperado').innerText = esperado.toFixed(2);
+    document.getElementById('r-ticket-real').innerText = real.toFixed(2);
+
+    const elDif = document.getElementById('r-ticket-diferencia');
+    elDif.innerText = (dif >= 0 ? '+ ' : '- ') + 'BS ' + Math.abs(dif).toFixed(2);
+    elDif.style.color = dif < -0.01 ? '#dc3545' : (dif > 0.01 ? '#198754' : '#000');
+
+    ticket.classList.add('activo');
+    setTimeout(() => { window.print(); setTimeout(() => ticket.classList.remove('activo'), 500); }, 100);
+}
+
+async function duplicarUltimaRuta() {
+    try {
+        const rutas = await apiFetch('/rutas/', 'GET');
+        if (!rutas || rutas.length === 0) {
+            alert('No hay rutas anteriores para duplicar.');
+            return;
+        }
+        // Tomar la m·s reciente
+        const ultima = rutas[0];
+        await cargarRutaExistente(ultima.id);
+        // Resetear IDs para que se guarde como nueva
+        rutaActualId = null;
+        // Limpiar pagos, crÈditos, gastos y cobranzas (solo productos se copian)
+        document.getElementById('contenedor-pagos').innerHTML = '';
+        document.getElementById('contenedor-creditos').innerHTML = '';
+        document.getElementById('contenedor-gastos').innerHTML = '';
+        document.getElementById('cobranzas-bs').value = '0.00';
+        pagos = []; creditos = []; gastos = [];
+        agregarPago();
+        recalcularCuadre();
+        alert('Ruta duplicada como base. Ajusta las cantidades y cierra cuando estÈ listo.');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function exportarCuadreExcel() {
+    // Usamos SheetJS si est· cargado, o generamos CSV simple
+    let csv = 'PRODUCTO,SALIDA,ENTRADA,VENDIDO,PRECIO BS,TOTAL BS,TOTAL $\n';
+    filasProducto.forEach(f => {
+        const c = calcularFila(f);
+        if (c.vendido > 0) {
+            csv += `"${f.nombre}",${f.salida},${f.entrada},${c.vendido.toFixed(2)},${f.precio_bs},${c.totalBS.toFixed(2)},${c.totalUSD.toFixed(2)}\n`;
+        }
+    });
+    csv += `\nRESUMEN,,,,,,\n`;
+    csv += `VENTA TOTAL,,,,,${document.getElementById('cuadre-venta-bs').innerText},${document.getElementById('cuadre-venta-usd').innerText}\n`;
+    csv += `ESPERADO,,,,,${document.getElementById('cuadre-esperado-bs').innerText},\n`;
+    csv += `REAL,,,,,${document.getElementById('cuadre-real-bs').innerText},\n`;
+    csv += `DIFERENCIA,,,,,${document.getElementById('cuadre-diferencia-bs').innerText},\n`;
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cuadre_ruta_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 }
 
 function cerrarSesionLocal() {

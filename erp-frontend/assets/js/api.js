@@ -61,6 +61,8 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
 
         if (!response.ok) {
             console.error("❌ Error en la respuesta de la API:", data);
+            console.warn("⚠️ RAW response text:", text);
+            console.warn("⚠️ Parsed error data:", data);
 
             // Si expiró el access_token, intentamos refrescar y reintentar 1 vez
             const tokenNotValid =

@@ -869,8 +869,8 @@ class GenerarExcelRutaAPIView(APIView):
         ws_config['B1'] = float(tasa)
         ws_config.sheet_state = 'hidden'
 
-        # Encabezados
-        headers = ['PRODUCTO', 'SALIDA', 'ENTRADA', 'VENDIDO', 'PRECIO BS', 'PRECIO $', 'TOTAL $']
+        # Encabezados (ID oculto pero presente para importación exacta)
+        headers = ['ID', 'PRODUCTO', 'SALIDA', 'ENTRADA', 'VENDIDO', 'PRECIO BS', 'PRECIO $', 'TOTAL $']
         ws.append(headers)
 
         # Estilo header
@@ -884,39 +884,43 @@ class GenerarExcelRutaAPIView(APIView):
 
         # Filas de productos
         for idx, pres in enumerate(presentaciones, start=2):
-            nombre = f"{pres.producto.nombre} ({pres.nombre_presentacion})"
+            unidad = pres.unidad_medida.nombre if pres.unidad_medida else "Base"
+            factor = int(pres.factor_conversion) if pres.factor_conversion % 1 == 0 else float(pres.factor_conversion)
+            nombre = f"{pres.producto.nombre} ({unidad} x{factor})"
             precio_bs = ''
             if incluir_precio:
                 # Precio sugerido: precio_venta_principal (USD) * tasa = BS
                 precio_bs = float(pres.precio_venta_principal) * float(tasa)
 
             ws.append([
+                pres.id,                      # ID (referencia exacta, no editable)
                 nombre,
-                None,  # Salida (editable)
-                None,  # Entrada (editable)
-                f'=B{idx}-C{idx}',           # Vendido
+                None,                         # Salida (editable)
+                None,                         # Entrada (editable)
+                f'=C{idx}-D{idx}',            # Vendido
                 precio_bs,                    # Precio BS (editable, sugerido)
-                f'=E{idx}/Config!B$1',        # Precio $
-                f'=D{idx}*F{idx}',            # Total $
+                f'=F{idx}/Config!B$1',         # Precio $
+                f'=E{idx}*G{idx}',            # Total $
             ])
 
-        # Ajustar anchos
-        ws.column_dimensions['A'].width = 45
-        for col in ['B', 'C', 'D', 'E', 'F', 'G']:
+        ws.column_dimensions['A'].width = 8   # ID
+        ws.column_dimensions['B'].width = 45  # Producto
+        for col in ['C', 'D', 'E', 'F', 'G', 'H']:
             ws.column_dimensions[col].width = 16
 
         # Proteger fórmulas (solo Salida, Entrada, Precio BS son editables)
         for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-            row[0].protection = Protection(locked=True)   # Producto
-            row[1].protection = Protection(locked=False)  # Salida
-            row[2].protection = Protection(locked=False)  # Entrada
-            row[3].protection = Protection(locked=True)   # Vendido (fórmula)
-            row[4].protection = Protection(locked=False)  # Precio BS
-            row[5].protection = Protection(locked=True)   # Precio $ (fórmula)
-            row[6].protection = Protection(locked=True)   # Total $ (fórmula)
+            row[0].protection = Protection(locked=True)   # ID
+            row[1].protection = Protection(locked=True)   # Producto
+            row[2].protection = Protection(locked=False)  # Salida
+            row[3].protection = Protection(locked=False)  # Entrada
+            row[4].protection = Protection(locked=True)   # Vendido (fórmula)
+            row[5].protection = Protection(locked=False)  # Precio BS
+            row[6].protection = Protection(locked=True)   # Precio $ (fórmula)
+            row[7].protection = Protection(locked=True)   # Total $ (fórmula)
 
         ws.protection.sheet = True
-        ws.protection.password = None  # Solo protección visual, sin contraseña
+##        ws.protection.password = None  # Solo protección visual, sin contraseña
 
         # Respuesta como descarga
         fecha_str = timezone.now().strftime('%Y%m%d_%H%M')
@@ -968,19 +972,37 @@ class ImportarExcelRutaAPIView(APIView):
             if not row or not row[0]:
                 continue
 
-            nombre_producto = str(row[0]).strip()
-            salida = Decimal(str(row[1])) if row[1] is not None else Decimal('0.00')
-            entrada = Decimal(str(row[2])) if row[2] is not None else Decimal('0.00')
-            precio_bs = Decimal(str(row[4])) if row[4] is not None else Decimal('0.00')
+            # Leer ID si existe (primera columna)
+            presentacion_id = None
+            if row[0] is not None:
+                try:
+                    presentacion_id = int(row[0])
+                except (ValueError, TypeError):
+                    presentacion_id = None
 
-            # Buscar presentación por nombre (fuzzy match)
-            presentacion = PresentacionProducto.objects.filter(
-                models.Q(producto__nombre__icontains=nombre_producto) |
-                models.Q(nombre_presentacion__icontains=nombre_producto)
-            ).select_related('producto').first()
+            nombre_producto = str(row[1]).strip() if row[1] else ''
+            salida = Decimal(str(row[2])) if row[2] is not None else Decimal('0.00')
+            entrada = Decimal(str(row[3])) if row[3] is not None else Decimal('0.00')
+            precio_bs = Decimal(str(row[5])) if row[5] is not None else Decimal('0.00')
+
+            presentacion = None
+
+            # 1. Buscar por ID exacto (más confiable)
+            if presentacion_id:
+                try:
+                    presentacion = PresentacionProducto.objects.select_related('producto').get(id=presentacion_id)
+                except PresentacionProducto.DoesNotExist:
+                    presentacion = None
+
+            # 2. Fallback: buscar por nombre si no hay ID o no se encontró
+            if not presentacion and nombre_producto:
+                presentacion = PresentacionProducto.objects.filter(
+                    Q(producto__nombre__icontains=nombre_producto) |
+                    Q(unidad_medida__nombre__icontains=nombre_producto)
+                ).select_related('producto').first()
 
             if not presentacion:
-                no_encontrados.append(nombre_producto)
+                no_encontrados.append(nombre_producto or f"ID {presentacion_id}")
                 continue
 
             vendido = salida - entrada if salida > entrada else Decimal('0.00')
@@ -989,7 +1011,7 @@ class ImportarExcelRutaAPIView(APIView):
 
             detalles.append({
                 "presentacion_id": presentacion.id,
-                "nombre_producto": f"{presentacion.producto.nombre} ({presentacion.nombre_presentacion})",
+                "nombre_producto": f"{presentacion.producto.nombre} ({f"{presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'} x{presentacion.factor_conversion}"})",
                 "cantidad_salida": float(salida),
                 "cantidad_entrada": float(entrada),
                 "cantidad_vendida": float(vendido),
@@ -1020,7 +1042,7 @@ class RutaMercadoListCreateAPIView(APIView):
         return Response(serializer.data)
 
     def post(self, request):
-        serializer = RutaMercadoSerializer(data=request.data)
+        serializer = RutaMercadoSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save(usuario=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1146,3 +1168,13 @@ class AlmacenListAPIView(APIView):
         almacenes = Almacen.objects.filter(activo=True)
         data = [{"id": a.id, "nombre": a.nombre} for a in almacenes]
         return Response(data)
+
+class CatalogoRutaMercadoAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        presentaciones = PresentacionProducto.objects.all().select_related(
+            'producto', 'unidad_medida'
+        )
+        serializer = PresentacionProductoSerializer(presentaciones, many=True)
+        return Response(serializer.data)

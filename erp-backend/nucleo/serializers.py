@@ -395,6 +395,7 @@ class BorradorFacturaSerializer(serializers.ModelSerializer):
 # ==============================================================================
 
 class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
+    presentacion = serializers.PrimaryKeyRelatedField(read_only=True)
     nombre_producto = serializers.CharField(source='presentacion.producto.nombre', read_only=True)
     nombre_presentacion = serializers.CharField(source='presentacion.nombre_presentacion', read_only=True)
     presentacion_id = serializers.IntegerField(write_only=True)
@@ -412,6 +413,7 @@ class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
 
 
 class RutaMercadoCreditoSerializer(serializers.ModelSerializer):
+    cliente = serializers.PrimaryKeyRelatedField(read_only=True)
     cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
     cliente_id = serializers.IntegerField(write_only=True)
 
@@ -421,6 +423,7 @@ class RutaMercadoCreditoSerializer(serializers.ModelSerializer):
 
 
 class RutaMercadoPagoSerializer(serializers.ModelSerializer):
+    metodo = serializers.PrimaryKeyRelatedField(read_only=True)
     metodo_nombre = serializers.CharField(source='metodo.nombre', read_only=True)
     metodo_id = serializers.IntegerField(write_only=True)
 
@@ -430,13 +433,13 @@ class RutaMercadoPagoSerializer(serializers.ModelSerializer):
 
 
 class RutaMercadoGastoSerializer(serializers.ModelSerializer):
+    concepto = serializers.PrimaryKeyRelatedField(read_only=True)
     concepto_nombre = serializers.CharField(source='concepto.nombre', read_only=True)
     concepto_id = serializers.IntegerField(write_only=True)
 
     class Meta:
         model = RutaMercadoGasto
         fields = ['id', 'concepto', 'concepto_id', 'concepto_nombre', 'monto_bs', 'descripcion']
-
 
 class RutaMercadoSerializer(serializers.ModelSerializer):
     detalles = RutaMercadoDetalleSerializer(many=True, required=False)
@@ -457,6 +460,7 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             'detalles', 'creditos', 'pagos', 'gastos'
         ]
         read_only_fields = [
+            'usuario',  # <-- NUEVO: el backend lo inyecta, no el frontend
             'total_venta_bs', 'total_venta_usd',
             'total_efectivo_bs', 'total_pago_movil_bs', 'total_punto_venta_bs',
             'total_creditos_bs', 'total_gastos_bs',
@@ -468,6 +472,11 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
         creditos_data = validated_data.pop('creditos', [])
         pagos_data = validated_data.pop('pagos', [])
         gastos_data = validated_data.pop('gastos', [])
+
+        # >>> NUEVO: Inyectar usuario desde el request en el contexto <<<
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            validated_data['usuario'] = request.user
 
         ruta = RutaMercado.objects.create(**validated_data)
 
@@ -485,7 +494,6 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
         return ruta
 
     def update(self, instance, validated_data):
-        # Si está cerrada, solo permitir editar pagos/creditos/gastos/observacion
         es_cerrada = instance.estado == 'CERRADA'
 
         detalles_data = validated_data.pop('detalles', None)

@@ -37,6 +37,7 @@ from .api import (
     CerrarRutaMercadoAPIView,
     ReabrirRutaMercadoAPIView,
     AlmacenListAPIView,
+    CatalogoRutaMercadoAPIView,
 )
 
 urlpatterns = [
@@ -96,4 +97,5 @@ urlpatterns = [
     path('api/v1/rutas/importar-excel/', ImportarExcelRutaAPIView.as_view(), name='api_importar_excel_ruta'),
 
     path('api/v1/almacenes/', AlmacenListAPIView.as_view(), name='api_almacenes'),
+    path('api/v1/rutas/catalogo/', CatalogoRutaMercadoAPIView.as_view(), name='api_rutas_catalogo'),
 ]

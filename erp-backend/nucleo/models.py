@@ -347,8 +347,20 @@ class Venta(TransaccionBase):
         return f"Venta #{self.id} - {self.cliente.nombre} - {self.total_principal}"
 
     def procesar_venta(self):
-        from .models import ConfiguracionGlobal, CuentaPorCobrar
-        from django.db.models import Sum # Importante para sumar la deuda
+        """
+        Procesa la venta: descuenta inventario, aplica saldo a favor,
+        valida limite de credito contra deuda REAL, maneja sobrantes
+        de abono como saldo a favor, y genera CxC si aplica.
+        Devuelve un dict con informacion del procesamiento.
+        """
+        from django.db.models import Sum
+
+        resultado = {
+            'saldo_favor_usado': Decimal('0.00'),
+            'sobrante_abono': Decimal('0.00'),
+            'saldo_restante': Decimal('0.00'),
+            'estado_cxc': None,
+        }
 
         with transaction.atomic():
             if self.estado != 'BORRADOR':
@@ -368,7 +380,10 @@ class Venta(TransaccionBase):
                 )
 
                 if not permitir_negativo and inventario.stock_actual_unidades_base < cantidad_descontar_base:
-                    raise ValueError(f"Stock insuficiente para el producto '{detalle.presentacion.producto.nombre}'. Disponible: {inventario.stock_actual_unidades_base}")
+                    raise ValueError(
+                        f"Stock insuficiente para el producto '{detalle.presentacion.producto.nombre}'. "
+                        f"Disponible: {inventario.stock_actual_unidades_base}"
+                    )
 
                 inventario.stock_actual_unidades_base -= cantidad_descontar_base
                 inventario.save()
@@ -376,68 +391,187 @@ class Venta(TransaccionBase):
             # 2. Calcular Abono Inicial de los pagos registrados en la caja
             abono_inicial = sum(pago.monto_equivalente_principal for pago in self.pagos.all())
 
-            # 3. Validaciones y Generación de Cuenta por Cobrar si es a CRÉDITO
+            # 3. Validaciones y Generacion de Cuenta por Cobrar si es a CREDITO
             if self.tipo == 'CREDITO':
                 cliente = self.cliente
 
-                # >>> NUEVO: Aplicar saldo a favor si existe <<<
+                # >>> PASO 0: Dinero fisico recibido en caja por esta venta <<<
+                dinero_fisico = sum(pago.monto_equivalente_principal for pago in self.pagos.all())
+
+                # >>> PASO 1: Pagar CxC VIEJAS con DINERO FISICO (FIFO por ID) <<<
+                facturas_pendientes = CuentaPorCobrar.objects.filter(
+                    cliente=cliente,
+                    estado__in=['PENDIENTE', 'VENCIDA']
+                ).exclude(venta=self).order_by('id')
+
+                abono_restante = dinero_fisico
+                abonos_viejas = []
+
+                for cxc_vieja in facturas_pendientes:
+                    if abono_restante <= Decimal('0.00'):
+                        break
+                    monto_aplicar = min(abono_restante, cxc_vieja.saldo_pendiente)
+                    if monto_aplicar > 0:
+                        PagoCuentaCobrar.objects.create(
+                            cuenta=cxc_vieja,
+                            usuario=self.usuario,
+                            monto_abono_principal=monto_aplicar,
+                            tasa_cambio_pago=self.tasa_cambio_historica,
+                            referencia=f"Abono desde POS - Venta #{self.id}"
+                        )
+                        cxc_vieja.saldo_pendiente -= monto_aplicar
+                        if cxc_vieja.saldo_pendiente <= Decimal('0.00'):
+                            cxc_vieja.saldo_pendiente = Decimal('0.00')
+                            cxc_vieja.estado = 'PAGADA'
+                        cxc_vieja.save()
+                        abono_restante -= monto_aplicar
+                        abonos_viejas.append({
+                            'cxc_id': cxc_vieja.id,
+                            'venta_id': cxc_vieja.venta.id if cxc_vieja.venta else None,
+                            'monto_aplicado': monto_aplicar,
+                            'saldo_restante': cxc_vieja.saldo_pendiente,
+                            'estado': cxc_vieja.estado,
+                            'origen': 'EFECTIVO'
+                        })
+
+                # >>> PASO 1.5: Pagar CxC VIEJAS con SALDO A FAVOR del cliente (FIFO) <<<
                 saldo_favor_usado = Decimal('0.00')
                 if cliente.saldo_a_favor > Decimal('0.00'):
-                    if cliente.saldo_a_favor >= self.total_principal:
-                        saldo_favor_usado = self.total_principal
-                        cliente.saldo_a_favor -= self.total_principal
-                        abono_inicial += self.total_principal  # El saldo a favor cubre todo
-                    else:
-                        saldo_favor_usado = cliente.saldo_a_favor
-                        abono_inicial += cliente.saldo_a_favor
-                        cliente.saldo_a_favor = Decimal('0.00')
+                    viejas_con_saldo = CuentaPorCobrar.objects.filter(
+                        cliente=cliente,
+                        estado__in=['PENDIENTE', 'VENCIDA']
+                    ).exclude(venta=self).order_by('id')
+
+                    for cxc_vieja in viejas_con_saldo:
+                        if cliente.saldo_a_favor <= Decimal('0.00'):
+                            break
+                        if cxc_vieja.saldo_pendiente <= Decimal('0.00'):
+                            continue
+                        
+                        monto_aplicar = min(cliente.saldo_a_favor, cxc_vieja.saldo_pendiente)
+                        PagoCuentaCobrar.objects.create(
+                            cuenta=cxc_vieja,
+                            usuario=self.usuario,
+                            monto_abono_principal=monto_aplicar,
+                            tasa_cambio_pago=self.tasa_cambio_historica,
+                            referencia=f"Abono desde saldo a favor - Venta #{self.id}"
+                        )
+                        cxc_vieja.saldo_pendiente -= monto_aplicar
+                        if cxc_vieja.saldo_pendiente <= Decimal('0.00'):
+                            cxc_vieja.saldo_pendiente = Decimal('0.00')
+                            cxc_vieja.estado = 'PAGADA'
+                        cxc_vieja.save()
+                        cliente.saldo_a_favor -= monto_aplicar
+                        saldo_favor_usado += monto_aplicar
+                        abonos_viejas.append({
+                            'cxc_id': cxc_vieja.id,
+                            'venta_id': cxc_vieja.venta.id if cxc_vieja.venta else None,
+                            'monto_aplicado': monto_aplicar,
+                            'saldo_restante': cxc_vieja.saldo_pendiente,
+                            'estado': cxc_vieja.estado,
+                            'origen': 'SALDO_A_FAVOR'
+                        })
                     cliente.save(update_fields=['saldo_a_favor'])
 
-                # Regla 1: Bloqueo total si el límite es -1
-                if cliente.limite_credito == Decimal('-1.00'):
-                    raise ValueError(f"El cliente '{cliente.nombre}' tiene restringido el crédito.")
+                # >>> PASO 1.6: Si queda saldo a favor y NO hay viejas, aplicar a NUEVA <<<
+                saldo_favor_a_nueva = Decimal('0.00')
+                if cliente.saldo_a_favor > Decimal('0.00'):
+                    viejas_restantes = CuentaPorCobrar.objects.filter(
+                        cliente=cliente,
+                        estado__in=['PENDIENTE', 'VENCIDA']
+                    ).exclude(venta=self).count()
+                    
+                    if viejas_restantes == 0:
+                        saldo_favor_a_nueva = min(cliente.saldo_a_favor, self.total_principal)
+                        cliente.saldo_a_favor -= saldo_favor_a_nueva
+                        cliente.save(update_fields=['saldo_a_favor'])
 
-                # Regla 2: Validar límite si es mayor a 0.00 (0.00 significa sin límite)
+                resultado['abonos_cxc_viejas'] = abonos_viejas
+                resultado['saldo_favor_usado'] = saldo_favor_usado + saldo_favor_a_nueva
+                resultado['saldo_favor_a_nueva'] = saldo_favor_a_nueva
+
+                # >>> PASO 2: Abono a nueva = dinero fisico restante + saldo a favor a nueva <<<
+                abono_nueva_cxc = abono_restante + saldo_favor_a_nueva
+
+                # >>> PASO 3: Validar limite de credito contra deuda REAL (post-abonos) <<<
+                if cliente.limite_credito == Decimal('-1.00'):
+                    raise ValueError(f"El cliente '{cliente.nombre}' tiene restringido el credito.")
+
                 if cliente.limite_credito > Decimal('0.00'):
-                    # Sumamos el saldo pendiente de todas sus CxC activas
                     deuda_actual = CuentaPorCobrar.objects.filter(
                         cliente=cliente,
                         estado__in=['PENDIENTE', 'VENCIDA']
                     ).aggregate(total=Sum('saldo_pendiente'))['total'] or Decimal('0.00')
 
-                    if (deuda_actual + self.total_principal) > cliente.limite_credito:
+                    nueva_deuda_neta = max(Decimal('0.00'), self.total_principal - abono_nueva_cxc)
+
+                    if (deuda_actual + nueva_deuda_neta) > cliente.limite_credito:
                         disponible = cliente.limite_credito - deuda_actual
                         raise ValueError(
-                            f"Límite de crédito excedido. Deuda: ${deuda_actual:.2f}, "
-                            f"Límite: ${cliente.limite_credito:.2f}. Disponible: ${disponible:.2f}"
+                            f"Limite de credito excedido. Deuda actual: ${deuda_actual:.2f}, "
+                            f"Limite: ${cliente.limite_credito:.2f}. Disponible: ${disponible:.2f}"
                         )
 
-                # Si pasa las reglas, se crea la cuenta
-                saldo_restante = self.total_principal - abono_inicial
-                estado_cxc = 'PAGADA' if saldo_restante <= Decimal('0.00') else 'PENDIENTE'
+                # >>> PASO 4: Calcular saldo restante y sobrante de la NUEVA factura <<<
+                saldo_restante = self.total_principal - abono_nueva_cxc
+                sobrante = Decimal('0.00')
 
+                if saldo_restante < Decimal('0.00'):
+                    sobrante = abs(saldo_restante)
+                    cliente.saldo_a_favor += sobrante
+                    cliente.save(update_fields=['saldo_a_favor'])
+                    saldo_restante = Decimal('0.00')
+                    estado_cxc = 'PAGADA'
+                else:
+                    estado_cxc = 'PAGADA' if saldo_restante <= Decimal('0.00') else 'PENDIENTE'
+
+                resultado['sobrante_abono'] = sobrante
+                resultado['saldo_restante'] = saldo_restante
+                resultado['estado_cxc'] = estado_cxc
+                resultado['abono_nueva_cxc'] = min(abono_nueva_cxc, self.total_principal)
+
+                # >>> PASO 4.5: Calcular deuda total real del cliente post-operacion <<<
+                # Nota: la nueva CxC aun no existe en DB, sumamos viejas pendientes + saldo de la nueva
+                deuda_viejas_pendientes = CuentaPorCobrar.objects.filter(
+                    cliente=cliente,
+                    estado__in=['PENDIENTE', 'VENCIDA']
+                ).exclude(venta=self).aggregate(total=Sum('saldo_pendiente'))['total'] or Decimal('0.00')
+                deuda_total_cliente = deuda_viejas_pendientes + saldo_restante
+                resultado['deuda_total_cliente'] = deuda_total_cliente
+
+                # >>> PASO 5: Crear CxC de la nueva venta <<<
                 cxc = CuentaPorCobrar.objects.create(
                     venta=self,
-                    cliente=self.cliente,
+                    cliente=cliente,
                     monto_total=self.total_principal,
                     saldo_pendiente=saldo_restante,
                     estado=estado_cxc
                 )
 
-                # Opcional: Si el abono es > 0, registramos de una vez ese pago en el historial de la CxC
-                if abono_inicial > 0:
-                    from .models import PagoCuentaCobrar
+                # >>> PASO 6: Registrar abono inicial en historial de la nueva CxC <<<
+                monto_abono_registrado = min(abono_nueva_cxc, self.total_principal)
+                if monto_abono_registrado > 0 or saldo_favor_a_nueva > 0 or sobrante > 0:
+                    ref_parts = []
+                    if monto_abono_registrado > 0:
+                        ref_parts.append(f"Abono inicial: ${monto_abono_registrado:.2f}")
+                    if saldo_favor_a_nueva > 0:
+                        ref_parts.append(f"Saldo a favor usado: ${saldo_favor_a_nueva:.2f}")
+                    if sobrante > 0:
+                        ref_parts.append(f"Sobrante a favor: ${sobrante:.2f}")
+
                     PagoCuentaCobrar.objects.create(
                         cuenta=cxc,
                         usuario=self.usuario,
-                        monto_abono_principal=abono_inicial,
+                        monto_abono_principal=monto_abono_registrado,
                         tasa_cambio_pago=self.tasa_cambio_historica,
-                        referencia="Abono inicial en caja" + (f" + Saldo a favor: ${saldo_favor_usado:.2f}" if saldo_favor_usado > 0 else "")
-                    )
+                        referencia=" | ".join(ref_parts)
+                    ) 
 
             # 4. Cambiar estado
             self.estado = 'PROCESADA'
             self.save()
+
+        return resultado
 
     def anular_venta(self):
         """

@@ -66,9 +66,11 @@ class MetodoPagoSerializer(serializers.ModelSerializer):
         fields = ['id', 'nombre', 'moneda_referencia']
 
 class ClienteSerializer(serializers.ModelSerializer):
+    deuda_total = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+
     class Meta:
         model = Cliente
-        fields = ['id', 'nombre', 'documento', 'telefono', 'limite_credito', 'saldo_a_favor', 'deuda_inicial']
+        fields = ['id', 'nombre', 'documento', 'telefono', 'limite_credito', 'saldo_a_favor', 'deuda_inicial', 'deuda_total']
 
 # --- SERIALIZADORES DE CATÁLOGO (Para enviar al POS) ---
 

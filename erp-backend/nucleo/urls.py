@@ -7,7 +7,8 @@ from .api import (
     TasaStatusAPIView,
     ActualizarTasaAPIView,
     CatalogoPosAPIView, 
-    ProcesarVentaAPIView, 
+    ProcesarVentaAPIView,
+    VentasTurnoAPIView,  # <<< NUEVO
     GestionCajaAPIView, 
     DashboardResumenAPIView,
     ProcesarCompraAPIView,
@@ -55,6 +56,7 @@ urlpatterns = [
     path('api/v1/pos/caja/', GestionCajaAPIView.as_view(), name='api_gestion_caja'),
     path('api/v1/pos/facturar/', ProcesarVentaAPIView.as_view(), name='api_pos_facturar'),
     path('api/v1/ventas/<int:pk>/detalle/', DetalleVentaFacturaAPIView.as_view(), name='api_venta_detalle'),
+    path('api/v1/pos/ventas-turno/', VentasTurnoAPIView.as_view(), name='api_pos_ventas_turno'),
 
     # Cuentas por Cobrar (CxC)
     path('api/v1/cxc/abonar/', RegistrarAbonoCxCAPIView.as_view(), name='api_cxc_abonar'),
@@ -98,4 +100,5 @@ urlpatterns = [
 
     path('api/v1/almacenes/', AlmacenListAPIView.as_view(), name='api_almacenes'),
     path('api/v1/rutas/catalogo/', CatalogoRutaMercadoAPIView.as_view(), name='api_rutas_catalogo'),
+    
 ]

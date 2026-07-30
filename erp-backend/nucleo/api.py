@@ -103,13 +103,36 @@ class ProcesarVentaAPIView(APIView):
         if serializer.is_valid():
             try:
                 venta = serializer.save()
-                venta.procesar_venta()
+                resultado_proceso = venta.procesar_venta()
+
+                # Recargar cliente para obtener saldo a favor actualizado
+                cliente = venta.cliente
+                cliente.refresh_from_db()
 
                 return Response({
                     "mensaje": "Venta procesada exitosamente",
                     "venta_id": venta.id,
                     "cajero": request.user.username,
-                    "total_cobrado": venta.total_principal
+                    "total_cobrado": venta.total_principal,
+                    "tipo": venta.tipo,
+                    "saldo_favor_usado": float(resultado_proceso['saldo_favor_usado']),
+                    "sobrante_abono": float(resultado_proceso['sobrante_abono']),
+                    "saldo_restante_cxc": float(resultado_proceso['saldo_restante']),
+                    "estado_cxc": resultado_proceso['estado_cxc'],
+                    "saldo_favor_cliente": float(cliente.saldo_a_favor),
+                    "saldo_favor_a_nueva": float(resultado_proceso.get('saldo_favor_a_nueva', Decimal('0'))),
+                    "abonos_cxc_viejas": [
+                        {
+                            "cxc_id": a['cxc_id'],
+                            "venta_id": a['venta_id'],
+                            "monto_aplicado": float(a['monto_aplicado']),
+                            "saldo_restante": float(a['saldo_restante']),
+                            "estado": a['estado'],
+                            "origen": a.get('origen', 'EFECTIVO')
+                        } for a in resultado_proceso.get('abonos_cxc_viejas', [])
+                    ],
+                    "abono_nueva_cxc": float(resultado_proceso.get('abono_nueva_cxc', 0)),
+                    "deuda_total_cliente": float(resultado_proceso.get('deuda_total_cliente', Decimal('0'))),
                 }, status=status.HTTP_201_CREATED)
 
             except ValueError as e:
@@ -346,7 +369,13 @@ class DatosInicialesPOSAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
     def get(self, request):
-        clientes = Cliente.objects.all().order_by('nombre')
+        clientes = Cliente.objects.annotate(
+            deuda_total=Coalesce(
+                Sum('cuentaporcobrar__saldo_pendiente', filter=Q(cuentaporcobrar__estado__in=['PENDIENTE', 'VENCIDA'])),
+                Decimal('0.00'),
+                output_field=DecimalField()
+            )
+        ).order_by('nombre')
         metodos = MetodoPago.objects.filter(activo=True)
 
         return Response({
@@ -761,12 +790,18 @@ class TasaStatusAPIView(APIView):
         if config.tasa_actualizada_el:
             requiere = config.tasa_actualizada_el.date() != hoy
 
+##        return Response({
+##            "tasa_cambio_actual": float(config.tasa_cambio_actual),
+##            "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
+##            "requiere_actualizacion": requiere
+##        })
         return Response({
             "tasa_cambio_actual": float(config.tasa_cambio_actual),
             "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
-            "requiere_actualizacion": requiere
+            "requiere_actualizacion": requiere,
+            "moneda_principal": config.moneda_principal,
+            "moneda_secundaria": config.moneda_secundaria
         })
-
 
 class ActualizarTasaAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
@@ -1178,3 +1213,54 @@ class CatalogoRutaMercadoAPIView(APIView):
         )
         serializer = PresentacionProductoSerializer(presentaciones, many=True)
         return Response(serializer.data)
+
+class VentasTurnoAPIView(APIView):
+    """
+    GET /api/v1/pos/ventas-turno/
+    Devuelve solo las facturas PROCESADAS del turno (sesión de caja ABIERTA)
+    del usuario logueado. Incluye resumen de pagos para la lista.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        sesion = SesionCaja.objects.filter(
+            usuario=request.user, estado='ABIERTA'
+        ).first()
+
+        if not sesion:
+            return Response(
+                {"error": "No tienes una caja abierta."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ventas = Venta.objects.filter(
+            sesion_caja=sesion,
+            usuario=request.user,
+            estado='PROCESADA'
+        ).select_related('cliente').prefetch_related(
+            'pagos__metodo', 'detalles'
+        ).order_by('-fecha')
+
+        data = []
+        for v in ventas:
+            pagos_resumen = []
+            for p in v.pagos.all():
+                pagos_resumen.append({
+                    "metodo": p.metodo.nombre,
+                    "monto": float(p.monto_pagado),
+                    "moneda": p.metodo.moneda_referencia
+                })
+
+            data.append({
+                "id": v.id,
+                "fecha": timezone.localtime(v.fecha).strftime("%d/%m/%Y %H:%M:%S"),
+                "cliente": v.cliente.nombre,
+                "tipo": v.tipo,
+                "total_usd": float(v.total_principal),
+                "total_bs": float(v.total_secundaria),
+                "tasa": float(v.tasa_cambio_historica),
+                "items_count": v.detalles.count(),
+                "pagos": pagos_resumen
+            })
+
+        return Response(data, status=status.HTTP_200_OK)

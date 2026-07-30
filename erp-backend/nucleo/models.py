@@ -156,12 +156,12 @@ class Producto(models.Model):
     categoria = models.ForeignKey(Categoria, on_delete=models.RESTRICT)
     unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.RESTRICT, help_text="Unidad mínima de control")
     impuesto = models.ForeignKey(Impuesto, on_delete=models.RESTRICT)
-    costo_base_moneda_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    costo_base_moneda_principal = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     # >>> NUEVO: Stock inicial al crear el producto <<<
     stock_inicial = models.DecimalField(
-        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        max_digits=15, decimal_places=4, default=Decimal('0.00'),
         help_text="Stock con el que inicia este producto en el sistema."
     )
     # >>> NUEVO: Almacén donde se deposita el stock inicial <<<
@@ -193,8 +193,8 @@ class PresentacionProducto(models.Model):
     """
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='presentaciones')
     unidad_medida = models.ForeignKey('UnidadMedida', on_delete=models.RESTRICT, null=True, help_text="Ej. Caja, Bulto, Unidad")
-    factor_conversion = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
-    precio_venta_principal = models.DecimalField(max_digits=15, decimal_places=2)
+    factor_conversion = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.00'))
+    precio_venta_principal = models.DecimalField(max_digits=15, decimal_places=4)
 
     class Meta:
         verbose_name_plural = "Presentaciones de Productos"
@@ -232,7 +232,7 @@ class PresentacionProducto(models.Model):
 class InventarioAlmacen(models.Model):
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='stock_por_almacen')
     almacen = models.ForeignKey(Almacen, on_delete=models.CASCADE)
-    stock_actual_unidades_base = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    stock_actual_unidades_base = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
 
     class Meta:
         unique_together = ('producto', 'almacen')
@@ -686,16 +686,16 @@ class Compra(TransaccionBase):
 class DetalleVenta(models.Model):
     venta = models.ForeignKey(Venta, on_delete=models.CASCADE, related_name='detalles')
     presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT)
-    cantidad_presentacion = models.DecimalField(max_digits=15, decimal_places=2)
-    precio_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
+    cantidad_presentacion = models.DecimalField(max_digits=15, decimal_places=4)
+    precio_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=4)
     porcentaje_impuesto_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
     subtotal = models.DecimalField(max_digits=15, decimal_places=2)
 
 class DetalleCompra(models.Model):
     compra = models.ForeignKey(Compra, on_delete=models.CASCADE, related_name='detalles')
     presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT)
-    cantidad_presentacion = models.DecimalField(max_digits=15, decimal_places=2)
-    precio_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
+    cantidad_presentacion = models.DecimalField(max_digits=15, decimal_places=4)
+    precio_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=4)
     porcentaje_impuesto_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
     subtotal = models.DecimalField(max_digits=15, decimal_places=2)
 
@@ -903,7 +903,7 @@ class EgresoInventario(models.Model):
 class DetalleEgresoInventario(models.Model):
     egreso = models.ForeignKey(EgresoInventario, on_delete=models.CASCADE, related_name='detalles')
     presentacion = models.ForeignKey('PresentacionProducto', on_delete=models.RESTRICT)
-    cantidad = models.DecimalField(max_digits=15, decimal_places=2)
+    cantidad = models.DecimalField(max_digits=15, decimal_places=4)
 
     # Registramos el costo para saber cuánto dinero "salió" en mercancía
     costo_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
@@ -1072,9 +1072,9 @@ class RutaMercadoDetalle(models.Model):
     ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='detalles')
     presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT)
 
-    cantidad_salida = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
-    cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
-    precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    cantidad_salida = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
+    cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
+    precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
 
     class Meta:
         verbose_name = "Detalle de Ruta"

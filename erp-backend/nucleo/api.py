@@ -15,6 +15,7 @@ from .models import (
     CuentaPorPagar, InventarioAlmacen, SesionCaja, Cliente,
     MetodoPago, PagoCuentaCobrar, ConfiguracionGlobal, DetalleVenta, DetalleCompra,
     Producto, Proveedor, PagoCuentaPagar, ConceptoEgreso, DetalleEgresoInventario,
+    Almacen,
     RutaMercado,
     RutaMercadoDetalle,
     RutaMercadoCredito,

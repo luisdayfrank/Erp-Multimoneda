@@ -86,7 +86,7 @@ class ProductoPosSerializer(serializers.ModelSerializer):
 class PresentacionProductoSerializer(serializers.ModelSerializer):
     producto = ProductoPosSerializer(read_only=True)
     nombre_presentacion = serializers.SerializerMethodField()
-    costo = serializers.DecimalField(source='costo_presentacion', max_digits=15, decimal_places=2, read_only=True)
+    costo = serializers.DecimalField(source='costo_presentacion', max_digits=15, decimal_places=4, read_only=True)
     margen = serializers.DecimalField(source='margen_ganancia_porcentaje', max_digits=15, decimal_places=2, read_only=True)
 
     class Meta:

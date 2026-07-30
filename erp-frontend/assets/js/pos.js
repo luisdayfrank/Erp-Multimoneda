@@ -185,12 +185,40 @@ function renderizarClientesModal(lista) {
     }
     lista.forEach(c => {
         const doc = c.documento || c.cedula || c.rif || 'S/N';
-        const deuda = c.deuda_total ? ' - Deuda: $' + parseFloat(c.deuda_total).toFixed(2) : '';
-        const saldoFavor = c.saldo_a_favor && parseFloat(c.saldo_a_favor) > 0 ? ' - Saldo a favor: $' + parseFloat(c.saldo_a_favor).toFixed(2) : '';
+        const deuda = parseFloat(c.deuda_total || 0);
+        const saldoFavor = parseFloat(c.saldo_a_favor || 0);
+        const limite = parseFloat(c.limite_credito || 0);
+
+        let badges = '';
+
+        // Deuda SIEMPRE visible
+        if (deuda > 0) {
+            badges += '<span class="badge bg-danger me-1">Deuda: $' + deuda.toFixed(2) + '</span>';
+        } else {
+            badges += '<span class="badge bg-secondary me-1">Sin deuda</span>';
+        }
+
+        // Saldo a favor
+        if (saldoFavor > 0) {
+            badges += '<span class="badge bg-success me-1">Saldo a favor: $' + saldoFavor.toFixed(2) + '</span>';
+        }
+
+        // Límite de crédito
+        if (limite > 0) {
+            badges += '<span class="badge bg-info text-dark me-1">Límite: $' + limite.toFixed(2) + '</span>';
+        } else if (limite === -1) {
+            badges += '<span class="badge bg-dark">Crédito BLOQUEADO</span>';
+        }
+
         const item = document.createElement('a');
         item.href = '#';
         item.className = 'list-group-item list-group-item-action cliente-item';
-        item.innerHTML = '<div class="d-flex w-100 justify-content-between"><h6 class="mb-1 fw-bold">' + c.nombre + '</h6><small class="text-muted">' + doc + '</small></div><small class="text-danger">' + deuda + '</small><small class="text-success">' + saldoFavor + '</small>';
+        item.innerHTML =
+            '<div class="d-flex w-100 justify-content-between align-items-center mb-1">' +
+                '<h6 class="mb-0 fw-bold">' + c.nombre + '</h6>' +
+                '<small class="text-muted">' + doc + '</small>' +
+            '</div>' +
+            '<div class="d-flex flex-wrap gap-1 mt-1">' + badges + '</div>';
         item.onclick = (e) => { e.preventDefault(); seleccionarCliente(c.id, c.nombre); };
         cont.appendChild(item);
     });
@@ -338,6 +366,49 @@ function actualizarPantallaTotales(totales) {
 // ==============================================================================
 function abrirModalCobro() {
     if (carrito.length === 0) { alert("El carrito esta vacio"); return; }
+
+    // >>> INFO CLIENTE + ALERTAS VISUALES EN MODAL DE COBRO <<<
+    const cliente = clientesCache.find(c => c.id === clienteSeleccionadoId);
+    const infoClienteDiv = document.getElementById('cobro-info-cliente');
+    const infoClienteInner = infoClienteDiv.querySelector('.col-12');
+
+    if (cliente) {
+        const deuda = parseFloat(cliente.deuda_total || 0);
+        const limite = parseFloat(cliente.limite_credito || 0);
+        const saldo = parseFloat(cliente.saldo_a_favor || 0);
+
+        document.getElementById('cobro-cliente-nombre').innerText = cliente.nombre;
+        document.getElementById('cobro-cliente-doc').innerText = 'Doc: ' + (cliente.documento || 'S/N');
+        document.getElementById('cobro-cliente-deuda').innerText = '$ ' + deuda.toFixed(2);
+        document.getElementById('cobro-cliente-limite').innerText = '$ ' + (limite > 0 ? limite.toFixed(2) : 'ILIMITADO');
+        document.getElementById('cobro-cliente-saldo').innerText = '$ ' + saldo.toFixed(2);
+
+        // Resetear clases de borde/fondo
+        infoClienteInner.className = 'col-12 bg-white p-2 rounded shadow-sm border-start border-4';
+
+        // Lógica de alertas visuales
+        if (limite === -1) {
+            // Crédito bloqueado totalmente
+            infoClienteInner.classList.add('border-danger', 'bg-danger', 'bg-opacity-10');
+        } else if (limite > 0 && deuda >= limite) {
+            // Excedió el límite
+            infoClienteInner.classList.add('border-danger', 'bg-danger', 'bg-opacity-10');
+        } else if (limite > 0 && deuda >= (limite * 0.8)) {
+            // Está al 80% o más del límite (cerca de quedar sin cupo)
+            infoClienteInner.classList.add('border-warning', 'bg-warning', 'bg-opacity-10');
+        } else {
+            // Todo normal
+            infoClienteInner.classList.add('border-primary');
+        }
+    } else {
+        document.getElementById('cobro-cliente-nombre').innerText = clienteSeleccionadoNombre;
+        document.getElementById('cobro-cliente-doc').innerText = 'Doc: S/N';
+        document.getElementById('cobro-cliente-deuda').innerText = '$ 0.00';
+        document.getElementById('cobro-cliente-limite').innerText = '$ 0.00';
+        document.getElementById('cobro-cliente-saldo').innerText = '$ 0.00';
+        infoClienteInner.className = 'col-12 bg-white p-2 rounded shadow-sm border-start border-4 border-primary';
+    }
+
     const totales = calcularTotales();
     document.getElementById('cobro-total-usd').innerText = '$ ' + totales.total_usd;
     document.getElementById('cobro-total-bs').innerText = 'BS ' + totales.total_bs;
@@ -481,9 +552,10 @@ function evaluarEstadoPago() {
 
     if (tipoVenta === 'CREDITO') {
         if (restante < -0.01) {
-            restanteEl.innerText = 'ABONO SUPERA DEUDA!';
-            restanteEl.className = 'text-danger fw-bold mb-0';
-            btnFacturar.disabled = true;
+            // Sobrante: el backend lo guardará como saldo a favor
+            restanteEl.innerText = 'SOBRANTE: $ ' + Math.abs(restante).toFixed(2) + ' (a favor)';
+            restanteEl.className = 'text-success fw-bold mb-0';
+            btnFacturar.disabled = false;
         } else {
             restanteEl.innerText = '$ ' + restante.toFixed(2) + ' (PENDIENTE)';
             restanteEl.className = 'text-info fw-bold mb-0';
@@ -570,9 +642,66 @@ async function procesarFactura(tipoPago) {
 
     try {
         const respuesta = await apiFetch('/pos/facturar/', 'POST', payload);
-        generarEImprimirTicket(respuesta.venta_id, totales, carrito.slice(), tipoPago, pagos);
 
-        alert("Venta Procesada! Factura #" + respuesta.venta_id);
+        // >>> NUEVO: Mensaje detallado con abonos a facturas viejas <<<
+        let msg = "Venta Procesada! Factura #" + respuesta.venta_id;
+        if (respuesta.tipo === 'CREDITO') {
+            msg += "\n\n--- RESUMEN CREDITO ---";
+            
+            if (respuesta.abonos_cxc_viejas && respuesta.abonos_cxc_viejas.length > 0) {
+                msg += "\n\nAbonos a facturas anteriores:";
+                respuesta.abonos_cxc_viejas.forEach(function(ab) {
+                    var origenTxt = (ab.origen === 'SALDO_A_FAVOR') ? ' (saldo a favor)' : '';
+                    msg += "\n  - Fact. #" + (ab.venta_id || 'Inicial') + ": $" + ab.monto_aplicado.toFixed(2) + origenTxt;
+                });
+            }
+            
+            if (respuesta.abono_nueva_cxc > 0) {
+                msg += "\nAbono a factura nueva: $" + respuesta.abono_nueva_cxc.toFixed(2);
+            }
+            
+            if (respuesta.saldo_favor_a_nueva > 0) {
+                msg += "\nSaldo a favor usado en nueva: $" + respuesta.saldo_favor_a_nueva.toFixed(2);
+            }
+            
+            if (respuesta.saldo_restante_cxc > 0) {
+                msg += "\nSaldo pendiente nueva: $" + respuesta.saldo_restante_cxc.toFixed(2);
+            } else {
+                msg += "\nFactura nueva PAGADA";
+            }
+            
+            if (respuesta.sobrante_abono > 0) {
+                msg += "\nSobrante a favor: $" + respuesta.sobrante_abono.toFixed(2);
+            }
+            
+            if (respuesta.deuda_total_cliente > 0) {
+                msg += "\n\nDEUDA TOTAL DEL CLIENTE: $" + respuesta.deuda_total_cliente.toFixed(2);
+            } else {
+                msg += "\n\nCliente AL DIA (sin deudas pendientes)";
+            }
+        }
+
+        generarEImprimirTicket(
+            respuesta.venta_id,
+            totales,
+            carrito.slice(),
+            tipoPago,
+            pagos,
+            {
+                saldo_favor_usado: respuesta.saldo_favor_usado || 0,
+                sobrante_abono: respuesta.sobrante_abono || 0,
+                saldo_restante_cxc: respuesta.saldo_restante_cxc || 0,
+                estado_cxc: respuesta.estado_cxc,
+                abonos_cxc_viejas: respuesta.abonos_cxc_viejas || [],
+                abono_nueva_cxc: respuesta.abono_nueva_cxc || 0,
+                deuda_total_cliente: respuesta.deuda_total_cliente || 0
+            }
+        );
+
+        alert(msg);
+
+        // >>> CRÍTICO: Refrescar cache de clientes para que el POS muestre saldos actualizados <<<
+        await cargarDatosIniciales();
 
         carrito = [];
         calcularTotales();
@@ -722,7 +851,8 @@ function actualizarCantidadManual(idPresentacion, valor) {
 // ==============================================================================
 // 9. TICKETS - VERSION CORREGIDA Y COMPLETA (58mm)
 // ==============================================================================
-function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos) {
+function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
+    infoCredito = infoCredito || {};
     const ticket = document.getElementById('ticket-impresion');
 
     ticket.classList.remove('activo');
@@ -802,11 +932,61 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
         vueltoSection.style.display = 'none';
     }
 
+    // >>> NUEVO: Renderizar abonos a facturas viejas en el ticket <<<
+    const abonosViejosSection = document.getElementById('ticket-abonos-viejos-section');
+    const abonosViejosLista = document.getElementById('ticket-abonos-viejos-lista');
+
+    if (infoCredito.abonos_cxc_viejas && infoCredito.abonos_cxc_viejas.length > 0) {
+        abonosViejosSection.style.display = 'block';
+        abonosViejosLista.innerHTML = '';
+
+        infoCredito.abonos_cxc_viejas.forEach(function(ab) {
+            const div = document.createElement('div');
+            div.className = 'fila-pago';
+            div.innerHTML = '<span>Fact. #' + (ab.venta_id || 'N/A') + ':</span><span>$ ' + parseFloat(ab.monto_aplicado).toFixed(2) + '</span>';
+            abonosViejosLista.appendChild(div);
+        });
+    } else {
+        abonosViejosSection.style.display = 'none';
+    }
+
     const creditoSection = document.getElementById('ticket-credito-section');
     if (tipoVenta === 'CREDITO') {
         creditoSection.style.display = 'block';
-        const saldoPendiente = Math.max(0, totalUSD - sumaPagosUSD);
-        creditoSection.innerHTML = 'VENTA A CREDITO<br><span style="font-size: 8px;">Saldo pendiente: $' + saldoPendiente.toFixed(2) + '</span>';
+        let lineasCredito = ['VENTA A CREDITO'];
+        
+        if (infoCredito.abonos_cxc_viejas && infoCredito.abonos_cxc_viejas.length > 0) {
+            const totalAbonosViejos = infoCredito.abonos_cxc_viejas.reduce(function(sum, ab) {
+                return sum + parseFloat(ab.monto_aplicado);
+            }, 0);
+            lineasCredito.push('<span style="font-size: 8px;">Abonos a deudas ant.: $' + totalAbonosViejos.toFixed(2) + '</span>');
+        }
+        
+        if (infoCredito.abono_nueva_cxc > 0) {
+            lineasCredito.push('<span style="font-size: 8px;">Abono inicial: $' + parseFloat(infoCredito.abono_nueva_cxc).toFixed(2) + '</span>');
+        }
+        
+        if (infoCredito.saldo_favor_a_nueva > 0) {
+            lineasCredito.push('<span style="font-size: 8px;">Saldo a favor usado: $' + parseFloat(infoCredito.saldo_favor_a_nueva).toFixed(2) + '</span>');
+        }
+        
+        const saldoPendienteReal = parseFloat(infoCredito.saldo_restante_cxc) || Math.max(0, totalUSD - sumaPagosUSD);
+        if (saldoPendienteReal > 0) {
+            lineasCredito.push('<span style="font-size: 9px; font-weight: bold;">Pendiente: $' + saldoPendienteReal.toFixed(2) + '</span>');
+        } else {
+            lineasCredito.push('<span style="font-size: 9px; font-weight: bold; color: #006600;">PAGADA (CxC saldada)</span>');
+        }
+        
+        if (infoCredito.sobrante_abono > 0) {
+            lineasCredito.push('<span style="font-size: 8px;">Sobrante a favor: $' + parseFloat(infoCredito.sobrante_abono).toFixed(2) + '</span>');
+        }
+        
+        if (infoCredito.deuda_total_cliente > 0) {
+            lineasCredito.push('<span style="font-size: 10px; font-weight: bold; color: #cc0000;">DEUDA TOTAL: $' + parseFloat(infoCredito.deuda_total_cliente).toFixed(2) + '</span>');
+        } else {
+            lineasCredito.push('<span style="font-size: 10px; font-weight: bold; color: #006600;">CLIENTE AL DIA</span>');
+        }
+        creditoSection.innerHTML = lineasCredito.join('<br>');
     } else {
         creditoSection.style.display = 'none';
     }
@@ -1410,6 +1590,121 @@ async function ejecutarCargarBorrador(id) {
     }
 }
 
+// ==============================================================================
+// HISTORIAL DE FACTURAS DEL TURNO ACTUAL
+// ==============================================================================
+
+function abrirModalHistorial() {
+    cargarFacturasTurno();
+    const modal = new bootstrap.Modal(document.getElementById('modalHistorialFacturas'));
+    modal.show();
+}
+
+async function cargarFacturasTurno() {
+    const cont = document.getElementById('lista-facturas-turno');
+    cont.innerHTML = '<div class="list-group-item text-center text-muted">Cargando facturas...</div>';
+
+    try {
+        const facturas = await apiFetch('/pos/ventas-turno/', 'GET');
+        renderizarFacturasTurno(facturas);
+    } catch (e) {
+        cont.innerHTML = '<div class="list-group-item text-center text-danger">Error cargando historial.</div>';
+        console.error(e);
+    }
+}
+
+function renderizarFacturasTurno(facturas) {
+    const cont = document.getElementById('lista-facturas-turno');
+    cont.innerHTML = '';
+
+    if (!facturas || facturas.length === 0) {
+        cont.innerHTML = '<div class="list-group-item text-center text-muted">No hay facturas en este turno</div>';
+        return;
+    }
+
+    facturas.forEach(function(f) {
+        const badgeClass = f.tipo === 'CONTADO' ? 'bg-success' : 'bg-warning text-dark';
+        const item = document.createElement('a');
+        item.href = '#';
+        item.className = 'list-group-item list-group-item-action';
+        item.innerHTML = '' +
+            '<div class="d-flex w-100 justify-content-between">' +
+                '<h6 class="mb-1 fw-bold">Factura #' + f.id + '</h6>' +
+                '<small class="text-muted">' + f.fecha + '</small>' +
+            '</div>' +
+            '<div class="d-flex justify-content-between align-items-center">' +
+                '<span>' + (f.cliente || 'N/A') + '</span>' +
+                '<span class="badge ' + badgeClass + '">' + f.tipo + '</span>' +
+            '</div>' +
+            '<div class="mt-1">' +
+                '<small class="text-muted">Total: $' + f.total_usd.toFixed(2) + ' | Items: ' + f.items_count + '</small>' +
+            '</div>';
+        item.onclick = function(e) {
+            e.preventDefault();
+            verDetalleFactura(f.id);
+        };
+        cont.appendChild(item);
+    });
+}
+
+async function verDetalleFactura(id) {
+    try {
+        const data = await apiFetch('/ventas/' + id + '/detalle/', 'GET');
+        mostrarDetalleFacturaModal(data);
+    } catch (e) {
+        alert("Error cargando detalle: " + (e.detail || e.error || "Desconocido"));
+    }
+}
+
+function mostrarDetalleFacturaModal(data) {
+    document.getElementById('detalle-factura-id').innerText = data.id;
+    document.getElementById('detalle-factura-fecha').innerText = new Date(data.fecha).toLocaleString('es-VE');
+    document.getElementById('detalle-factura-tipo').innerText = data.tipo;
+    document.getElementById('detalle-factura-estado').innerText = data.estado;
+    document.getElementById('detalle-factura-subtotal').innerText = parseFloat(data.subtotal_principal).toFixed(2);
+    document.getElementById('detalle-factura-impuestos').innerText = parseFloat(data.total_impuestos_principal).toFixed(2);
+    document.getElementById('detalle-factura-total').innerText = parseFloat(data.total_principal).toFixed(2);
+    document.getElementById('detalle-factura-total-bs').innerText = parseFloat(data.total_secundaria).toFixed(2);
+    document.getElementById('detalle-factura-tasa').innerText = parseFloat(data.tasa_cambio).toFixed(2);
+
+    // Productos
+    const tbodyProd = document.getElementById('detalle-factura-productos');
+    tbodyProd.innerHTML = '';
+    if (data.productos && data.productos.length > 0) {
+        data.productos.forEach(function(p) {
+            tbodyProd.innerHTML += '<tr>' +
+                '<td>' + p.producto + '</td>' +
+                '<td>' + (p.presentacion || 'N/A') + '</td>' +
+                '<td class="text-center">' + parseFloat(p.cantidad).toFixed(2) + '</td>' +
+                '<td class="text-end">$' + parseFloat(p.precio_unitario).toFixed(2) + '</td>' +
+                '<td class="text-end">$' + parseFloat(p.subtotal).toFixed(2) + '</td>' +
+            '</tr>';
+        });
+    } else {
+        tbodyProd.innerHTML = '<tr><td colspan="5" class="text-muted text-center">Sin productos</td></tr>';
+    }
+
+    // Pagos
+    const tbodyPagos = document.getElementById('detalle-factura-pagos');
+    tbodyPagos.innerHTML = '';
+    if (data.pagos && data.pagos.length > 0) {
+        data.pagos.forEach(function(p) {
+            tbodyPagos.innerHTML += '<tr>' +
+                '<td>' + p.metodo + '</td>' +
+                '<td class="text-end">$' + parseFloat(p.monto_usd).toFixed(2) + '</td>' +
+                '<td class="text-end">' + (p.referencia || 'S/R') + '</td>' +
+            '</tr>';
+        });
+    } else {
+        tbodyPagos.innerHTML = '<tr><td colspan="3" class="text-muted text-center">Sin pagos registrados</td></tr>';
+    }
+
+    const modalLista = bootstrap.Modal.getInstance(document.getElementById('modalHistorialFacturas'));
+    if (modalLista) modalLista.hide();
+
+    const modalDetalle = new bootstrap.Modal(document.getElementById('modalDetalleFactura'));
+    modalDetalle.show();
+}
 // ==============================================================================
 // ARRANQUE
 // ==============================================================================

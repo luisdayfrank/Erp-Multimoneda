@@ -225,8 +225,8 @@
                                 <div class="mb-2">
                                     <label class="form-label small">Monto recibido de deudas viejas:</label>
                                     <div class="input-group">
-                                        <span class="input-group-text">BS</span>
-                                        <input type="number" class="form-control" id="cobranzas-bs" step="0.01" value="0.00" onchange="recalcularCuadre()">
+                                        <span class="input-group-text" id="cobranzas-label">USD</span>
+                                        <input type="number" class="form-control" id="cobranzas-principal" step="0.01" value="0.00" onchange="recalcularCuadre()">
                                     </div>
                                 </div>
                             </div>
@@ -245,15 +245,15 @@
                             </div>
                             <div class="col border-start">
                                 <small class="text-muted">ESPERADO</small>
-                                <h5 class="mb-0 text-dark" id="cuadre-esperado-bs">BS 0.00</h5>
+                                <h5 class="mb-0 text-dark" id="cuadre-esperado-bs">$ 0.00</h5>
                             </div>
                             <div class="col border-start">
                                 <small class="text-muted">REAL RECAUDADO</small>
-                                <h5 class="mb-0 text-dark" id="cuadre-real-bs">BS 0.00</h5>
+                                <h5 class="mb-0 text-dark" id="cuadre-real-bs">$ 0.00</h5>
                             </div>
                             <div class="col border-start">
                                 <small class="text-muted">DIFERENCIA</small>
-                                <h5 class="mb-0" id="cuadre-diferencia-bs">BS 0.00</h5>
+                                <h5 class="mb-0" id="cuadre-diferencia-bs">$ 0.00</h5>
                             </div>
                             <div class="col border-start">
                                 <button class="btn btn-primary fw-bold btn-accion" onclick="guardarRuta('BORRADOR')">
@@ -354,7 +354,7 @@
             <div class="fila-total"><span>EFECTIVO:</span><span>BS <span id="r-ticket-efectivo">0.00</span></span></div>
             <div class="fila-total"><span>PAGO MÓVIL:</span><span>BS <span id="r-ticket-movil">0.00</span></span></div>
             <div class="fila-total"><span>PUNTO:</span><span>BS <span id="r-ticket-punto">0.00</span></span></div>
-            <div class="fila-total"><span>COBRANZAS:</span><span>BS <span id="r-ticket-cobranzas">0.00</span></span></div>
+            <div class="fila-total"><span>COBRANZAS:</span><span><span id="r-ticket-cobranzas-moneda">USD</span> <span id="r-ticket-cobranzas">0.00</span></span></div>
             <div class="fila-total" style="color:#cc0000;"><span>CRÉDITOS:</span><span>BS <span id="r-ticket-creditos">0.00</span></span></div>
             <div class="fila-total" style="color:#cc0000;"><span>GASTOS:</span><span>BS <span id="r-ticket-gastos">0.00</span></span></div>
             <p style="font-size:8px;">--------------------------------</p>

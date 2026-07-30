@@ -768,8 +768,8 @@ function renderizarCatalogoHTML(productosAMostrar) {
         const idPrecioUi = 'precio-ui-' + prod.id;
         const idPrecioBsUi = 'precio-bs-ui-' + prod.id;
 
-        const precioInicialUSD = presentaciones[0].precio_venta_principal;
-        const precioInicialBS = (precioInicialUSD * tasaCambio).toFixed(2);
+        const precioInicialUSD = parseFloat(presentaciones[0].precio_venta_principal).toFixed(2);
+        const precioInicialBS = (parseFloat(presentaciones[0].precio_venta_principal) * tasaCambio).toFixed(2);
 
         const tarjeta = '' +
             '<div class="col-12 col-sm-6 col-lg-4 mb-3">' +
@@ -794,8 +794,8 @@ function renderizarCatalogoHTML(productosAMostrar) {
 function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi) {
     const select = document.getElementById(idSelect);
     const opcion = select.options[select.selectedIndex];
-    document.getElementById(idPrecioUi).innerText = '$ ' + opcion.getAttribute('data-precio');
-    document.getElementById(idPrecioBsUi).innerText = 'BS ' + opcion.getAttribute('data-bs');
+    document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
+    document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
 }
 
 function agregarDesdeTarjeta(idSelect) {

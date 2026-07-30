@@ -5,7 +5,7 @@ document.getElementById('loginForm').addEventListener('submit', function(event) 
     const pass = document.getElementById('password').value;
 
     // Hablamos con la API de Django que construimos
-    fetch('http://192.168.101.11:8000/api/v1/token/', {
+    fetch('http://192.168.0.198:8000/api/v1/token/', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'

@@ -1,4 +1,4 @@
-const BASE_URL = 'http://192.168.101.11:8000/api/v1';
+const BASE_URL = 'http://192.168.0.198:8000/api/v1';
 async function refreshAccessToken() {
     const refresh = localStorage.getItem('refresh_token');
     if (!refresh) throw new Error('No hay refresh_token. Inicia sesión de nuevo.');

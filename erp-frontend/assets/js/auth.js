@@ -29,7 +29,7 @@ document.getElementById('loginForm').addEventListener('submit', async function(e
 
     try {
         // Apuntamos al endpoint de SimpleJWT en Django
-        const response = await fetch('http://192.168.101.11:8000/api/v1/token/', {
+        const response = await fetch('http://192.168.0.198:8000/api/v1/token/', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

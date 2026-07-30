@@ -13,6 +13,8 @@ let pagos = [];
 let creditos = [];
 let gastos = [];
 let rutaActualId = null;
+let monedaPrincipal = 'USD';
+let monedaSecundaria = 'BS';
 
 function formatearErrorDRF(error, profundidad = 0) {
     if (!error) return 'Error desconocido';
@@ -96,17 +98,22 @@ async function inicializarRutaMercado() {
         almacenesCache = [{id: 1, nombre: 'AlmacÃ©n Principal'}];
     }
 
-    // Tasa de cambio
+    // Tasa de cambio + Monedas configuradas (SOLO UNA VEZ)
     if (resultados[3].status === 'fulfilled') {
         const tasa = parseFloat(resultados[3].value.tasa_cambio_actual) || 0;
+        monedaPrincipal = resultados[3].value.moneda_principal || 'USD';
+        monedaSecundaria = resultados[3].value.moneda_secundaria || 'BS';
         document.getElementById('ruta-tasa').value = tasa.toFixed(2);
-        document.getElementById('tasaDisplay').innerText = 'Tasa: BS ' + tasa.toFixed(2);
+        document.getElementById('tasaDisplay').innerText = `Tasa: ${monedaSecundaria} ${tasa.toFixed(2)}`;
     } else {
         console.warn('No se cargÃ³ la tasa:', resultados[3].reason);
-        document.getElementById('tasaDisplay').innerText = 'Tasa: BS ???';
+        document.getElementById('tasaDisplay').innerText = `Tasa: ${monedaSecundaria} ???`;
     }
 
     llenarSelects();
+    actualizarHeadersTabla();
+    const cobLabel = document.getElementById('cobranzas-label');
+    if (cobLabel) cobLabel.innerText = monedaPrincipal;
     agregarPago(); // lÃ­nea de pago por defecto
 }
 function llenarSelects() {
@@ -123,6 +130,18 @@ function llenarSelects() {
             renderizarGridSeleccionManual();
         }
     });
+}
+
+function actualizarHeadersTabla() {
+    const thead = document.querySelector('#tablaProductos thead tr');
+    if (!thead) return;
+    const ths = thead.querySelectorAll('th');
+    if (ths.length >= 8) {
+        ths[4].innerText = 'Precio ' + monedaSecundaria;
+        ths[5].innerText = 'Precio ' + monedaPrincipal;
+        ths[6].innerText = 'Total ' + monedaSecundaria;
+        ths[7].innerText = 'Total ' + monedaPrincipal;
+    }
 }
 
 // ==============================================================================
@@ -248,6 +267,56 @@ async function subirExcel(file) {
 }
 
 // ==============================================================================
+// NAVEGACIÃ“N TIPO EXCEL EN LA TABLA
+// ==============================================================================
+function manejarKeydownProducto(e, index) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        seleccionarPrimero(index);
+    } else {
+        navegarTabla(e, index, 'producto');
+    }
+}
+
+function navegarTabla(e, filaIdx, campo) {
+    if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
+    e.preventDefault();
+    
+    const filas = document.querySelectorAll('#tbodyProductos tr');
+    if (filaIdx < 0 || filaIdx >= filas.length) return;
+    
+    // Mapeo de campo lÃ³gico a Ã­ndice de <td> dentro del <tr>
+    const campoATd = { 'producto': 0, 'salida': 1, 'entrada': 2, 'precio_bs': 4 };
+    let tdIdx = campoATd[campo] ?? 1;
+    let nextFila = filaIdx;
+    let nextTd = tdIdx;
+    
+    if (e.key === 'ArrowRight') {
+        const orden = [0, 1, 2, 4]; // producto â†’ salida â†’ entrada â†’ precio
+        const pos = orden.indexOf(tdIdx);
+        if (pos >= 0 && pos < orden.length - 1) nextTd = orden[pos + 1];
+    } else if (e.key === 'ArrowLeft') {
+        const orden = [0, 1, 2, 4];
+        const pos = orden.indexOf(tdIdx);
+        if (pos > 0) nextTd = orden[pos - 1];
+    } else if (e.key === 'ArrowDown') {
+        nextFila = filaIdx + 1;
+    } else if (e.key === 'ArrowUp') {
+        nextFila = filaIdx - 1;
+    }
+    
+    if (nextFila < 0 || nextFila >= filas.length) return;
+    
+    const tdDestino = filas[nextFila].children[nextTd];
+    if (!tdDestino) return;
+    const input = tdDestino.querySelector('input');
+    if (input) {
+        input.focus();
+        input.select();
+    }
+}
+
+// ==============================================================================
 // GRID DE PRODUCTOS
 // ==============================================================================
 function renderizarTablaProductos() {
@@ -256,7 +325,7 @@ function renderizarTablaProductos() {
 
     if (filasProducto.length === 0) {
         tbody.innerHTML = `<tr id="fila-vacia"><td colspan="9" class="text-muted text-center py-4">
-            <i class="bi bi-inbox fs-2 d-block mb-2"></i>Genera un Excel o añade productos manualmente</td></tr>`;
+            <i class="bi bi-inbox fs-2 d-block mb-2"></i>Genera un Excel o aÃ±ade productos manualmente</td></tr>`;
         return;
     }
 
@@ -273,16 +342,17 @@ function renderizarTablaProductos() {
                         <button class="btn btn-sm btn-link text-danger p-0" onclick="limpiarProductoFila(${index})"><i class="bi bi-x-lg"></i></button>
                      </div>` :
                     `<input type="text" class="form-control form-control-sm" id="buscar-prod-${index}" 
-                        placeholder="Escribe nombre o código..." autocomplete="off"
+                        placeholder="Escribe nombre o cÃ³digo..." autocomplete="off"
                         oninput="autocompleteProducto(${index}, this.value)"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault();seleccionarPrimero(${index});}">
+                        onkeydown="manejarKeydownProducto(event, ${index})"
+                        onclick="this.select()">
                      <div class="list-group position-absolute w-100 shadow-sm" id="lista-autocomplete-${index}" style="z-index:1050; max-height:200px; overflow-y:auto; display:none;"></div>`
                 }
             </td>
-            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.salida}" onchange="actualizarFila(${index}, 'salida', this.value)"></td>
-            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.entrada}" onchange="actualizarFila(${index}, 'entrada', this.value)"></td>
+            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.salida}" onchange="actualizarFila(${index}, 'salida', this.value)" onkeydown="navegarTabla(event, ${index}, 'salida')" onclick="this.select()"></td>
+            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.entrada}" onchange="actualizarFila(${index}, 'entrada', this.value)" onkeydown="navegarTabla(event, ${index}, 'entrada')" onclick="this.select()"></td>
             <td class="text-center fw-bold text-primary">${c.vendido.toFixed(2)}</td>
-            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.precio_bs}" onchange="actualizarFila(${index}, 'precio_bs', this.value)"></td>
+            <td><input type="number" class="form-control form-control-sm" step="0.01" value="${fila.precio_bs}" onchange="actualizarFila(${index}, 'precio_bs', this.value)" onkeydown="navegarTabla(event, ${index}, 'precio_bs')" onclick="this.select()"></td>
             <td class="text-center">${c.precioUSD.toFixed(2)}</td>
             <td class="text-center fw-bold">${c.totalBS.toFixed(2)}</td>
             <td class="text-center fw-bold text-success">${c.totalUSD.toFixed(2)}</td>
@@ -301,7 +371,7 @@ function autocompleteProducto(index, texto) {
         const nom = (p.producto.nombre + ' ' + p.nombre_presentacion).toLowerCase();
         const cod = (p.producto.codigo_base || '').toLowerCase();
         return nom.includes(texto.toLowerCase()) || cod.includes(texto.toLowerCase());
-    }).slice(0, 8); // máximo 8 resultados
+    }).slice(0, 8);
     
     if (filtrados.length === 0) { lista.style.display = 'none'; return; }
     
@@ -309,7 +379,7 @@ function autocompleteProducto(index, texto) {
         `<a href="#" class="list-group-item list-group-item-action py-1 px-2 small" 
             onclick="event.preventDefault(); seleccionarProductoAutocomplete(${index}, ${p.id});">
             <strong>${p.producto.nombre}</strong> <span class="text-muted">(${p.nombre_presentacion})</span>
-            <span class="float-end text-primary">BS ${(p.precio_venta_principal * (parseFloat(document.getElementById('ruta-tasa').value)||0)).toFixed(2)}</span>
+            <span class="float-end text-primary">${monedaSecundaria} ${(p.precio_venta_principal * (parseFloat(document.getElementById('ruta-tasa').value)||0)).toFixed(2)}</span>
         </a>`
     ).join('');
     lista.style.display = 'block';
@@ -404,14 +474,28 @@ function agregarPago() {
     const div = document.createElement('div');
     div.className = 'input-group input-group-sm mb-2';
     div.innerHTML = `
-        <select class="form-select" id="pago-metodo-${idx}" style="max-width:140px;">
-            ${metodosPagoCache.map(m => `<option value="${m.id}">${m.nombre}</option>`).join('')}
+        <select class="form-select" id="pago-metodo-${idx}" style="max-width:140px;" onchange="actualizarLabelPago(${idx})">
+            ${metodosPagoCache.map(m => `<option value="${m.id}" data-moneda="${m.moneda_referencia}">${m.nombre}</option>`).join('')}
         </select>
-        <input type="number" class="form-control" id="pago-monto-${idx}" step="0.01" placeholder="BS" onchange="recalcularCuadre()">
+        <span class="input-group-text" id="pago-label-${idx}">${monedaSecundaria}</span>
+        <input type="number" class="form-control" id="pago-monto-${idx}" step="0.01" placeholder="0.00" onchange="recalcularCuadre()">
         <button class="btn btn-outline-danger" type="button" onclick="eliminarPago(${idx})"><i class="bi bi-x"></i></button>
     `;
     cont.appendChild(div);
-    pagos.push({ metodo_id: null, monto_bs: 0 });
+    pagos.push({ metodo_id: null, monto_input: 0, moneda: 'SECUNDARIA' });
+    // Inicializar label según el primer método del select
+    setTimeout(() => actualizarLabelPago(idx), 0);
+}
+
+function actualizarLabelPago(idx) {
+    const select = document.getElementById(`pago-metodo-${idx}`);
+    const label = document.getElementById(`pago-label-${idx}`);
+    if (!select || !label) return;
+    const metodoId = parseInt(select.value);
+    const metodo = metodosPagoCache.find(m => m.id === metodoId);
+    if (metodo) {
+        label.innerText = metodo.moneda_referencia === 'PRINCIPAL' ? monedaPrincipal : monedaSecundaria;
+    }
 }
 
 function eliminarPago(idx) {
@@ -430,11 +514,12 @@ function agregarCredito() {
         <select class="form-select" id="credito-cliente-${idx}" style="max-width:140px;">
             ${clientesCache.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('')}
         </select>
-        <input type="number" class="form-control" id="credito-monto-${idx}" step="0.01" placeholder="BS" onchange="recalcularCuadre()">
+        <span class="input-group-text" id="credito-label-${idx}">${monedaPrincipal}</span>
+        <input type="number" class="form-control" id="credito-monto-${idx}" step="0.01" placeholder="0.00" onchange="recalcularCuadre()">
         <button class="btn btn-outline-danger" type="button" onclick="eliminarCredito(${idx})"><i class="bi bi-x"></i></button>
     `;
     cont.appendChild(div);
-    creditos.push({ cliente_id: null, monto_bs: 0 });
+    creditos.push({ cliente_id: null, monto_principal: 0 });
 }
 
 function eliminarCredito(idx) {
@@ -453,18 +538,12 @@ function agregarGasto() {
         <select class="form-select" id="gasto-concepto-${idx}" style="max-width:140px;">
             ${conceptosGastoCache.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('')}
         </select>
-        <input type="number" class="form-control" id="gasto-monto-${idx}" step="0.01" placeholder="BS" onchange="recalcularCuadre()">
+        <span class="input-group-text">${monedaSecundaria}</span>
+        <input type="number" class="form-control" id="gasto-monto-${idx}" step="0.01" placeholder="0.00" onchange="recalcularCuadre()">
         <button class="btn btn-outline-danger" type="button" onclick="eliminarGasto(${idx})"><i class="bi bi-x"></i></button>
     `;
     cont.appendChild(div);
     gastos.push({ concepto_id: null, monto_bs: 0 });
-}
-
-function eliminarGasto(idx) {
-    const cont = document.getElementById('contenedor-gastos');
-    if (cont.children[idx]) cont.removeChild(cont.children[idx]);
-    gastos.splice(idx, 1);
-    recalcularCuadre();
 }
 
 // ==============================================================================
@@ -487,32 +566,44 @@ function recalcularCuadre() {
         totalVentaUSD += c.totalUSD;
     });
 
-    // Pagos
-    let totalPagosBS = 0;
+    // Pagos (convertidos a Moneda Principal según el método)
+    let totalPagosPrincipal = 0;
     const contPagos = document.getElementById('contenedor-pagos');
     Array.from(contPagos.children).forEach((div, idx) => {
-        const monto = parseFloat(div.querySelector('input').value) || 0;
+        const montoInput = parseFloat(div.querySelector('input[type="number"]').value) || 0;
+        const metodoId = parseInt(div.querySelector('select').value);
+        const metodo = metodosPagoCache.find(m => m.id === metodoId);
+        let montoPrincipal = 0;
+
+        if (metodo && metodo.moneda_referencia === 'PRINCIPAL') {
+            montoPrincipal = montoInput;
+        } else {
+            // SECUNDARIA: convertir a principal dividiendo por tasa
+            montoPrincipal = tasa > 0 ? montoInput / tasa : 0;
+        }
+
         pagos[idx] = {
-            metodo_id: parseInt(div.querySelector('select').value),
-            monto_bs: monto
+            metodo_id: metodoId,
+            monto_input: montoInput,
+            moneda: metodo ? metodo.moneda_referencia : 'SECUNDARIA'
         };
-        totalPagosBS += monto;
+        totalPagosPrincipal += montoPrincipal;
     });
 
-    // Créditos
-    let totalCreditosBS = 0;
+    // CrÃ©ditos (input YA estÃ¡ en Moneda Principal, no se convierte)
+    let totalCreditosPrincipal = 0;
     const contCreditos = document.getElementById('contenedor-creditos');
     Array.from(contCreditos.children).forEach((div, idx) => {
         const monto = parseFloat(div.querySelector('input').value) || 0;
         creditos[idx] = {
             cliente_id: parseInt(div.querySelector('select').value),
-            monto_bs: monto
+            monto_principal: monto
         };
-        totalCreditosBS += monto;
+        totalCreditosPrincipal += monto;
     });
 
-    // Gastos
-    let totalGastosBS = 0;
+    // Gastos (input actual en secundaria ? convertir a principal)
+    let totalGastosPrincipal = 0;
     const contGastos = document.getElementById('contenedor-gastos');
     Array.from(contGastos.children).forEach((div, idx) => {
         const monto = parseFloat(div.querySelector('input').value) || 0;
@@ -520,33 +611,42 @@ function recalcularCuadre() {
             concepto_id: parseInt(div.querySelector('select').value),
             monto_bs: monto
         };
-        totalGastosBS += monto;
+        totalGastosPrincipal += tasa > 0 ? monto / tasa : 0;
     });
 
-    // Cobranzas
-    const cobranzasBS = parseFloat(document.getElementById('cobranzas-bs').value) || 0;
+    // Cobranzas (input YA en Moneda Principal)
+    const cobranzasPrincipal = parseFloat(document.getElementById('cobranzas-principal').value) || 0;
 
-    // Cuadre
-    const esperadoBS = totalVentaBS - totalCreditosBS - totalGastosBS + cobranzasBS;
-    const realBS = totalPagosBS + cobranzasBS;
-    const diferenciaBS = realBS - esperadoBS;
+    // Cuadre en Moneda Principal
+    const esperadoPrincipal = totalVentaUSD - totalCreditosPrincipal - totalGastosPrincipal + cobranzasPrincipal;
+    const realPrincipal = totalPagosPrincipal + cobranzasPrincipal;
+    const diferenciaPrincipal = realPrincipal - esperadoPrincipal;
 
     // Mostrar
-    document.getElementById('cuadre-venta-bs').innerText = 'BS ' + totalVentaBS.toFixed(2);
-    document.getElementById('cuadre-venta-usd').innerText = '$ ' + totalVentaUSD.toFixed(2);
-    document.getElementById('cuadre-esperado-bs').innerText = 'BS ' + esperadoBS.toFixed(2);
-    document.getElementById('cuadre-real-bs').innerText = 'BS ' + realBS.toFixed(2);
+    document.getElementById('cuadre-venta-bs').innerText = monedaSecundaria + ' ' + totalVentaBS.toFixed(2);
+    document.getElementById('cuadre-venta-usd').innerText = monedaPrincipal + ' ' + totalVentaUSD.toFixed(2);
+
+    // Actualizar labels y valores del cuadre
+    const labelEsperado = document.getElementById('cuadre-esperado-bs').previousElementSibling;
+    if (labelEsperado) labelEsperado.innerText = 'ESPERADO (' + monedaPrincipal + ')';
+    document.getElementById('cuadre-esperado-bs').innerText = monedaPrincipal + ' ' + esperadoPrincipal.toFixed(2);
+
+    const labelReal = document.getElementById('cuadre-real-bs').previousElementSibling;
+    if (labelReal) labelReal.innerText = 'REAL RECAUDADO (' + monedaPrincipal + ')';
+    document.getElementById('cuadre-real-bs').innerText = monedaPrincipal + ' ' + realPrincipal.toFixed(2);
 
     const elDif = document.getElementById('cuadre-diferencia-bs');
-    elDif.innerText = (diferenciaBS >= 0 ? '+ ' : '- ') + 'BS ' + Math.abs(diferenciaBS).toFixed(2);
-    elDif.className = 'mb-0 ' + (Math.abs(diferenciaBS) <= 0.01 ? 'text-success' : (diferenciaBS < 0 ? 'cuadre-negativo' : 'cuadre-positivo'));
+    const labelDif = elDif.previousElementSibling;
+    if (labelDif) labelDif.innerText = 'DIFERENCIA (' + monedaPrincipal + ')';
+    elDif.innerText = (diferenciaPrincipal >= 0 ? '+ ' : '- ') + monedaPrincipal + ' ' + Math.abs(diferenciaPrincipal).toFixed(2);
+    elDif.className = 'mb-0 ' + (Math.abs(diferenciaPrincipal) <= 0.01 ? 'text-success' : (diferenciaPrincipal < 0 ? 'cuadre-negativo' : 'cuadre-positivo'));
 
     // Alerta visual en el panel sticky
     const sticky = document.querySelector('.sticky-cuadre .card-body');
-    if (Math.abs(diferenciaBS) <= 0.01) {
+    if (Math.abs(diferenciaPrincipal) <= 0.01) {
         sticky.style.background = '#d1e7dd'; // verde claro
         sticky.style.border = '2px solid #198754';
-    } else if (diferenciaBS < 0) {
+    } else if (diferenciaPrincipal < 0) {
         sticky.style.background = '#f8d7da'; // rojo claro
         sticky.style.border = '2px solid #dc3545';
     } else {
@@ -575,19 +675,32 @@ function construirPayload() {
         }));
 
     const pagosPayload = pagos
-        .filter(p => p.metodo_id && p.monto_bs > 0)
-        .map(p => ({
-            metodo_id: p.metodo_id,
-            monto_bs: parseFloat(p.monto_bs).toFixed(2),
-            monto_usd_equivalente: tasa > 0 ? (p.monto_bs / tasa).toFixed(2) : '0.00',
-            referencia: ''
-        }));
+        .filter(p => p.metodo_id && p.monto_input > 0)
+        .map(p => {
+            const metodo = metodosPagoCache.find(m => m.id === p.metodo_id);
+            let monto_bs, monto_usd;
+            if (metodo && metodo.moneda_referencia === 'PRINCIPAL') {
+                // El input es principal ? bs = principal * tasa
+                monto_usd = parseFloat(p.monto_input).toFixed(2);
+                monto_bs = (parseFloat(p.monto_input) * tasa).toFixed(2);
+            } else {
+                // El input es secundaria ? usd = secundaria / tasa
+                monto_bs = parseFloat(p.monto_input).toFixed(2);
+                monto_usd = tasa > 0 ? (parseFloat(p.monto_input) / tasa).toFixed(2) : '0.00';
+            }
+            return {
+                metodo_id: p.metodo_id,
+                monto_bs: monto_bs,
+                monto_usd_equivalente: monto_usd,
+                referencia: ''
+            };
+        });
 
     const creditosPayload = creditos
-        .filter(c => c.cliente_id && c.monto_bs > 0)
+        .filter(c => c.cliente_id && c.monto_principal > 0)
         .map(c => ({
             cliente_id: c.cliente_id,
-            monto_bs: parseFloat(c.monto_bs).toFixed(2),
+            monto_bs: (parseFloat(c.monto_principal) * tasa).toFixed(2), // Principal â†’ Secundaria (compatibilidad backend)
             descripcion: ''
         }));
 
@@ -599,7 +712,7 @@ function construirPayload() {
             descripcion: ''
         }));
 
-    const cobranzasBS = parseFloat(document.getElementById('cobranzas-bs').value) || 0;
+    const cobranzasPrincipal = parseFloat(document.getElementById('cobranzas-principal').value) || 0;
 
     return {
         fecha: fecha,
@@ -674,7 +787,7 @@ function resetearFormulario() {
     document.getElementById('contenedor-pagos').innerHTML = '';
     document.getElementById('contenedor-creditos').innerHTML = '';
     document.getElementById('contenedor-gastos').innerHTML = '';
-    document.getElementById('cobranzas-bs').value = '0.00';
+    document.getElementById('cobranzas-principal').value = '0.00'
     document.getElementById('ruta-obs').value = '';
     agregarPago();
     renderizarTablaProductos();
@@ -712,7 +825,7 @@ async function cargarRutaExistente(id) {
 
         const tasa = parseFloat(r.tasa_cambio || 0);
         document.getElementById('ruta-tasa').value = tasa.toFixed(2);
-        document.getElementById('tasaDisplay').innerText = 'Tasa: BS ' + tasa.toFixed(2);
+        document.getElementById('tasaDisplay').innerText = `Tasa: ${monedaSecundaria} ${tasa.toFixed(2)}`;
 
         if (r.almacen) {
             document.getElementById('ruta-almacen').value = r.almacen;
@@ -749,18 +862,21 @@ async function cargarRutaExistente(id) {
             agregarPago(); // al menos uno vacÃ­o
         }
 
-        // 7. CrÃ©ditos
+        // 7. CrÃ©ditos (backend viene en secundaria â†’ convertir a Principal para el input)
         (r.creditos || []).forEach(c => {
             agregarCredito();
             const idx = creditos.length - 1;
             const clienteId = c.cliente_id || (c.cliente && c.cliente.id) || c.cliente;
             const select = document.getElementById(`credito-cliente-${idx}`);
             if (select) select.value = clienteId;
+
+            const montoPrincipal = tasa > 0 ? parseFloat(c.monto_bs || 0) / tasa : 0;
             const input = document.getElementById(`credito-monto-${idx}`);
-            if (input) input.value = parseFloat(c.monto_bs || 0).toFixed(2);
+            if (input) input.value = montoPrincipal.toFixed(2);
+
             creditos[idx] = {
                 cliente_id: parseInt(clienteId) || 0,
-                monto_bs: parseFloat(c.monto_bs || 0)
+                monto_principal: montoPrincipal
             };
         });
 
@@ -779,8 +895,9 @@ async function cargarRutaExistente(id) {
             };
         });
 
-        // 9. Cobranzas
-        document.getElementById('cobranzas-bs').value = parseFloat(r.total_cobranzas_bs || 0).toFixed(2);
+        // 9. Cobranzas (backend viene en secundaria â†’ convertir a Principal para ediciÃ³n)
+        const cobranzasPrincipal = tasa > 0 ? parseFloat(r.total_cobranzas_bs || 0) / tasa : 0;
+        document.getElementById('cobranzas-principal').value = cobranzasPrincipal.toFixed(2);
 
         recalcularCuadre();
 
@@ -814,8 +931,8 @@ async function cargarHistorial() {
                 <td>${r.id}</td>
                 <td>${new Date(r.fecha).toLocaleDateString('es-VE')}</td>
                 <td><span class="badge bg-${r.estado === 'CERRADA' ? 'success' : 'warning'}">${r.estado}</span></td>
-                <td>$ ${parseFloat(r.total_venta_usd || 0).toFixed(2)}</td>
-                <td class="${difClass} fw-bold">BS ${parseFloat(r.diferencia_bs || 0).toFixed(2)}</td>
+                <td>${monedaPrincipal} ${parseFloat(r.total_venta_usd || 0).toFixed(2)}</td>
+                <td class="${difClass} fw-bold">${monedaSecundaria} ${parseFloat(r.diferencia_bs || 0).toFixed(2)}</td>
                 <td>${r.usuario_nombre || 'Admin'}</td>
                 <td>
                     <button class="btn btn-sm btn-primary me-1" onclick="verRuta(${r.id})" title="Ver"><i class="bi bi-eye"></i></button>
@@ -837,21 +954,19 @@ async function verRuta(id) {
         document.getElementById('ver-ruta-id').innerText = r.id;
         const modal = new bootstrap.Modal(document.getElementById('modalVerRuta'));
         
-        // Mostrar/ocultar botón reabrir según rol/estado
         const btnReabrir = document.getElementById('btn-reabrir-ruta');
         btnReabrir.style.display = r.estado === 'CERRADA' ? 'inline-block' : 'none';
 
-        // Construir HTML del detalle
         let html = `
             <div class="row mb-3">
                 <div class="col-md-6"><strong>Fecha:</strong> ${new Date(r.fecha).toLocaleDateString('es-VE')}</div>
                 <div class="col-md-6"><strong>Estado:</strong> <span class="badge bg-${r.estado === 'CERRADA' ? 'success' : 'warning'}">${r.estado}</span></div>
-                <div class="col-md-6"><strong>Tasa:</strong> BS ${parseFloat(r.tasa_cambio).toFixed(2)}</div>
-                <div class="col-md-6"><strong>Observación:</strong> ${r.observacion || 'N/A'}</div>
+                <div class="col-md-6"><strong>Tasa:</strong> ${monedaSecundaria} ${parseFloat(r.tasa_cambio).toFixed(2)}</div>
+                <div class="col-md-6"><strong>ObservaciÃ³n:</strong> ${r.observacion || 'N/A'}</div>
             </div>
             <h6 class="fw-bold">Productos</h6>
             <table class="table table-sm table-bordered">
-                <thead class="table-light"><tr><th>Producto</th><th>Salida</th><th>Entrada</th><th>Vendido</th><th>Precio BS</th><th>Total $</th></tr></thead>
+                <thead class="table-light"><tr><th>Producto</th><th>Salida</th><th>Entrada</th><th>Vendido</th><th>Precio ${monedaSecundaria}</th><th>Total ${monedaPrincipal}</th></tr></thead>
                 <tbody>
                     ${(r.detalles || []).map(d => `
                         <tr>
@@ -869,28 +984,28 @@ async function verRuta(id) {
                 <div class="col-md-4">
                     <h6 class="fw-bold text-success">Pagos</h6>
                     <ul class="list-group list-group-flush">
-                        ${(r.pagos || []).map(p => `<li class="list-group-item py-1">${p.metodo_nombre}: BS ${p.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin pagos</li>'}
+                        ${(r.pagos || []).map(p => `<li class="list-group-item py-1">${p.metodo_nombre}: ${monedaSecundaria} ${p.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin pagos</li>'}
                     </ul>
                 </div>
                 <div class="col-md-4">
-                    <h6 class="fw-bold text-warning">Créditos</h6>
+                    <h6 class="fw-bold text-warning">CrÃ©ditos</h6>
                     <ul class="list-group list-group-flush">
-                        ${(r.creditos || []).map(c => `<li class="list-group-item py-1">${c.cliente_nombre}: BS ${c.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin créditos</li>'}
+                        ${(r.creditos || []).map(c => `<li class="list-group-item py-1">${c.cliente_nombre}: ${monedaSecundaria} ${c.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin crÃ©ditos</li>'}
                     </ul>
                 </div>
                 <div class="col-md-4">
                     <h6 class="fw-bold text-danger">Gastos</h6>
                     <ul class="list-group list-group-flush">
-                        ${(r.gastos || []).map(g => `<li class="list-group-item py-1">${g.concepto_nombre}: BS ${g.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin gastos</li>'}
+                        ${(r.gastos || []).map(g => `<li class="list-group-item py-1">${g.concepto_nombre}: ${monedaSecundaria} ${g.monto_bs}</li>`).join('') || '<li class="list-group-item py-1 text-muted">Sin gastos</li>'}
                     </ul>
                 </div>
             </div>
             <hr>
             <div class="row text-center fw-bold">
-                <div class="col">Venta: BS ${parseFloat(r.total_venta_bs).toFixed(2)}</div>
-                <div class="col">Esperado: BS ${parseFloat(r.recaudado_esperado_bs).toFixed(2)}</div>
-                <div class="col">Real: BS ${parseFloat(r.recaudado_real_bs).toFixed(2)}</div>
-                <div class="col ${parseFloat(r.diferencia_bs) < 0 ? 'text-danger' : 'text-success'}">Dif: BS ${parseFloat(r.diferencia_bs).toFixed(2)}</div>
+                <div class="col">Venta: ${monedaSecundaria} ${parseFloat(r.total_venta_bs).toFixed(2)}</div>
+                <div class="col">Esperado: ${monedaSecundaria} ${parseFloat(r.recaudado_esperado_bs).toFixed(2)}</div>
+                <div class="col">Real: ${monedaSecundaria} ${parseFloat(r.recaudado_real_bs).toFixed(2)}</div>
+                <div class="col ${parseFloat(r.diferencia_bs) < 0 ? 'text-danger' : 'text-success'}">Dif: ${monedaSecundaria} ${parseFloat(r.diferencia_bs).toFixed(2)}</div>
             </div>
         `;
         document.getElementById('ver-ruta-contenido').innerHTML = html;
@@ -954,51 +1069,96 @@ function imprimirResumenRuta() {
     // Productos
     const tbody = document.getElementById('r-ticket-items');
     tbody.innerHTML = '';
+    let totalVentaBS = 0;
+    let totalVentaUSD = 0;
     filasProducto.forEach(f => {
         const c = calcularFila(f);
         if (c.vendido <= 0) return;
+        totalVentaBS += c.totalBS;
+        totalVentaUSD += c.totalUSD;
         const row = document.createElement('tr');
-        row.innerHTML = `<td style="text-align:center;">${c.vendido.toFixed(2)}</td><td>${f.nombre}</td><td style="text-align:right;">BS ${c.totalBS.toFixed(2)}</td>`;
+        row.innerHTML = `<td style="text-align:center;">${c.vendido.toFixed(2)}</td><td>${f.nombre}</td><td style="text-align:right;">${monedaSecundaria} ${c.totalBS.toFixed(2)}</td>`;
         tbody.appendChild(row);
     });
 
-    // Totales
-    const ventaBS = parseFloat(document.getElementById('cuadre-venta-bs').innerText.replace('BS ', '')) || 0;
-    const ventaUSD = parseFloat(document.getElementById('cuadre-venta-usd').innerText.replace('$ ', '')) || 0;
-    const esperado = parseFloat(document.getElementById('cuadre-esperado-bs').innerText.replace('BS ', '')) || 0;
-    const real = parseFloat(document.getElementById('cuadre-real-bs').innerText.replace('BS ', '')) || 0;
-    const dif = parseFloat(document.getElementById('cuadre-diferencia-bs').innerText.replace(/[BS +\-]/g, '')) || 0;
+    // Venta Total (ambas monedas)
+    const elVentaBS = document.getElementById('r-ticket-venta-bs');
+    elVentaBS.innerText = totalVentaBS.toFixed(2);
+    elVentaBS.parentElement.innerHTML = `${monedaSecundaria} <span id="r-ticket-venta-bs">${totalVentaBS.toFixed(2)}</span>`;
 
-    document.getElementById('r-ticket-venta-bs').innerText = ventaBS.toFixed(2);
-    document.getElementById('r-ticket-venta-usd').innerText = ventaUSD.toFixed(2);
+    const elVentaUSD = document.getElementById('r-ticket-venta-usd');
+    elVentaUSD.innerText = totalVentaUSD.toFixed(2);
+    elVentaUSD.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-venta-usd">${totalVentaUSD.toFixed(2)}</span>`;
 
-    // Pagos desglosados
+    // Pagos desglosados (convertidos a Principal)
     let efectivo = 0, movil = 0, punto = 0;
-    pagos.forEach(p => {
-        const met = metodosPagoCache.find(m => m.id == p.metodo_id);
-        const nombre = met ? met.nombre.toLowerCase() : '';
-        if (nombre.includes('efectivo')) efectivo += p.monto_bs;
-        else if (nombre.includes('movil')) movil += p.monto_bs;
-        else if (nombre.includes('punto') || nombre.includes('data')) punto += p.monto_bs;
+    const contPagos = document.getElementById('contenedor-pagos');
+    Array.from(contPagos.children).forEach((div) => {
+        const montoInput = parseFloat(div.querySelector('input[type="number"]').value) || 0;
+        const metodoId = parseInt(div.querySelector('select').value);
+        const metodo = metodosPagoCache.find(m => m.id === metodoId);
+        let montoPrincipal = 0;
+        if (metodo && metodo.moneda_referencia === 'PRINCIPAL') {
+            montoPrincipal = montoInput;
+        } else {
+            montoPrincipal = tasa > 0 ? montoInput / tasa : 0;
+        }
+        const nombre = metodo ? metodo.nombre.toLowerCase() : '';
+        if (nombre.includes('efectivo')) efectivo += montoPrincipal;
+        else if (nombre.includes('movil')) movil += montoPrincipal;
+        else if (nombre.includes('punto') || nombre.includes('data')) punto += montoPrincipal;
     });
 
-    document.getElementById('r-ticket-efectivo').innerText = efectivo.toFixed(2);
-    document.getElementById('r-ticket-movil').innerText = movil.toFixed(2);
-    document.getElementById('r-ticket-punto').innerText = punto.toFixed(2);
+    const elEfectivo = document.getElementById('r-ticket-efectivo');
+    elEfectivo.innerText = efectivo.toFixed(2);
+    elEfectivo.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-efectivo">${efectivo.toFixed(2)}</span>`;
 
-    const cobranzas = parseFloat(document.getElementById('cobranzas-bs').value) || 0;
+    const elMovil = document.getElementById('r-ticket-movil');
+    elMovil.innerText = movil.toFixed(2);
+    elMovil.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-movil">${movil.toFixed(2)}</span>`;
+
+    const elPunto = document.getElementById('r-ticket-punto');
+    elPunto.innerText = punto.toFixed(2);
+    elPunto.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-punto">${punto.toFixed(2)}</span>`;
+
+    // Cobranzas (Principal)
+    const cobranzas = parseFloat(document.getElementById('cobranzas-principal').value) || 0;
     document.getElementById('r-ticket-cobranzas').innerText = cobranzas.toFixed(2);
+    const cobMoneda = document.getElementById('r-ticket-cobranzas-moneda');
+    if (cobMoneda) cobMoneda.innerText = monedaPrincipal;
 
-    const totalCreditos = creditos.reduce((s, c) => s + c.monto_bs, 0);
-    const totalGastos = gastos.reduce((s, g) => s + g.monto_bs, 0);
-    document.getElementById('r-ticket-creditos').innerText = totalCreditos.toFixed(2);
-    document.getElementById('r-ticket-gastos').innerText = totalGastos.toFixed(2);
+    // CrÃ©ditos (Principal)
+    const totalCreditos = creditos.reduce((s, c) => s + (c.monto_principal || 0), 0);
+    const elCreditos = document.getElementById('r-ticket-creditos');
+    elCreditos.innerText = totalCreditos.toFixed(2);
+    elCreditos.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-creditos">${totalCreditos.toFixed(2)}</span>`;
 
-    document.getElementById('r-ticket-esperado').innerText = esperado.toFixed(2);
-    document.getElementById('r-ticket-real').innerText = real.toFixed(2);
+    // Gastos (Secundaria)
+    const totalGastosSec = gastos.reduce((s, g) => s + (g.monto_bs || 0), 0);
+    const elGastos = document.getElementById('r-ticket-gastos');
+    elGastos.innerText = totalGastosSec.toFixed(2);
+    elGastos.parentElement.innerHTML = `${monedaSecundaria} <span id="r-ticket-gastos">${totalGastosSec.toFixed(2)}</span>`;
+
+    // Cuadre en Principal
+    const totalCreditosPrincipal = creditos.reduce((s, c) => s + (c.monto_principal || 0), 0);
+    const totalGastosPrincipal = gastos.reduce((s, g) => s + (tasa > 0 ? (g.monto_bs || 0) / tasa : 0), 0);
+    const cobranzasPrincipal = parseFloat(document.getElementById('cobranzas-principal').value) || 0;
+    const totalPagosPrincipal = efectivo + movil + punto;
+    
+    const esperado = totalVentaUSD - totalCreditosPrincipal - totalGastosPrincipal + cobranzasPrincipal;
+    const real = totalPagosPrincipal + cobranzasPrincipal;
+    const dif = real - esperado;
+
+    const elEsperado = document.getElementById('r-ticket-esperado');
+    elEsperado.innerText = esperado.toFixed(2);
+    elEsperado.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-esperado">${esperado.toFixed(2)}</span>`;
+
+    const elReal = document.getElementById('r-ticket-real');
+    elReal.innerText = real.toFixed(2);
+    elReal.parentElement.innerHTML = `${monedaPrincipal} <span id="r-ticket-real">${real.toFixed(2)}</span>`;
 
     const elDif = document.getElementById('r-ticket-diferencia');
-    elDif.innerText = (dif >= 0 ? '+ ' : '- ') + 'BS ' + Math.abs(dif).toFixed(2);
+    elDif.innerText = (dif >= 0 ? '+ ' : '- ') + monedaPrincipal + ' ' + Math.abs(dif).toFixed(2);
     elDif.style.color = dif < -0.01 ? '#dc3545' : (dif > 0.01 ? '#198754' : '#000');
 
     ticket.classList.add('activo');
@@ -1032,8 +1192,7 @@ async function duplicarUltimaRuta() {
 }
 
 async function exportarCuadreExcel() {
-    // Usamos SheetJS si está cargado, o generamos CSV simple
-    let csv = 'PRODUCTO,SALIDA,ENTRADA,VENDIDO,PRECIO BS,TOTAL BS,TOTAL $\n';
+    let csv = `PRODUCTO,SALIDA,ENTRADA,VENDIDO,PRECIO ${monedaSecundaria},TOTAL ${monedaSecundaria},TOTAL ${monedaPrincipal}\n`;
     filasProducto.forEach(f => {
         const c = calcularFila(f);
         if (c.vendido > 0) {

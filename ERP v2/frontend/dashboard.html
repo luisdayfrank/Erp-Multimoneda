@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Gerencial - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #f4f6f9; }
+        .kpi-card { border-left: 4px solid; transition: transform 0.2s; }
+        .kpi-card:hover { transform: translateY(-5px); }
+        .border-primary { border-color: #0d6efd !important; }
+        .border-success { border-color: #198754 !important; }
+        .border-warning { border-color: #ffc107 !important; }
+        .border-danger { border-color: #dc3545 !important; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
+        <div class="container-fluid">
+            <div class="dropdown me-3">
+                <button class="btn btn-dark dropdown-toggle fs-5 fw-bold border-0" type="button" id="menuERP" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-grid-3x3-gap-fill me-2 text-primary"></i> ERP
+                </button>
+                <ul class="dropdown-menu dropdown-menu-dark shadow-lg" aria-labelledby="menuERP">
+                    <li><a class="dropdown-item" href="dashboard.html"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
+                    <li><a class="dropdown-item" href="pos.html"><i class="bi bi-shop me-2"></i> Punto de Venta</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item active" href="clientes.html"><i class="bi bi-people-fill me-2"></i> Módulo Clientes</a></li>
+                    <li><a class="dropdown-item" href="proveedores.html"><i class="bi bi-truck me-2"></i> Proveedores</a></li>
+                    <li><a class="dropdown-item" href="inventario.html"><i class="bi bi-box-seam me-2"></i> Inventario</a></li>
+                </ul>
+            </div>
+            
+            <span class="navbar-brand mb-0 h4 border-start border-secondary ps-3">Panel Gerencial</span>
+            
+            <div class="ms-auto d-flex text-white align-items-center">
+                <span class="me-3 text-light"><i class="bi bi-person-circle me-1"></i> <b id="nombreUsuario">Gerencia</b></span>
+                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesion()"><i class="bi bi-box-arrow-right"></i> Salir</button>
+            </div>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card kpi-card border-primary shadow-sm h-100">
+                    <div class="card-body">
+                        <h6 class="text-muted text-uppercase mb-2">Ventas Hoy (USD)</h6>
+                        <h3 class="mb-0 fw-bold" id="kpi-ventas-hoy">$ 0.00</h3>
+                        <small class="text-success" id="kpi-facturas-hoy">0 Facturas emitidas</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card kpi-card border-success shadow-sm h-100">
+                    <div class="card-body">
+                        <h6 class="text-muted text-uppercase mb-2">Acumulado del Mes</h6>
+                        <h3 class="mb-0 fw-bold" id="kpi-ventas-mes">$ 0.00</h3>
+                        <small class="text-muted">Ingresos brutos</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card kpi-card border-warning shadow-sm h-100">
+                    <div class="card-body">
+                        <h6 class="text-muted text-uppercase mb-2">Cuentas por Cobrar</h6>
+                        <h3 class="mb-0 fw-bold" id="kpi-cxc">$ 0.00</h3>
+                        <small class="text-danger fw-bold" id="kpi-clientes-cxc">0 Clientes con deuda</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card kpi-card border-danger shadow-sm h-100">
+                    <div class="card-body">
+                        <h6 class="text-muted text-uppercase mb-2">Cuentas por Pagar</h6>
+                        <h3 class="mb-0 fw-bold" id="kpi-cxp">$ 0.00</h3>
+                        <small class="text-muted">Deuda a proveedores</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-8 mb-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white fw-bold">
+                        Resumen Financiero Global
+                    </div>
+                    <div class="card-body">
+                        <canvas id="graficoFinanzas" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4 mb-4">
+                <div class="card shadow-sm h-100 border-danger">
+                    <div class="card-header bg-danger text-white fw-bold">
+                        ?? Alertas de Stock Bajo
+                    </div>
+                    <div class="card-body p-0">
+                        <table class="table table-hover mb-0 text-center">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="text-start">Producto</th>
+                                    <th>Stock Actual</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabla-alertas-stock">
+                                <tr><td colspan="2" class="text-muted py-3">Cargando...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/dashboard.js"></script>
+</body>
+</html>

@@ -399,7 +399,7 @@ class BorradorFacturaSerializer(serializers.ModelSerializer):
 class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
     presentacion = serializers.PrimaryKeyRelatedField(read_only=True)
     nombre_producto = serializers.CharField(source='presentacion.producto.nombre', read_only=True)
-    nombre_presentacion = serializers.CharField(source='presentacion.nombre_presentacion', read_only=True)
+    nombre_presentacion = serializers.SerializerMethodField()
     presentacion_id = serializers.IntegerField(write_only=True)
     cantidad_vendida = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
     subtotal_bs = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
@@ -469,6 +469,12 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
         ]
 
+    def get_nombre_presentacion(self, obj):
+        factor = int(obj.presentacion.factor_conversion) if obj.presentacion.factor_conversion % 1 == 0 else float(obj.presentacion.factor_conversion)
+        if obj.presentacion.unidad_medida:
+            return f"{obj.presentacion.unidad_medida.nombre} (x{factor})"
+        return f"x{factor}"
+    
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])
         creditos_data = validated_data.pop('creditos', [])

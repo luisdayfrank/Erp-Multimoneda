@@ -68,8 +68,8 @@ DATABASES = {
 # ======================
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    "https://tu-dominio.com",
-    "https://www.tu-dominio.com",
+    "http://163.245.213.241/",
+    "https://163.245.213.241/",
 ]
 CORS_ALLOW_CREDENTIALS = True
 

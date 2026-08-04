@@ -43,16 +43,12 @@ urlpatterns = [
     path('', include('nucleo.urls')),  # Tu API vive aquí (api/v1/...)
 ]
 
-# En desarrollo: cualquier ruta no capturada por admin o nucleo va al frontend
-##if settings.DEBUG:
-##    urlpatterns += [
-##        re_path(r'^(?P<path>.*)$', serve_frontend),
-##    ]
+# Servir frontend SPA en TODOS los entornos (producción y desarrollo)
+urlpatterns += [
+    re_path(r'^(?P<path>.*)$', serve_frontend),
+]
+
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.BASE_DIR / 'staticfiles')
     # Si usas archivos subidos (opcional):
     # urlpatterns += static(settings.MEDIA_URL, document_root=settings.BASE_DIR / 'media')
-    
-    urlpatterns += [
-        re_path(r'^(?P<path>.*)$', serve_frontend),
-    ]

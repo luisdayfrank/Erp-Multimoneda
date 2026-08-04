@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ruta de Mercado - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; }
+        .navbar-brand { font-weight: 700; }
+        .card-header { font-weight: 600; }
+        .table-ruta th { background-color: #2c3e50; color: white; text-align: center; vertical-align: middle; }
+        .table-ruta td { vertical-align: middle; }
+        .table-ruta input { text-align: center; font-weight: 600; }
+        .table-ruta .col-producto { min-width: 280px; }
+        .table-ruta .col-num { width: 110px; }
+        .totales-card { background: #fff3cd; border: 2px solid #ffc107; }
+        .cuadre-positivo { color: #198754; font-weight: 700; }
+        .cuadre-negativo { color: #dc3545; font-weight: 700; }
+        .sticky-cuadre { position: sticky; bottom: 0; z-index: 1020; box-shadow: 0 -4px 12px rgba(0,0,0,0.15); }
+        .btn-accion { min-width: 140px; }
+        .drop-zone {
+            border: 3px dashed #0d6efd;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            background: #e7f1ff;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            background: #d0e3ff;
+            border-color: #0a58ca;
+        }
+        .historial-item:hover { background-color: #e9ecef; cursor: pointer; }
+        .ticket-impresion {
+            display: none;
+            width: 58mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 10px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            padding: 2mm;
+            box-sizing: border-box;
+        }
+        .ticket-impresion * { margin: 0; padding: 0; box-sizing: border-box; }
+        .ticket-encabezado { text-align: center; margin-bottom: 2mm; border-bottom: 1px dashed #000; padding-bottom: 1mm; }
+        .ticket-encabezado h3 { font-size: 14px; font-weight: 700; }
+        .ticket-items { width: 100%; border-collapse: collapse; margin-bottom: 1mm; font-size: 9px; }
+        .ticket-items th { border-bottom: 1px dashed #000; text-align: left; padding: 0.5mm 0; font-weight: 700; }
+        .ticket-items td { padding: 0.3mm 0; vertical-align: top; }
+        .ticket-totales .fila-total { display: flex; justify-content: space-between; margin-bottom: 0.3mm; }
+        .ticket-totales .total-final { font-size: 11px; font-weight: 700; }
+        .ticket-footer { text-align: center; border-top: 1px dashed #000; padding-top: 1mm; font-size: 8px; }
+        @media print {
+            body > *:not(.ticket-impresion) { display: none !important; }
+            .ticket-impresion { display: block !important; position: absolute; left: 0; top: 0; width: 58mm; margin: 0; padding: 2mm; }
+            @page { size: 58mm auto; margin: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-dark bg-dark shadow">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1"><i class="bi bi-truck me-2"></i>ERP Ruta de Mercado</span>
+            <div class="d-flex text-white align-items-center">
+                <span class="badge bg-primary me-3 fs-6" id="tasaDisplay">Tasa: BS 0.00</span>
+                <span class="me-3">Usuario: <b id="nombreUsuario">Cargando...</b></span>
+                <a href="pos.html" class="btn btn-sm btn-outline-light fw-bold me-2">
+                    <i class="bi bi-cash-register"></i> Ir al POS
+                </a>
+                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesionLocal()">Salir</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid py-3">
+        <!-- Tabs -->
+        <ul class="nav nav-pills mb-3" id="mainTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active fw-bold" id="tab-nueva" data-bs-toggle="pill" data-bs-target="#pane-nueva" type="button">
+                    <i class="bi bi-plus-circle me-1"></i>Nueva Ruta
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link fw-bold" id="tab-historial" data-bs-toggle="pill" data-bs-target="#pane-historial" type="button" onclick="cargarHistorial()">
+                    <i class="bi bi-clock-history me-1"></i>Historial
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="mainTabContent">
+            <!-- ==================== NUEVA RUTA ==================== -->
+            <div class="tab-pane fade show active" id="pane-nueva" role="tabpanel">
+                
+                <!-- Fila superior: Datos generales -->
+                <div class="row g-3 mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Fecha</label>
+                        <input type="date" class="form-control" id="ruta-fecha">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Tasa del Día (BS/USD)</label>
+                        <input type="number" class="form-control form-control-lg text-center fw-bold text-primary" id="ruta-tasa" step="0.01" value="0.00" onchange="recalcularTodo()">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Almacén</label>
+                        <select class="form-select" id="ruta-almacen"></select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Observación</label>
+                        <input type="text" class="form-control" id="ruta-obs" placeholder="Ej: Mercado de Barquisimeto">
+                    </div>
+                </div>
+
+                <!-- Card: Generar / Importar Excel -->
+                <div class="card border-primary mb-3">
+                    <div class="card-header bg-primary text-white">
+                        <i class="bi bi-file-earmark-excel me-2"></i>Excel de Ruta
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-5">
+                                <label class="form-label fw-bold">1. Generar formato para llevar al mercado</label>
+                                <div class="input-group">
+                                    <select class="form-select" id="excel-tipo">
+                                        <option value="TODOS">Todos los productos</option>
+                                        <option value="CON_STOCK">Solo con stock disponible</option>
+                                        <option value="MANUAL">Selección manual...</option>
+                                    </select>
+                                    <button class="btn btn-success fw-bold" onclick="generarExcel()">
+                                        <i class="bi bi-download"></i> Descargar Excel
+                                    </button>
+                                </div>
+                                <div id="alerta-seleccion-manual" class="form-text text-muted mt-1" style="display:none;">
+                                    <i class="bi bi-info-circle"></i> Selecciona productos en el grid y luego genera el Excel.
+                                </div>
+                            </div>
+                            <div class="col-md-7">
+                                <label class="form-label fw-bold">2. Al regresar, sube el Excel llenado</label>
+                                <div class="drop-zone" id="dropZone" onclick="document.getElementById('inputExcel').click()">
+                                    <i class="bi bi-cloud-upload fs-1 text-primary"></i>
+                                    <p class="mb-0 fw-bold">Arrastra el Excel aquí o haz clic para seleccionar</p>
+                                    <small class="text-muted">Formato: .xlsx generado por este módulo</small>
+                                </div>
+                                <input type="file" id="inputExcel" accept=".xlsx" style="display:none;" onchange="subirExcel(this.files[0])">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card: Productos -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-box-seam me-2"></i>Productos de la Ruta</span>
+                        <button class="btn btn-sm btn-light fw-bold" onclick="agregarFilaVacia()">
+                            <i class="bi bi-plus-lg"></i> Añadir Producto
+                        </button>
+                    </div>
+                    <div class="card-body p-0 table-responsive" style="max-height: 500px; overflow-y: auto;">
+                        <table class="table table-sm table-bordered table-ruta mb-0" id="tablaProductos">
+                            <thead class="sticky-top">
+                                <tr>
+                                    <th class="col-producto">Producto</th>
+                                    <th class="col-num">Salida</th>
+                                    <th class="col-num">Entrada</th>
+                                    <th class="col-num">Vendido</th>
+                                    <th class="col-num">Precio BS</th>
+                                    <th class="col-num">Precio $</th>
+                                    <th class="col-num">Total BS</th>
+                                    <th class="col-num">Total $</th>
+                                    <th style="width:50px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbodyProductos">
+                                <tr id="fila-vacia">
+                                    <td colspan="9" class="text-muted text-center py-4">
+                                        <i class="bi bi-inbox fs-2 d-block mb-2"></i>
+                                        Genera un Excel o añade productos manualmente
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Card: Financiero -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-secondary text-white">
+                        <i class="bi bi-cash-stack me-2"></i>Cuadre Financiero
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <!-- Pagos -->
+                            <div class="col-md-3">
+                                <h6 class="fw-bold text-success border-bottom pb-1">Pagos Recibidos</h6>
+                                <div id="contenedor-pagos"></div>
+                                <button class="btn btn-sm btn-outline-success w-100 mt-2" onclick="agregarPago()">
+                                    <i class="bi bi-plus"></i> Añadir Pago
+                                </button>
+                            </div>
+                            <!-- Créditos -->
+                            <div class="col-md-3">
+                                <h6 class="fw-bold text-warning border-bottom pb-1">Créditos (Fiado)</h6>
+                                <div id="contenedor-creditos"></div>
+                                <button class="btn btn-sm btn-outline-warning w-100 mt-2" onclick="agregarCredito()">
+                                    <i class="bi bi-plus"></i> Añadir Crédito
+                                </button>
+                            </div>
+                            <!-- Gastos -->
+                            <div class="col-md-3">
+                                <h6 class="fw-bold text-danger border-bottom pb-1">Gastos de Ruta</h6>
+                                <div id="contenedor-gastos"></div>
+                                <button class="btn btn-sm btn-outline-danger w-100 mt-2" onclick="agregarGasto()">
+                                    <i class="bi bi-plus"></i> Añadir Gasto
+                                </button>
+                            </div>
+                            <!-- Cobranzas -->
+                            <div class="col-md-3">
+                                <h6 class="fw-bold text-info border-bottom pb-1">Cobranzas (Deudas Anteriores)</h6>
+                                <div class="mb-2">
+                                    <label class="form-label small">Monto recibido de deudas viejas:</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text" id="cobranzas-label">USD</span>
+                                        <input type="number" class="form-control" id="cobranzas-principal" step="0.01" value="0.00" onchange="recalcularCuadre()">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card: Cuadre Final (Sticky) -->
+                <div class="card sticky-cuadre mb-3">
+                    <div class="card-body py-2">
+                        <div class="row align-items-center text-center">
+                            <div class="col-md-3">
+                                <small class="text-muted">VENTA TOTAL</small>
+                                <h5 class="mb-0 text-primary" id="cuadre-venta-bs">BS 0.00</h5>
+                                <small class="text-muted" id="cuadre-venta-usd">$ 0.00</small>
+                            </div>
+                            <div class="col-md-3 border-start">
+                                <small class="text-muted">TOTAL RECAUDADO</small>
+                                <h5 class="mb-0 text-dark" id="cuadre-recaudado-bs">BS 0.00</h5>
+                                <small class="text-muted" id="cuadre-recaudado-usd">$ 0.00</small>
+                            </div>
+                            <div class="col-md-3 border-start">
+                                <small class="text-muted">DIFERENCIA</small>
+                                <h5 class="mb-0" id="cuadre-diferencia-bs">$ 0.00</h5>
+                            </div>
+                            <div class="col-md-3 border-start d-flex gap-2 justify-content-center align-items-center">
+                                <button class="btn btn-primary fw-bold" onclick="guardarRuta('BORRADOR')">
+                                    <i class="bi bi-save"></i> Guardar
+                                </button>
+                                <button class="btn btn-success fw-bold" onclick="cerrarRuta()">
+                                    <i class="bi bi-check2-circle"></i> Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ==================== HISTORIAL ==================== -->
+            <div class="tab-pane fade" id="pane-historial" role="tabpanel">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-clock-history me-2"></i>Historial de Rutas</span>
+                        <button class="btn btn-sm btn-outline-light" onclick="duplicarUltimaRuta()">
+                            <i class="bi bi-copy me-1"></i>Duplicar Última
+                        </button>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Fecha</th>
+                                        <th>Estado</th>
+                                        <th>Venta $</th>
+                                        <th>Diferencia BS</th>
+                                        <th>Usuario</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tbodyHistorial">
+                                    <tr><td colspan="7" class="text-center text-muted py-4">Cargando...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Ver Ruta -->
+    <div class="modal fade" id="modalVerRuta" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title fw-bold">Detalle de Ruta #<span id="ver-ruta-id"></span></h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="ver-ruta-contenido">
+                    <!-- Se llena dinámicamente -->
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                    <button class="btn btn-warning fw-bold" id="btn-reabrir-ruta" onclick="reabrirRutaActual()" style="display:none;">
+                        <i class="bi bi-unlock"></i> Reabrir Ruta
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js?v=7"></script>
+    <script src="assets/js/ruta-mercado.js?v=7"></script>
+
+    <!-- Ticket Resumen Ruta 58mm -->
+    <div id="ticket-ruta-impresion" class="ticket-impresion">
+        <div class="ticket-encabezado">
+            <h3>RESUMEN RUTA</h3>
+            <p>#<span id="r-ticket-id">---</span></p>
+            <p id="r-ticket-fecha"></p>
+        </div>
+        <div class="ticket-info">
+            <p><strong>Tasa:</strong> BS <span id="r-ticket-tasa">0.00</span></p>
+            <p><strong>Obs:</strong> <span id="r-ticket-obs"></span></p>
+            <p style="font-size:8px;">--------------------------------</p>
+        </div>
+        <table class="ticket-items">
+            <thead><tr><th>Cant</th><th>Producto</th><th>Total</th></tr></thead>
+            <tbody id="r-ticket-items"></tbody>
+        </table>
+        <div class="ticket-totales">
+            <div class="fila-total"><span>VENTA TOTAL:</span><span>BS <span id="r-ticket-venta-bs">0.00</span></span></div>
+            <div class="fila-total"><span></span><span>$ <span id="r-ticket-venta-usd">0.00</span></span></div>
+            <p style="font-size:8px;">--------------------------------</p>
+            <div class="fila-total"><span>EFECTIVO:</span><span>$ <span id="r-ticket-efectivo">0.00</span></span></div>
+            <div class="fila-total"><span>PAGO MÓVIL:</span><span>$ <span id="r-ticket-movil">0.00</span></span></div>
+            <div class="fila-total"><span>PUNTO:</span><span>$ <span id="r-ticket-punto">0.00</span></span></div>
+            <p style="font-size:8px;">--------------------------------</p>
+            <div class="fila-total"><span>CRÉDITOS:</span><span>$ <span id="r-ticket-creditos">0.00</span></span></div>
+            <div class="fila-total"><span>GASTOS:</span><span>BS <span id="r-ticket-gastos">0.00</span></span></div>
+            <div class="fila-total"><span>COBRANZAS:</span><span>$ <span id="r-ticket-cobranzas">0.00</span></span></div>
+            <p style="font-size:8px;">--------------------------------</p>
+            <div class="fila-total total-final"><span>TOTAL RECAUDADO:</span><span>$ <span id="r-ticket-recaudado">0.00</span></span></div>
+            <div class="fila-total" style="font-size:13px; font-weight:700; border-top:1px solid #000; padding-top:1mm;">
+                <span>DIFERENCIA:</span><span id="r-ticket-diferencia">$ 0.00</span>
+            </div>
+        </div>
+        <div class="ticket-footer">
+            <p>--------------------------------</p>
+            <p>Documento interno</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+erp-frontend/
+│
+├── index.html           # Pantalla de Login (Punto de entrada)
+├── pos.html             # Pantalla del Punto de Venta (Caja registradora)
+├── dashboard.html       # Pantalla de Reportes (Solo Gerentes)
+│
+└── assets/              # Carpeta de recursos estáticos
+    ├── css/
+    │   └── style.css    # Estilos globales (aquí importaremos Bootstrap o Tailwind)
+    │
+    ├── img/             # Logos, íconos de monedas, imágenes de productos
+    │
+    └── js/              # Lógica separada por módulos
+        ├── api.js       # ¡CRÍTICO! El motor que habla con Django y maneja el Token
+        ├── auth.js      # Lógica de iniciar y cerrar sesión
+        ├── pos.js       # Lógica del carrito, escanear productos y cobrar
+        └── dashboard.js # Lógica para pintar las gráficas del gerente

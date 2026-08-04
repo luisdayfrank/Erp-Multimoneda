@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventario - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; }
+        .card { border: none; box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075); }
+        .table-hover tbody tr:hover { background-color: #f1f3f5; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
+        <div class="container-fluid">
+            <div class="dropdown me-3">
+                <button class="btn btn-dark dropdown-toggle fs-5 fw-bold border-0" type="button" id="menuERP" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-grid-3x3-gap-fill me-2 text-primary"></i> ERP
+                </button>
+                <ul class="dropdown-menu dropdown-menu-dark shadow-lg" aria-labelledby="menuERP">
+                    <li><a class="dropdown-item" href="dashboard.html"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
+                    <li><a class="dropdown-item" href="pos.html"><i class="bi bi-shop me-2"></i> Punto de Venta</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="clientes.html"><i class="bi bi-people-fill me-2"></i> Módulo Clientes</a></li>
+                    <li><a class="dropdown-item" href="#"><i class="bi bi-truck me-2"></i> Proveedores</a></li>
+                    <li><a class="dropdown-item active" href="inventario.html"><i class="bi bi-box-seam me-2"></i> Inventario</a></li>
+                </ul>
+            </div>
+            <span class="navbar-brand mb-0 h4 border-start border-secondary ps-3">Gestión de Inventario</span>
+            <div class="ms-auto d-flex text-white align-items-center">
+                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesion()"><i class="bi bi-box-arrow-right"></i> Salir</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row mb-3 align-items-center">
+            <div class="col-md-6">
+                <div class="input-group input-group-lg shadow-sm">
+                    <span class="input-group-text bg-white text-primary border-0"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control border-0" id="buscador-productos" placeholder="Buscar por código o nombre...">
+                </div>
+            </div>
+            <div class="col-md-6 text-end">
+                <button class="btn btn-primary btn-lg shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#modalProductoForm">
+                    <i class="bi bi-plus-lg me-2"></i> NUEVO PRODUCTO
+                </button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0 text-center">
+                        <thead class="table-dark">
+                            <tr>
+                                <th class="text-start ps-4">Código</th>
+                                <th class="text-start">Nombre del Producto</th>
+                                <th>Categoría</th>
+                                <th>Costo Base (USD)</th>
+                                <th>Stock Total</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-productos">
+                            <tr><td colspan="6" class="text-muted py-4">Cargando inventario...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalFichaProducto" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content border-info">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-box-seam-fill me-2"></i>Ficha de Producto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                
+                <div class="modal-body p-0 bg-light">
+                    <div class="p-4 bg-white border-bottom position-relative text-center">
+                        <h4 class="fw-bold text-dark mb-1" id="ficha-nombre">---</h4>
+                        <span class="badge bg-secondary fs-6"><i class="bi bi-upc-scan me-1"></i> <span id="ficha-codigo">---</span></span>
+                    </div>
+
+                    <div class="row g-0">
+                        <div class="col-md-6 p-4 border-end border-bottom bg-white">
+                            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="bi bi-building me-1"></i> Stock por Almacén</h6>
+                            <ul class="list-group list-group-flush" id="ficha-stock-almacenes"></ul>
+                        </div>
+                        <div class="col-md-6 p-4 border-bottom bg-white">
+                            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="bi bi-tags me-1"></i> Presentaciones / Precios</h6>
+                            <ul class="list-group list-group-flush" id="ficha-presentaciones"></ul>
+                        </div>
+                    </div>
+                    
+                    <div class="p-3 bg-secondary bg-opacity-10 fw-bold border-bottom text-dark">
+                        <i class="bi bi-arrow-left-right me-2"></i>HISTORIAL DE MOVIMIENTOS (KARDEX)
+                    </div>
+                    <div id="ficha-movimientos" style="max-height: 350px; overflow-y: auto;">
+                        </div>
+                </div>
+                <div class="modal-footer bg-white">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalProductoForm" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold">Formulario de Producto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center py-5">
+                    <i class="bi bi-tools fs-1 text-muted mb-3 d-block"></i>
+                    <h5 class="text-muted">Módulo de Edición en Construcción</h5>
+                    <p class="small">Aquí irán los campos de Código, Nombre, Categoría e Impuesto.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/inventario.js"></script>
+</body>
+</html>

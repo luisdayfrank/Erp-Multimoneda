@@ -1,0 +1,17 @@
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+python -m venv venv
+venv\Scripts\activate
+
+pip install asgiref Django django-cors-headers djangorestframework djangorestframework_simplejwt PyJWT sqlparse tzdata openpyxl whitenoise uvicorn[standard]
+forzar intallaciones
+python -m pip install whitenoise -q
+
+Escribe:
+python manage.py makemigrations y presiona Enter.
+
+Y luego:
+python manage.py migrate y presiona Enter.
+
+python manage.py createsuperuser
+
+python manage.py collectstatic

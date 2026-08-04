@@ -1047,7 +1047,7 @@ class ImportarExcelRutaAPIView(APIView):
 
             detalles.append({
                 "presentacion_id": presentacion.id,
-                "nombre_producto": f"{presentacion.producto.nombre} ({f"{presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'} x{presentacion.factor_conversion}"})",
+                "nombre_producto": f"{presentacion.producto.nombre} ({presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'} x{presentacion.factor_conversion})",
                 "cantidad_salida": float(salida),
                 "cantidad_entrada": float(entrada),
                 "cantidad_vendida": float(vendido),

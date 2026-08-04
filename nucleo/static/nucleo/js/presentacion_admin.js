@@ -13,6 +13,11 @@
 (function($) {
     'use strict';
 
+    if (typeof $ === 'undefined') {
+        console.error('django.jQuery no está disponible.');
+        return;
+    }
+
     // Función principal que se ejecuta cuando el DOM está listo
     $(document).ready(function() {
 

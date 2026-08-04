@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
 
     # >>> AJUSTA ESTA DEPENDENCIA: pon el nombre de tu última migración de nucleo <<<
     dependencies = [
-        ('nucleo', '0001_initial'),  # REEMPLAZA '0001_initial' por tu última migración
+        ('nucleo', '0012_initial'),  # REEMPLAZA '0001_initial' por tu última migración
     ]
 
     operations = [

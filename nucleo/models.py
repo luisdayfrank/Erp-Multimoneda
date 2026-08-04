@@ -156,12 +156,12 @@ class Producto(models.Model):
     categoria = models.ForeignKey(Categoria, on_delete=models.RESTRICT)
     unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.RESTRICT, help_text="Unidad mínima de control")
     impuesto = models.ForeignKey(Impuesto, on_delete=models.RESTRICT)
-    costo_base_moneda_principal = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
+    costo_base_moneda_principal = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     # >>> NUEVO: Stock inicial al crear el producto <<<
     stock_inicial = models.DecimalField(
-        max_digits=15, decimal_places=4, default=Decimal('0.00'),
+        max_digits=15, decimal_places=4, default=Decimal('0.0000'),
         help_text="Stock con el que inicia este producto en el sistema."
     )
     # >>> NUEVO: Almacén donde se deposita el stock inicial <<<
@@ -193,7 +193,7 @@ class PresentacionProducto(models.Model):
     """
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='presentaciones')
     unidad_medida = models.ForeignKey('UnidadMedida', on_delete=models.RESTRICT, null=True, help_text="Ej. Caja, Bulto, Unidad")
-    factor_conversion = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.00'))
+    factor_conversion = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.0000'))
     precio_venta_principal = models.DecimalField(max_digits=15, decimal_places=4)
 
     class Meta:
@@ -232,7 +232,7 @@ class PresentacionProducto(models.Model):
 class InventarioAlmacen(models.Model):
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE, related_name='stock_por_almacen')
     almacen = models.ForeignKey(Almacen, on_delete=models.CASCADE)
-    stock_actual_unidades_base = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
+    stock_actual_unidades_base = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
 
     class Meta:
         unique_together = ('producto', 'almacen')
@@ -1006,11 +1006,23 @@ class RutaMercado(models.Model):
         # Gastos
         self.total_gastos_bs = sum(g.monto_bs for g in self.gastos.all()) or Decimal('0.00')
 
-        # Cuadre: lo que deberías tener en mano
-        # Venta - Créditos - Gastos + Cobranzas = Esperado
-        self.recaudado_esperado_bs = self.total_venta_bs - self.total_creditos_bs - self.total_gastos_bs + self.total_cobranzas_bs
-        self.recaudado_real_bs = self.total_pagos_recibidos_bs + self.total_cobranzas_bs
-        self.diferencia_bs = self.recaudado_real_bs - self.recaudado_esperado_bs
+        # ═══════════════════════════════════════════════════════
+        # CUADRE DE RUTA: 3 NÚMEROS
+        # ═══════════════════════════════════════════════════════
+        # VENTA           = total_venta_bs
+        # TOTAL RECAUDADO = Pagos + Créditos + Gastos - Cobranzas
+        # DIFERENCIA      = Venta - Total Recaudado
+        # ═══════════════════════════════════════════════════════
+        total_recaudado = (
+            self.total_pagos_recibidos_bs
+            + self.total_creditos_bs
+            + self.total_gastos_bs
+            - self.total_cobranzas_bs
+        )
+
+        self.recaudado_esperado_bs = self.total_venta_bs   # El "esperado" es la venta total
+        self.recaudado_real_bs = total_recaudado           # Lo realmente recaudado
+        self.diferencia_bs = total_recaudado - self.total_venta_bs
 
     def cerrar_ruta(self):
         """Procesa el cierre: descuenta inventario, crea CxC, bloquea edición."""
@@ -1072,9 +1084,9 @@ class RutaMercadoDetalle(models.Model):
     ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='detalles')
     presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT)
 
-    cantidad_salida = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
-    cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
-    precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.00'))
+    cantidad_salida = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
 
     class Meta:
         verbose_name = "Detalle de Ruta"

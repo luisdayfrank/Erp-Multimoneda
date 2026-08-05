@@ -227,6 +227,65 @@ class VentaAdmin(admin.ModelAdmin):
     readonly_fields = ('fecha',)
     inlines = [DetalleVentaInline, PagoVentaInline]
 
+    def save_model(self, request, obj, form, change):
+        # Detectar transición a PROCESADA
+        estado_anterior = None
+        if obj.pk:
+            try:
+                estado_anterior = Venta.objects.get(pk=obj.pk).estado
+            except Venta.DoesNotExist:
+                pass
+
+        # Flag para procesar después de que los inlines (detalles/pagos) se guarden
+        self._procesar_despues = (obj.estado == 'PROCESADA' and estado_anterior != 'PROCESADA')
+
+        # Si va a procesarse, guardamos temporalmente como BORRADOR porque
+        # procesar_venta() valida que el estado sea BORRADOR
+        if self._procesar_despues:
+            obj.estado = 'BORRADOR'
+
+        super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+
+        venta = form.instance
+
+        # Recalcular totales desde los detalles (igual que CompraAdmin)
+        subtotal = Decimal("0.00")
+        total_impuestos = Decimal("0.00")
+        for detalle in venta.detalles.all():
+            cantidad = detalle.cantidad_presentacion or Decimal("0.00")
+            precio = detalle.precio_unitario_aplicado or Decimal("0.00")
+            porcentaje = detalle.porcentaje_impuesto_aplicado or Decimal("0.00")
+
+            detalle.subtotal = cantidad * precio
+            detalle.save(update_fields=["subtotal"])
+
+            subtotal += detalle.subtotal
+            total_impuestos += detalle.subtotal * (porcentaje / Decimal("100.00"))
+
+        venta.subtotal_principal = subtotal
+        venta.total_impuestos_principal = total_impuestos
+        venta.total_principal = subtotal + total_impuestos
+
+        tasa = venta.tasa_cambio_historica or Decimal("0.00")
+        venta.total_secundaria = venta.total_principal * tasa
+        venta.save(update_fields=[
+            "subtotal_principal", "total_impuestos_principal",
+            "total_principal", "total_secundaria",
+        ])
+
+        # Procesar la venta: descuenta inventario, CxC, saldo a favor, etc.
+        if getattr(self, '_procesar_despues', False):
+            try:
+                venta.procesar_venta()
+                from django.contrib import messages
+                messages.success(request, f"Venta #{venta.id} procesada exitosamente. Inventario descontado.")
+            except ValueError as e:
+                from django.contrib import messages
+                messages.error(request, f"Error al procesar venta: {e}")
+
 
 @admin.register(Compra)
 class CompraAdmin(admin.ModelAdmin):

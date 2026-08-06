@@ -13,7 +13,7 @@ from .models import (
     ConfiguracionGlobal, BorradorFactura,
     PresentacionProducto, Venta, Compra, CuentaPorCobrar, 
     CuentaPorPagar, InventarioAlmacen, SesionCaja, Cliente,
-    MetodoPago, PagoCuentaCobrar, ConfiguracionGlobal, DetalleVenta, DetalleCompra,
+    MetodoPago, PagoCuentaCobrar, DetalleVenta, DetalleCompra,
     Producto, Proveedor, PagoCuentaPagar, ConceptoEgreso, DetalleEgresoInventario,
     Almacen,
     RutaMercado,

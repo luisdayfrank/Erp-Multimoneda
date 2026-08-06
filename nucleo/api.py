@@ -13,7 +13,7 @@ from .models import (
     ConfiguracionGlobal, BorradorFactura,
     PresentacionProducto, Venta, Compra, CuentaPorCobrar, 
     CuentaPorPagar, InventarioAlmacen, SesionCaja, Cliente,
-    MetodoPago, PagoCuentaCobrar, DetalleVenta, DetalleCompra,
+    MetodoPago, PagoCuentaCobrar, ConfiguracionGlobal, DetalleVenta, DetalleCompra,
     Producto, Proveedor, PagoCuentaPagar, ConceptoEgreso, DetalleEgresoInventario,
     Almacen,
     RutaMercado,
@@ -985,7 +985,8 @@ class ImportarExcelRutaAPIView(APIView):
 
         try:
             from openpyxl import load_workbook
-            wb = load_workbook(filename=io.BytesIO(archivo.read()), data_only=False)
+            # >>> CAMBIO 1: data_only=True para leer VALORES calculados, no fórmulas <<<
+            wb = load_workbook(filename=io.BytesIO(archivo.read()), data_only=True)
         except Exception as e:
             return Response({"error": f"No se pudo leer el archivo: {str(e)}"}, status=400)
 
@@ -1004,57 +1005,79 @@ class ImportarExcelRutaAPIView(APIView):
         detalles = []
         no_encontrados = []
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row or not row[0]:
+        # >>> CAMBIO 2: Helper robusto para convertir celdas del Excel a Decimal <<<
+        def safe_decimal(val, default=Decimal('0.00')):
+            if val is None or val == '':
+                return default
+            try:
+                # Si es float con decimales fantasmas (1.2000000000000002), redondear primero
+                if isinstance(val, float):
+                    val = round(val, 2)
+                return Decimal(str(val))
+            except Exception:
+                return default
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                if not row or not row[0]:
+                    continue
+
+                # Leer ID si existe (primera columna)
+                presentacion_id = None
+                if row[0] is not None:
+                    try:
+                        presentacion_id = int(row[0])
+                    except (ValueError, TypeError):
+                        presentacion_id = None
+
+                nombre_producto = str(row[1]).strip() if row[1] else ''
+                salida = safe_decimal(row[2])
+                entrada = safe_decimal(row[3])
+                precio_bs = safe_decimal(row[5])
+
+                presentacion = None
+
+                # 1. Buscar por ID exacto (más confiable)
+                if presentacion_id:
+                    try:
+                        presentacion = PresentacionProducto.objects.select_related('producto').get(id=presentacion_id)
+                    except PresentacionProducto.DoesNotExist:
+                        presentacion = None
+
+                # 2. Fallback: buscar por nombre si no hay ID o no se encontró
+                if not presentacion and nombre_producto:
+                    presentacion = PresentacionProducto.objects.filter(
+                        Q(producto__nombre__icontains=nombre_producto) |
+                        Q(unidad_medida__nombre__icontains=nombre_producto)
+                    ).select_related('producto').first()
+
+                if not presentacion:
+                    no_encontrados.append(nombre_producto or f"ID {presentacion_id}")
+                    continue
+
+                vendido = salida - entrada if salida > entrada else Decimal('0.00')
+                precio_usd = precio_bs / tasa if tasa > 0 else Decimal('0.00')
+                subtotal_usd = vendido * precio_usd
+
+                # >>> CAMBIO 3: F-string anidada corregida (compatibilidad Python < 3.12) <<<
+                unidad_nombre = presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'
+                nombre_completo = f"{presentacion.producto.nombre} ({unidad_nombre} x{presentacion.factor_conversion})"
+
+                detalles.append({
+                    "presentacion_id": presentacion.id,
+                    "nombre_producto": nombre_completo,
+                    "cantidad_salida": float(salida),
+                    "cantidad_entrada": float(entrada),
+                    "cantidad_vendida": float(vendido),
+                    "precio_venta_bs": float(precio_bs),
+                    "precio_venta_usd": float(precio_usd),
+                    "subtotal_usd": float(subtotal_usd),
+                })
+
+            except Exception as e:
+                # >>> CAMBIO 4: Una fila mal no rompe toda la importación <<<
+                print(f"⚠️ Error procesando fila {row_idx}: {e}")
                 continue
-
-            # Leer ID si existe (primera columna)
-            presentacion_id = None
-            if row[0] is not None:
-                try:
-                    presentacion_id = int(row[0])
-                except (ValueError, TypeError):
-                    presentacion_id = None
-
-            nombre_producto = str(row[1]).strip() if row[1] else ''
-            salida = Decimal(str(row[2])) if row[2] is not None else Decimal('0.00')
-            entrada = Decimal(str(row[3])) if row[3] is not None else Decimal('0.00')
-            precio_bs = Decimal(str(row[5])) if row[5] is not None else Decimal('0.00')
-
-            presentacion = None
-
-            # 1. Buscar por ID exacto (más confiable)
-            if presentacion_id:
-                try:
-                    presentacion = PresentacionProducto.objects.select_related('producto').get(id=presentacion_id)
-                except PresentacionProducto.DoesNotExist:
-                    presentacion = None
-
-            # 2. Fallback: buscar por nombre si no hay ID o no se encontró
-            if not presentacion and nombre_producto:
-                presentacion = PresentacionProducto.objects.filter(
-                    Q(producto__nombre__icontains=nombre_producto) |
-                    Q(unidad_medida__nombre__icontains=nombre_producto)
-                ).select_related('producto').first()
-
-            if not presentacion:
-                no_encontrados.append(nombre_producto or f"ID {presentacion_id}")
-                continue
-
-            vendido = salida - entrada if salida > entrada else Decimal('0.00')
-            precio_usd = precio_bs / tasa if tasa > 0 else Decimal('0.00')
-            subtotal_usd = vendido * precio_usd
-
-            detalles.append({
-                "presentacion_id": presentacion.id,
-                "nombre_producto": f"{presentacion.producto.nombre} ({presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'} x{presentacion.factor_conversion})",
-                "cantidad_salida": float(salida),
-                "cantidad_entrada": float(entrada),
-                "cantidad_vendida": float(vendido),
-                "precio_venta_bs": float(precio_bs),
-                "precio_venta_usd": float(precio_usd),
-                "subtotal_usd": float(subtotal_usd),
-            })
 
         return Response({
             "tasa_cambio": float(tasa),
@@ -1062,7 +1085,6 @@ class ImportarExcelRutaAPIView(APIView):
             "detalles": detalles,
             "no_encontrados": no_encontrados
         })
-
 
 class RutaMercadoListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]

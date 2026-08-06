@@ -985,12 +985,10 @@ class ImportarExcelRutaAPIView(APIView):
 
         try:
             from openpyxl import load_workbook
-            # >>> CAMBIO 1: data_only=True para leer VALORES calculados, no fórmulas <<<
             wb = load_workbook(filename=io.BytesIO(archivo.read()), data_only=True)
         except Exception as e:
             return Response({"error": f"No se pudo leer el archivo: {str(e)}"}, status=400)
 
-        # Leer tasa de la hoja Config si existe
         if 'Config' in wb.sheetnames:
             ws_config = wb['Config']
             tasa_excel = ws_config['B1'].value
@@ -1005,12 +1003,10 @@ class ImportarExcelRutaAPIView(APIView):
         detalles = []
         no_encontrados = []
 
-        # >>> CAMBIO 2: Helper robusto para convertir celdas del Excel a Decimal <<<
         def safe_decimal(val, default=Decimal('0.00')):
             if val is None or val == '':
                 return default
             try:
-                # Si es float con decimales fantasmas (1.2000000000000002), redondear primero
                 if isinstance(val, float):
                     val = round(val, 2)
                 return Decimal(str(val))
@@ -1022,7 +1018,6 @@ class ImportarExcelRutaAPIView(APIView):
                 if not row or not row[0]:
                     continue
 
-                # Leer ID si existe (primera columna)
                 presentacion_id = None
                 if row[0] is not None:
                     try:
@@ -1036,15 +1031,12 @@ class ImportarExcelRutaAPIView(APIView):
                 precio_bs = safe_decimal(row[5])
 
                 presentacion = None
-
-                # 1. Buscar por ID exacto (más confiable)
                 if presentacion_id:
                     try:
                         presentacion = PresentacionProducto.objects.select_related('producto').get(id=presentacion_id)
                     except PresentacionProducto.DoesNotExist:
                         presentacion = None
 
-                # 2. Fallback: buscar por nombre si no hay ID o no se encontró
                 if not presentacion and nombre_producto:
                     presentacion = PresentacionProducto.objects.filter(
                         Q(producto__nombre__icontains=nombre_producto) |
@@ -1059,7 +1051,6 @@ class ImportarExcelRutaAPIView(APIView):
                 precio_usd = precio_bs / tasa if tasa > 0 else Decimal('0.00')
                 subtotal_usd = vendido * precio_usd
 
-                # >>> CAMBIO 3: F-string anidada corregida (compatibilidad Python < 3.12) <<<
                 unidad_nombre = presentacion.unidad_medida.nombre if presentacion.unidad_medida else 'Base'
                 nombre_completo = f"{presentacion.producto.nombre} ({unidad_nombre} x{presentacion.factor_conversion})"
 
@@ -1075,7 +1066,6 @@ class ImportarExcelRutaAPIView(APIView):
                 })
 
             except Exception as e:
-                # >>> CAMBIO 4: Una fila mal no rompe toda la importación <<<
                 print(f"⚠️ Error procesando fila {row_idx}: {e}")
                 continue
 
@@ -1102,7 +1092,7 @@ class RutaMercadoListCreateAPIView(APIView):
     def post(self, request):
         serializer = RutaMercadoSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(usuario=request.user)
+            serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

@@ -122,7 +122,7 @@ class Cliente(EntidadComercial):
                         'monto_total': self.deuda_inicial,
                         'saldo_pendiente': self.deuda_inicial,
                         'estado': 'PENDIENTE',
-                        'fecha_vencimiento': timezone.now().date(),
+                        'fecha_vencimiento': timezone.localdate(),
                     }
                 )
             elif self.deuda_inicial <= Decimal('0.00') and not is_new:
@@ -1070,7 +1070,7 @@ class RutaMercado(models.Model):
                     monto_total=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
                     saldo_pendiente=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
                     estado='PENDIENTE',
-                    fecha_vencimiento=timezone.now().date(),
+                    fecha_vencimiento=timezone.localdate(),
                 )
                 credito.cuenta_cobrar = cxc
                 credito.save()

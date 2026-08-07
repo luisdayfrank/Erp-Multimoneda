@@ -39,7 +39,8 @@
            ============================================================ */
         .ticket-impresion {
             display: none;
-            width: 59mm;
+            width: 100%;
+            max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
             font-size: 11px;
             line-height: 1.4;
@@ -99,9 +100,9 @@
             vertical-align: top;
             font-weight: 600;
         }
-        .ticket-items td:nth-child(1) { width: 7mm; text-align: center; }
-        .ticket-items td:nth-child(2) { width: 29mm; }
-        .ticket-items td:nth-child(3) { width: 16mm; text-align: right; }
+        .ticket-items td:nth-child(1) { width: 15%; text-align: center; }
+        .ticket-items td:nth-child(2) { width: 55%; padding-right: 1mm; }
+        .ticket-items td:nth-child(3) { width: 30%; text-align: right; }
         .ticket-totales {
             border-top: 1px dashed #000;
             padding-top: 1.5mm;
@@ -197,9 +198,9 @@
                 position: absolute;
                 left: 0;
                 top: 0;
-                width: 58mm;
+                width: 48mm; /* Área real imprimible del cabezal térmico */
                 margin: 0;
-                padding: 2mm;
+                padding: 0; /* Se elimina el padding externo para aprovechar el espacio */
             }
 
             /* Asegurar que el body no tenga márgenes */

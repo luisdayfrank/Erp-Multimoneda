@@ -786,16 +786,11 @@ class TasaStatusAPIView(APIView):
         if not config:
             return Response({"error": "No existe configuración global"}, status=status.HTTP_400_BAD_REQUEST)
 
-        hoy = timezone.now().date()
+        hoy = timezone.localdate()
         requiere = True
         if config.tasa_actualizada_el:
-            requiere = config.tasa_actualizada_el.date() != hoy
+            requiere = timezone.localdate(config.tasa_actualizada_el) != hoy
 
-##        return Response({
-##            "tasa_cambio_actual": float(config.tasa_cambio_actual),
-##            "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
-##            "requiere_actualizacion": requiere
-##        })
         return Response({
             "tasa_cambio_actual": float(config.tasa_cambio_actual),
             "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,

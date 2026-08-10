@@ -1,3 +1,8 @@
+import random
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from django.http import HttpResponse
 import io
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -20,7 +25,9 @@ from .models import (
     RutaMercadoDetalle,
     RutaMercadoCredito,
     RutaMercadoPago,
-    RutaMercadoGasto
+    RutaMercadoGasto,
+    TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
+    InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto
 )
 from .serializers import (
     PresentacionProductoSerializer, VentaSerializer, CompraSerializer, 
@@ -29,7 +36,9 @@ from .serializers import (
     ConceptoEgresoSerializer, EgresoCajaSerializer, EgresoInventarioSerializer,
     BorradorFacturaSerializer, AbonoMasivoSerializer,
     RutaMercadoSerializer,
-    ImportarExcelRutaSerializer
+    ImportarExcelRutaSerializer,
+    TomaFisicaListSerializer, TomaFisicaDetalleSerializer, CrearTomaFisicaSerializer,
+    ActualizarConteoSerializer, AjusteInventarioSerializer
 )
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
@@ -1272,3 +1281,459 @@ class VentasTurnoAPIView(APIView):
             })
 
         return Response(data, status=status.HTTP_200_OK)
+
+
+# ==============================================================================
+# TOMA FÍSICA DE INVENTARIO - API VIEWS
+# ==============================================================================
+
+class CrearTomaFisicaAPIView(APIView):
+    """
+    POST /api/v1/inventarios/tomas/
+    Crea una nueva toma física según el tipo seleccionado.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = CrearTomaFisicaSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        almacen_id = serializer.validated_data['almacen_id']
+        tipo = serializer.validated_data['tipo']
+        cantidad_muestra = serializer.validated_data.get('cantidad_muestra', 10)
+        productos_ids = serializer.validated_data.get('productos_ids', [])
+        observacion = serializer.validated_data.get('observacion', '')
+
+        try:
+            almacen = Almacen.objects.get(pk=almacen_id, activo=True)
+        except Almacen.DoesNotExist:
+            return Response({"error": "Almacén no encontrado o inactivo."}, status=404)
+
+        # Crear cabecera
+        toma = TomaFisica.objects.create(
+            almacen=almacen,
+            usuario=request.user,
+            tipo=tipo,
+            cantidad_muestra=cantidad_muestra if tipo == 'MUESTRA_ALEATORIA' else 0,
+            observacion=observacion
+        )
+
+        # Obtener productos según tipo
+        inventarios = InventarioAlmacen.objects.filter(almacen=almacen).select_related('producto')
+
+        if tipo == 'COMPLETO':
+            items = list(inventarios)
+        elif tipo == 'MUESTRA_ALEATORIA':
+            items = list(inventarios)
+            if len(items) > cantidad_muestra:
+                items = random.sample(items, cantidad_muestra)
+        elif tipo == 'POR_PRODUCTO':
+            if not productos_ids:
+                toma.delete()
+                return Response({"error": "Debes seleccionar al menos un producto."}, status=400)
+            items = list(inventarios.filter(producto_id__in=productos_ids))
+        elif tipo == 'EXCEL':
+            # Para EXCEL, creamos líneas vacías que se llenarán después
+            # Por ahora creamos para todos los productos como plantilla
+            items = list(inventarios)
+        else:
+            items = list(inventarios)
+
+        # Crear detalles
+        for inv in items:
+            costo = inv.producto.costo_base_moneda_principal or Decimal('0.0000')
+            DetalleTomaFisica.objects.create(
+                toma_fisica=toma,
+                producto=inv.producto,
+                stock_teorico=inv.stock_actual_unidades_base,
+                stock_fisico=Decimal('0.0000'),
+                costo_unitario_snapshot=costo
+            )
+
+        toma.calcular_totales()
+        toma.save()
+
+        return Response({
+            "mensaje": f"Toma física #{toma.id} creada exitosamente.",
+            "toma_id": toma.id,
+            "tipo": tipo,
+            "lineas_creadas": len(items),
+            "toma": TomaFisicaDetalleSerializer(toma).data
+        }, status=status.HTTP_201_CREATED)
+
+
+class TomaFisicaListAPIView(APIView):
+    """
+    GET /api/v1/inventarios/tomas/
+    Lista todas las tomas físicas con filtros opcionales.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        queryset = TomaFisica.objects.select_related('almacen', 'usuario').prefetch_related('detalles')
+
+        estado = request.query_params.get('estado')
+        tipo = request.query_params.get('tipo')
+        almacen_id = request.query_params.get('almacen_id')
+
+        if estado:
+            queryset = queryset.filter(estado=estado)
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+        if almacen_id:
+            queryset = queryset.filter(almacen_id=almacen_id)
+
+        serializer = TomaFisicaListSerializer(queryset.order_by('-fecha_creacion'), many=True)
+        return Response(serializer.data)
+
+
+class TomaFisicaDetalleAPIView(APIView):
+    """
+    GET /api/v1/inventarios/tomas/<pk>/
+    Detalle completo de una toma física.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            toma = TomaFisica.objects.prefetch_related(
+                'detalles__producto__unidad_medida',
+                'detalles__presentacion'
+            ).get(pk=pk)
+            serializer = TomaFisicaDetalleSerializer(toma)
+            return Response(serializer.data)
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+
+
+class ActualizarConteoAPIView(APIView):
+    """
+    PUT /api/v1/inventarios/tomas/<pk>/
+    Actualiza los conteos físicos de una toma en estado BORRADOR.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    @transaction.atomic
+    def put(self, request, pk):
+        try:
+            toma = TomaFisica.objects.get(pk=pk)
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+
+        if toma.estado != 'BORRADOR':
+            return Response({"error": "Solo se pueden editar tomas en estado BORRADOR."}, status=400)
+
+        serializer = ActualizarConteoSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        detalles_data = serializer.validated_data['detalles']
+        actualizados = 0
+
+        for item in detalles_data:
+            detalle_id = item['detalle_id']
+            stock_fisico = Decimal(str(item['stock_fisico']))
+            observacion = item.get('observacion_linea', '')
+
+            try:
+                detalle = DetalleTomaFisica.objects.get(pk=detalle_id, toma_fisica=toma)
+                detalle.stock_fisico = stock_fisico
+                if observacion:
+                    detalle.observacion_linea = observacion
+                detalle.save()
+                actualizados += 1
+            except DetalleTomaFisica.DoesNotExist:
+                continue
+
+        toma.calcular_totales()
+        toma.save()
+
+        return Response({
+            "mensaje": f"{actualizados} líneas actualizadas.",
+            "toma": TomaFisicaDetalleSerializer(toma).data
+        })
+
+
+class ProcesarTomaAPIView(APIView):
+    """
+    POST /api/v1/inventarios/tomas/<pk>/procesar/
+    Procesa la toma física: crea ajustes y aplica movimientos de stock.
+    """
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        try:
+            toma = TomaFisica.objects.prefetch_related('detalles').get(pk=pk)
+            toma.procesar_toma()
+            return Response({
+                "mensaje": f"Toma física #{toma.id} procesada exitosamente.",
+                "toma": TomaFisicaDetalleSerializer(toma).data
+            })
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+        except Exception as e:
+            return Response({"error": f"Error al procesar: {str(e)}"}, status=500)
+
+
+class AnularTomaAPIView(APIView):
+    """
+    POST /api/v1/inventarios/tomas/<pk>/anular/
+    Anula una toma física. Si fue procesada, revierte los movimientos.
+    """
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        try:
+            toma = TomaFisica.objects.get(pk=pk)
+            toma.anular_toma()
+            return Response({
+                "mensaje": f"Toma física #{toma.id} anulada exitosamente.",
+                "toma": TomaFisicaDetalleSerializer(toma).data
+            })
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+
+
+class GenerarExcelTomaAPIView(APIView):
+    """
+    POST /api/v1/inventarios/tomas/<pk>/generar-excel/
+    Genera un Excel con la plantilla de la toma para llenar stock_fisico.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def post(self, request, pk):
+        try:
+            toma = TomaFisica.objects.prefetch_related('detalles__producto__unidad_medida').get(pk=pk)
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+
+        if toma.estado != 'BORRADOR':
+            return Response({"error": "Solo se pueden generar Excel de tomas en BORRADOR."}, status=400)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Toma Física"
+
+        # Encabezados
+        headers = ['DETALLE_ID', 'ID_PRODUCTO', 'CÓDIGO', 'PRODUCTO', 'UNIDAD', 'STOCK_TEÓRICO', 'STOCK_FÍSICO', 'OBSERVACIÓN']
+        ws.append(headers)
+
+        header_fill = PatternFill(start_color='2C3E50', end_color='2C3E50', fill_type='solid')
+        header_font = Font(bold=True, color='FFFFFF')
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # Filas
+        for detalle in toma.detalles.all():
+            ws.append([
+                detalle.id,
+                detalle.producto.id,
+                detalle.producto.codigo_base,
+                detalle.producto.nombre,
+                detalle.producto.unidad_medida.sigla if detalle.producto.unidad_medida else 'und',
+                float(detalle.stock_teorico),
+                None,  # STOCK_FÍSICO editable
+                ''
+            ])
+
+        # Anchos
+        ws.column_dimensions['A'].width = 12
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 40
+        ws.column_dimensions['E'].width = 10
+        ws.column_dimensions['F'].width = 15
+        ws.column_dimensions['G'].width = 15
+        ws.column_dimensions['H'].width = 25
+
+        # Proteger columnas fijas
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            for idx in [0, 1, 2, 3, 4, 5]:  # A-F protegidas
+                row[idx].protection = Protection(locked=True)
+            row[6].protection = Protection(locked=False)  # G editable
+            row[7].protection = Protection(locked=False)  # H editable
+
+        ws.protection.sheet = True
+
+        fecha_str = timezone.now().strftime('%Y%m%d_%H%M')
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename=toma_fisica_{toma.id}_{fecha_str}.xlsx'
+        wb.save(response)
+        return response
+
+
+class ImportarExcelTomaAPIView(APIView):
+    """
+    POST /api/v1/inventarios/tomas/<pk>/importar-excel/
+    Recibe un archivo .xlsx y actualiza los conteos de la toma.
+    Form-data: archivo=<file>
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        try:
+            toma = TomaFisica.objects.get(pk=pk)
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+
+        if toma.estado != 'BORRADOR':
+            return Response({"error": "Solo se pueden importar Excel en tomas BORRADOR."}, status=400)
+
+        archivo = request.FILES.get('archivo')
+        if not archivo:
+            return Response({"error": "Debes subir un archivo .xlsx"}, status=400)
+
+        try:
+            wb = load_workbook(filename=io.BytesIO(archivo.read()), data_only=True)
+        except Exception as e:
+            return Response({"error": f"No se pudo leer el archivo: {str(e)}"}, status=400)
+
+        ws = wb['Toma Física'] if 'Toma Física' in wb.sheetnames else wb.active
+
+        actualizados = 0
+        no_encontrados = []
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                if not row or not row[0]:
+                    continue
+
+                detalle_id = int(row[0])
+                stock_fisico_raw = row[6]
+                observacion = str(row[7] or '').strip()
+
+                if stock_fisico_raw is None or stock_fisico_raw == '':
+                    continue
+
+                stock_fisico = Decimal(str(stock_fisico_raw))
+
+                try:
+                    detalle = DetalleTomaFisica.objects.get(pk=detalle_id, toma_fisica=toma)
+                    detalle.stock_fisico = stock_fisico
+                    if observacion:
+                        detalle.observacion_linea = observacion
+                    detalle.save()
+                    actualizados += 1
+                except DetalleTomaFisica.DoesNotExist:
+                    no_encontrados.append(str(detalle_id))
+
+            except Exception as e:
+                print(f"⚠️ Error procesando fila {row_idx}: {e}")
+                continue
+
+        toma.calcular_totales()
+        toma.save()
+
+        return Response({
+            "mensaje": f"{actualizados} conteos importados exitosamente.",
+            "no_encontrados": no_encontrados,
+            "toma": TomaFisicaDetalleSerializer(toma).data
+        })
+
+
+class AjusteInventarioListAPIView(APIView):
+    """
+    GET /api/v1/inventarios/ajustes/
+    Lista todos los ajustes de inventario históricos.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        ajustes = AjusteInventario.objects.select_related('almacen', 'usuario', 'toma_fisica').prefetch_related('detalles')
+        serializer = AjusteInventarioSerializer(ajustes.order_by('-fecha'), many=True)
+        return Response(serializer.data)
+
+
+class AjusteInventarioDetalleAPIView(APIView):
+    """
+    GET /api/v1/inventarios/ajustes/<pk>/
+    Detalle de un ajuste específico.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            ajuste = AjusteInventario.objects.prefetch_related('detalles__producto').get(pk=pk)
+            serializer = AjusteInventarioSerializer(ajuste)
+            return Response(serializer.data)
+        except AjusteInventario.DoesNotExist:
+            return Response({"error": "Ajuste no encontrado."}, status=404)
+
+
+class InformeTomaAPIView(APIView):
+    """
+    GET /api/v1/inventarios/tomas/<pk>/informe/
+    Genera el informe completo de faltantes y sobrantes.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            toma = TomaFisica.objects.prefetch_related('detalles__producto__unidad_medida').get(pk=pk)
+        except TomaFisica.DoesNotExist:
+            return Response({"error": "Toma física no encontrada."}, status=404)
+
+        detalles = toma.detalles.all()
+
+        faltantes = []
+        sobrantes = []
+        cuadrados = []
+
+        for d in detalles:
+            item = {
+                "producto_id": d.producto.id,
+                "codigo": d.producto.codigo_base,
+                "nombre": d.producto.nombre,
+                "unidad": d.producto.unidad_medida.sigla if d.producto.unidad_medida else 'und',
+                "stock_teorico": float(d.stock_teorico),
+                "stock_fisico": float(d.stock_fisico),
+                "diferencia": float(d.diferencia),
+                "costo_unitario": float(d.costo_unitario_snapshot),
+                "valor_diferencia_usd": float(d.subtotal_diferencia),
+                "observacion": d.observacion_linea
+            }
+
+            if d.diferencia < 0:
+                faltantes.append(item)
+            elif d.diferencia > 0:
+                sobrantes.append(item)
+            else:
+                cuadrados.append(item)
+
+        valor_faltantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia < 0)
+        valor_sobrantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia > 0)
+
+        return Response({
+            "toma_id": toma.id,
+            "almacen": toma.almacen.nombre,
+            "tipo": toma.get_tipo_display(),
+            "estado": toma.get_estado_display(),
+            "fecha_creacion": toma.fecha_creacion,
+            "fecha_cierre": toma.fecha_cierre,
+            "resumen": {
+                "total_lineas": len(detalles),
+                "faltantes": len(faltantes),
+                "sobrantes": len(sobrantes),
+                "cuadrados": len(cuadrados),
+                "valor_faltantes_usd": float(valor_faltantes),
+                "valor_sobrantes_usd": float(valor_sobrantes),
+                "valor_neto_usd": float(valor_sobrantes - valor_faltantes)
+            },
+            "faltantes": faltantes,
+            "sobrantes": sobrantes,
+            "cuadrados": cuadrados
+        })

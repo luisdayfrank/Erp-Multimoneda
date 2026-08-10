@@ -42,11 +42,11 @@
             width: 100%;
             max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
-            font-size: 7.5px;
-            line-height: 1.15;
+            font-size: 7px;
+            line-height: 1.1;
             color: #000;
             background: #fff;
-            padding: 0 2mm 0 0;
+            padding: 0;
             box-sizing: border-box;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
@@ -65,19 +65,19 @@
             padding-bottom: 0.8mm;
         }
         .ticket-encabezado h3 {
-            font-size: 10px;
+            font-size: 9px;
             font-weight: 700;
             margin-bottom: 0.2mm;
             letter-spacing: 0;
         }
         .ticket-encabezado p {
-            font-size: 7.5px;
+            font-size: 7px;
             margin-bottom: 0.1mm;
             font-weight: 600;
         }
         .ticket-info {
             margin-bottom: 0.3mm;
-            font-size: 7.5px;
+            font-size: 7px;
             font-weight: 600;
         }
         .ticket-info p {
@@ -87,14 +87,14 @@
             width: 100%;
             table-layout: fixed;
             border-collapse: collapse;
-            margin-bottom: 0.3mm;
-            font-size: 7.5px;
+            margin-bottom: 0.2mm;
+            font-size: 7px;
             font-weight: 600;
         }
         .ticket-items th {
             border-bottom: 1px dashed #000;
             text-align: left;
-            padding: 0.2mm 0;
+            padding: 0.1mm 0;
             font-weight: 700;
         }
         .ticket-items td {
@@ -102,8 +102,8 @@
             vertical-align: top;
             font-weight: 600;
         }
-        .ticket-items td:nth-child(1) { width: 10%; text-align: center; overflow: hidden; }
-        .ticket-items td:nth-child(2) { width: 50%; padding-right: 0.5mm; word-break: break-word; overflow-wrap: break-word; overflow: hidden; }
+        .ticket-items td:nth-child(1) { width: 8%; text-align: center; overflow: hidden; }
+        .ticket-items td:nth-child(2) { width: 52%; padding-right: 0.3mm; word-break: break-word; overflow-wrap: break-word; overflow: hidden; }
         .ticket-items td:nth-child(3) { width: 40%; text-align: right; overflow: hidden; }
         .ticket-totales {
             border-top: 1px dashed #000;
@@ -139,13 +139,13 @@
             overflow: hidden;
         }
         .ticket-vuelto {
-            font-size: 7.5px;
+            font-size: 7px;
             font-weight: 700;
             color: #000;
             margin-bottom: 0.2mm;
         }
         .ticket-credito {
-            font-size: 7.5px;
+            font-size: 7px;
             font-weight: 700;
             color: #000;
             border: 1px solid #000;
@@ -156,8 +156,8 @@
         .ticket-footer {
             text-align: center;
             border-top: 1px dashed #000;
-            padding-top: 0.3mm;
-            font-size: 7.5px;
+            padding-top: 0.2mm;
+            font-size: 7px;
             font-weight: 600;
         }
         .ticket-footer p {
@@ -171,11 +171,11 @@
             width: 100%;
             max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
-            font-size: 7.5px;
-            line-height: 1.15;
+            font-size: 7px;
+            line-height: 1.1;
             color: #000;
             background: #fff;
-            padding: 0 2mm 0 0;
+            padding: 0;
             box-sizing: border-box;
             overflow: hidden;
         }
@@ -207,10 +207,8 @@
                 width: 48mm;
                 max-width: 48mm;
                 margin: 0;
-                padding: 0 2mm 0 0;
+                padding: 0;
                 overflow: hidden !important;
-                transform: scale(0.85);
-                transform-origin: top left;
             }
 
             /* Asegurar que el body no tenga márgenes */
@@ -690,9 +688,9 @@
             <p>RIF: J-0000000-0</p>
             <p>Av. Principal, Local 0</p>
             <p>Tel: 0000-0000000</p>
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
-            <p style="font-weight: bold; font-size: 8px;">TICKET DE VENTA</p>
-            <p style="font-size: 8px; font-weight: bold;">#<span id="ticket-id">---</span></p>
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 7px;">TICKET DE VENTA</p>
+            <p style="font-size: 7px; font-weight: bold;">#<span id="ticket-id">---</span></p>
             <p id="ticket-fecha" style="font-size: 7px;"></p>
         </div>
 
@@ -700,7 +698,7 @@
             <p><strong>Cliente:</strong> <span id="ticket-cliente">Cliente Mostrador</span></p>
             <p><strong>Cajero:</strong> <span id="ticket-cajero">Admin</span></p>
             <p><strong>Tipo:</strong> <span id="ticket-tipo-venta">CONTADO</span></p>
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
         </div>
 
         <table class="ticket-items">
@@ -727,17 +725,17 @@
                 <span>TOTAL USD:</span>
                 <span>$ <span id="ticket-total-usd">0.00</span></span>
             </div>
-            <div class="fila-total" style="font-size: 8px;">
+            <div class="fila-total" style="font-size: 7px;">
                 <span>TOT.BS:</span>
                 <span>BS <span id="ticket-total-bs">0.00</span></span>
             </div>
-            <div style="font-size: 8px; text-align: center; margin-top: 0.5mm;">
+            <div style="font-size: 7px; text-align: center; margin-top: 0.3mm;">
                 Tasa: <span id="ticket-tasa">0.00</span> BS/USD
             </div>
         </div>
 
         <!-- >>> NUEVO: Abonos a deudas anteriores <<< -->
-        <div id="ticket-abonos-viejos-section" class="ticket-pagos" style="display: none; border-top: 1px dashed #000; padding-top: 1.5mm; margin-bottom: 1.5mm; font-size: 8px; font-weight: 600;">
+        <div id="ticket-abonos-viejos-section" class="ticket-pagos" style="display: none; border-top: 1px dashed #000; padding-top: 1.5mm; margin-bottom: 1.5mm; font-size: 7px; font-weight: 600;">
             <p style="font-weight: bold; margin-bottom: 1mm;">ABONOS A DEUDAS ANTERIORES:</p>
             <div id="ticket-abonos-viejos-lista"></div>
         </div>
@@ -756,14 +754,14 @@
 
         <div id="ticket-credito-section" class="ticket-credito" style="display: none;">
             ✓ VENTA A CRÉDITO<br>
-            <span style="font-size: 8px;">Saldo pendiente registrado en CxC</span>
+            <span style="font-size: 7px;">Saldo pendiente registrado en CxC</span>
         </div>
 
         <div class="ticket-footer">
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
             <p style="font-weight: bold;">¡Gracias por su compra!</p>
-            <p style="font-size: 8px;">Documento no válido como factura fiscal</p>
-            <p style="font-size: 7px; margin-top: 1.5mm;">ERP Bimonetario v1.0</p>
+            <p style="font-size: 7px;">Documento no válido como factura fiscal</p>
+            <p style="font-size: 6px; margin-top: 1mm;">ERP Bimonetario v1.0</p>
         </div>
     </div>
 
@@ -773,10 +771,10 @@
     <div id="ticket-z-impresion" class="ticket-z-impresion">
         <div class="ticket-encabezado">
             <h3>ERP Bimonetario</h3>
-            <p style="font-size: 8px; font-weight: bold;">CORTE Z</p>
+            <p style="font-size: 7px; font-weight: bold;">CORTE Z</p>
             <p id="z-fecha-cierre" style="font-size: 7px;"></p>
-            <p style="font-size: 8px;">Cajero: <span id="z-cajero"></span></p>
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
+            <p style="font-size: 7px;">Cajero: <span id="z-cajero"></span></p>
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
         </div>
         <div style="font-size: 9px; margin-bottom: 2mm;">
             <div class="fila-total"><span>Fondo Ini.:</span><span>$ <span id="z-fondo">0.00</span></span></div>
@@ -785,11 +783,11 @@
             <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
                 <span>Total Esperado:</span><span>$ <span id="z-esperado">0.00</span></span>
             </div>
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
             <div class="fila-total"><span>Decl.USD:</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
             <div class="fila-total"><span>Decl.BS:</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
-            <p style="font-size: 8px; margin-top: 0.5mm;">--------------------------------</p>
-            <div class="fila-total" style="font-size: 8px; font-weight: bold;">
+            <p style="font-size: 7px; margin-top: 0.3mm;">--------------------------------</p>
+            <div class="fila-total" style="font-size: 7px; font-weight: bold;">
                 <span>DESC.:</span><span id="z-descuadre">CUADRE PERFECTO</span>
             </div>
         </div>

@@ -36,7 +36,8 @@ from .models import (
     RutaMercadoCredito,
     RutaMercadoPago,
     RutaMercadoGasto,
-    BorradorFactura
+    BorradorFactura,
+    TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario
 )
 
 # ==============================================================================
@@ -460,3 +461,35 @@ class RutaMercadoAdmin(admin.ModelAdmin):
         'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
     )
     inlines = [RutaMercadoDetalleInline, RutaMercadoCreditoInline, RutaMercadoPagoInline, RutaMercadoGastoInline]
+
+
+# ==============================================================================
+# TOMA FÍSICA Y AJUSTES
+# ==============================================================================
+
+class DetalleTomaFisicaInline(admin.TabularInline):
+    model = DetalleTomaFisica
+    extra = 0
+    readonly_fields = ('diferencia', 'subtotal_diferencia')
+    fields = ('producto', 'stock_teorico', 'stock_fisico', 'diferencia', 'costo_unitario_snapshot', 'observacion_linea')
+
+@admin.register(TomaFisica)
+class TomaFisicaAdmin(admin.ModelAdmin):
+    list_display = ('id', 'almacen', 'tipo', 'estado', 'fecha_creacion', 'fecha_cierre', 'diferencia_total')
+    list_filter = ('estado', 'tipo', 'almacen', 'fecha_creacion')
+    search_fields = ('id', 'observacion')
+    readonly_fields = ('fecha_creacion', 'fecha_cierre', 'total_esperado', 'total_fisico', 'diferencia_total')
+    inlines = [DetalleTomaFisicaInline]
+
+class DetalleAjusteInventarioInline(admin.TabularInline):
+    model = DetalleAjusteInventario
+    extra = 0
+    readonly_fields = ('subtotal_costo',)
+    fields = ('producto', 'cantidad_ajustada', 'costo_unitario_aplicado', 'subtotal_costo', 'tipo_ajuste')
+
+@admin.register(AjusteInventario)
+class AjusteInventarioAdmin(admin.ModelAdmin):
+    list_display = ('id', 'toma_fisica', 'almacen', 'estado', 'fecha', 'total_costo_ajuste')
+    list_filter = ('estado', 'almacen', 'fecha')
+    readonly_fields = ('fecha', 'total_costo_ajuste')
+    inlines = [DetalleAjusteInventarioInline]

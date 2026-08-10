@@ -49,7 +49,7 @@ from .api import (
     ImportarExcelTomaAPIView,
     AjusteInventarioListAPIView, 
     AjusteInventarioDetalleAPIView, 
-    InformeTomaAPIView,
+    InformeTomaAPIView
 )
 
 urlpatterns = [

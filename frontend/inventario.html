@@ -14,34 +14,14 @@
 </head>
 <body>
 
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
-        <div class="container-fluid">
-            <div class="dropdown me-3">
-                <button class="btn btn-dark dropdown-toggle fs-5 fw-bold border-0" type="button" id="menuERP" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-grid-3x3-gap-fill me-2 text-primary"></i> ERP
-                </button>
-                <ul class="dropdown-menu dropdown-menu-dark shadow-lg" aria-labelledby="menuERP">
-                    <li><a class="dropdown-item" href="dashboard.html"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
-                    <li><a class="dropdown-item" href="pos.html"><i class="bi bi-shop me-2"></i> Punto de Venta</a></li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="clientes.html"><i class="bi bi-people-fill me-2"></i> Módulo Clientes</a></li>
-                    <li><a class="dropdown-item" href="#"><i class="bi bi-truck me-2"></i> Proveedores</a></li>
-                    <li><a class="dropdown-item active" href="inventario.html"><i class="bi bi-box-seam me-2"></i> Inventario</a></li>
-                </ul>
-            </div>
-            <span class="navbar-brand mb-0 h4 border-start border-secondary ps-3">Gestión de Inventario</span>
-            <div class="ms-auto d-flex text-white align-items-center">
-                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesion()"><i class="bi bi-box-arrow-right"></i> Salir</button>
-            </div>
-        </div>
-    </nav>
+    <div id="erp-navbar"></div>
 
     <div class="container-fluid px-4">
         <div class="row mb-3 align-items-center">
             <div class="col-md-6">
                 <div class="input-group input-group-lg shadow-sm">
                     <span class="input-group-text bg-white text-primary border-0"><i class="bi bi-search"></i></span>
-                    <input type="text" class="form-control border-0" id="buscador-productos" placeholder="Buscar por código o nombre...">
+                    <input type="text" class="form-control border-0" id="buscador-productos" placeholder="Buscar por cÃ³digo o nombre...">
                 </div>
             </div>
             <div class="col-md-6 text-end">
@@ -57,9 +37,9 @@
                     <table class="table table-hover align-middle mb-0 text-center">
                         <thead class="table-dark">
                             <tr>
-                                <th class="text-start ps-4">Código</th>
+                                <th class="text-start ps-4">CÃ³digo</th>
                                 <th class="text-start">Nombre del Producto</th>
-                                <th>Categoría</th>
+                                <th>CategorÃ­a</th>
                                 <th>Costo Base (USD)</th>
                                 <th>Stock Total</th>
                                 <th>Acciones</th>
@@ -90,7 +70,7 @@
 
                     <div class="row g-0">
                         <div class="col-md-6 p-4 border-end border-bottom bg-white">
-                            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="bi bi-building me-1"></i> Stock por Almacén</h6>
+                            <h6 class="text-muted text-uppercase fw-bold mb-3"><i class="bi bi-building me-1"></i> Stock por AlmacÃ©n</h6>
                             <ul class="list-group list-group-flush" id="ficha-stock-almacenes"></ul>
                         </div>
                         <div class="col-md-6 p-4 border-bottom bg-white">
@@ -121,15 +101,15 @@
                 </div>
                 <div class="modal-body text-center py-5">
                     <i class="bi bi-tools fs-1 text-muted mb-3 d-block"></i>
-                    <h5 class="text-muted">Módulo de Edición en Construcción</h5>
-                    <p class="small">Aquí irán los campos de Código, Nombre, Categoría e Impuesto.</p>
+                    <h5 class="text-muted">MÃ³dulo de EdiciÃ³n en ConstrucciÃ³n</h5>
+                    <p class="small">AquÃ­ irÃ¡n los campos de CÃ³digo, Nombre, CategorÃ­a e Impuesto.</p>
                 </div>
             </div>
         </div>
     </div>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js"></script>
+    <script src="assets/js/menu.js"></script>
     <script src="assets/js/inventario.js"></script>
 </body>
 </html>

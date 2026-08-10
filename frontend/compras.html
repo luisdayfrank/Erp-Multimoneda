@@ -14,28 +14,7 @@
 </head>
 <body>
 
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
-        <div class="container-fluid">
-            <div class="dropdown me-3">
-                <button class="btn btn-dark dropdown-toggle fs-5 fw-bold border-0" type="button" id="menuERP" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-grid-3x3-gap-fill me-2 text-primary"></i> ERP
-                </button>
-                <ul class="dropdown-menu dropdown-menu-dark shadow-lg" aria-labelledby="menuERP">
-                    <li><a class="dropdown-item" href="dashboard.html"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
-                    <li><a class="dropdown-item" href="pos.html"><i class="bi bi-shop me-2"></i> Punto de Venta</a></li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="clientes.html"><i class="bi bi-people-fill me-2"></i> Clientes</a></li>
-                    <li><a class="dropdown-item" href="proveedores.html"><i class="bi bi-truck me-2"></i> Proveedores</a></li>
-                    <li><a class="dropdown-item" href="inventario.html"><i class="bi bi-box-seam me-2"></i> Inventario</a></li>
-                    <li><a class="dropdown-item active" href="compras.html"><i class="bi bi-bag-plus-fill me-2"></i> Registro de Compras</a></li>
-                </ul>
-            </div>
-            <span class="navbar-brand mb-0 h4 border-start border-secondary ps-3">Ingreso de Mercanc�a</span>
-            <div class="ms-auto d-flex text-white align-items-center">
-                <button class="btn btn-sm btn-danger fw-bold" onclick="cerrarSesion()"><i class="bi bi-box-arrow-right"></i> Salir</button>
-            </div>
-        </div>
-    </nav>
+<div id="erp-navbar"></div>
 
     <div class="container-fluid px-4">
         <div class="row">
@@ -53,10 +32,10 @@
                         </div>
                         <div class="row">
                             <div class="col-6 mb-3">
-                                <label class="form-label fw-bold text-muted small">Condici�n</label>
+                                <label class="form-label fw-bold text-muted small">Condición</label>
                                 <select class="form-select" id="compra-tipo">
                                     <option value="CONTADO">Contado</option>
-                                    <option value="CREDITO">A Cr�dito (Generar CxP)</option>
+                                    <option value="CREDITO">A Crédito (Generar CxP)</option>
                                 </select>
                             </div>
                             <div class="col-6 mb-3">
@@ -73,7 +52,7 @@
                     </div>
                     <div class="card-body">
                         <div class="input-group mb-3">
-                            <input type="text" class="form-control" id="buscador-catalogo" placeholder="Nombre o C�digo...">
+                            <input type="text" class="form-control" id="buscador-catalogo" placeholder="Nombre o Código...">
                         </div>
                         <div class="list-group" id="lista-resultados-busqueda" style="max-height: 300px; overflow-y: auto;">
                             <div class="text-muted text-center small py-3">Usa el buscador para agregar productos.</div>
@@ -93,7 +72,7 @@
                             <table class="table table-hover align-middle text-center mb-0">
                                 <thead class="table-light sticky-top">
                                     <tr>
-                                        <th class="text-start ps-3">Producto / Presentaci�n</th>
+                                        <th class="text-start ps-3">Producto / Presentación</th>
                                         <th style="width: 120px;">Cantidad</th>
                                         <th style="width: 150px;">Costo Unit. ($)</th>
                                         <th>Subtotal</th>
@@ -101,7 +80,7 @@
                                     </tr>
                                 </thead>
                                 <tbody id="tabla-compra">
-                                    <tr><td colspan="5" class="text-muted py-5"><i class="bi bi-box-seam fs-1 d-block mb-2"></i>A�n no has agregado productos a esta compra.</td></tr>
+                                    <tr><td colspan="5" class="text-muted py-5"><i class="bi bi-box-seam fs-1 d-block mb-2"></i>Aún no has agregado productos a esta compra.</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -135,19 +114,19 @@
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content shadow-lg border-0">
             <div class="modal-header bg-warning text-dark fw-bold">
-                <h5 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i> Análisis de Variación de Costos</h5>
+                <h5 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i> AnÃ¡lisis de VariaciÃ³n de Costos</h5>
             </div>
             <div class="modal-body">
-                <p class="text-muted small">Se han detectado diferencias entre los costos actuales de tu catálogo y los precios suministrados en esta factura. Selecciona cuáles deseas actualizar en el sistema maestro:</p>
+                <p class="text-muted small">Se han detectado diferencias entre los costos actuales de tu catÃ¡logo y los precios suministrados en esta factura. Selecciona cuÃ¡les deseas actualizar en el sistema maestro:</p>
                 <div class="table-responsive">
                     <table class="table table-sm table-striped align-middle text-center">
                         <thead class="table-dark">
                             <tr>
-                                <th class="text-start ps-3">Producto / Presentación</th>
-                                <th>Costo Catálogo</th>
+                                <th class="text-start ps-3">Producto / PresentaciÃ³n</th>
+                                <th>Costo CatÃ¡logo</th>
                                 <th>Costo Facturado</th>
-                                <th>Variación</th>
-                                <th>¿Actualizar Ficha?</th>
+                                <th>VariaciÃ³n</th>
+                                <th>Â¿Actualizar Ficha?</th>
                             </tr>
                         </thead>
                         <tbody id="lista-cambios-costos">
@@ -165,6 +144,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js"></script>
+    <script src="assets/js/menu.js"></script>
     <script src="assets/js/compras.js"></script>
 </body>
 </html>

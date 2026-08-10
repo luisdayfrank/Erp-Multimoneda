@@ -1153,3 +1153,249 @@ class RutaMercadoGasto(models.Model):
     class Meta:
         verbose_name = "Gasto de Ruta"
         verbose_name_plural = "Gastos de Ruta"
+
+
+# ==============================================================================
+# 8. TOMA FÍSICA DE INVENTARIO Y AJUSTES
+# ==============================================================================
+
+class TomaFisica(models.Model):
+    ESTADOS = (
+        ('BORRADOR', 'Borrador'),
+        ('PROCESADO', 'Procesado'),
+        ('ANULADO', 'Anulado'),
+    )
+    TIPOS = (
+        ('COMPLETO', 'Inventario Completo'),
+        ('MUESTRA_ALEATORIA', 'Muestra Aleatoria'),
+        ('POR_PRODUCTO', 'Por Productos Seleccionados'),
+        ('EXCEL', 'Carga desde Excel'),
+    )
+
+    almacen = models.ForeignKey(Almacen, on_delete=models.RESTRICT)
+    usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_cierre = models.DateTimeField(blank=True, null=True)
+    estado = models.CharField(max_length=15, choices=ESTADOS, default='BORRADOR')
+    tipo = models.CharField(max_length=20, choices=TIPOS, default='COMPLETO')
+    cantidad_muestra = models.PositiveIntegerField(default=0, help_text="Solo aplica para MUESTRA_ALEATORIA")
+    total_esperado = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    total_fisico = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    diferencia_total = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    observacion = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-fecha_creacion']
+        verbose_name = "Toma Física"
+        verbose_name_plural = "Tomas Físicas"
+
+    def __str__(self):
+        return f"Toma #{self.id} - {self.almacen.nombre} ({self.get_tipo_display()})"
+
+    def calcular_totales(self):
+        """Recalcula totales desde los detalles."""
+        esperado = Decimal('0.0000')
+        fisico = Decimal('0.0000')
+        for d in self.detalles.all():
+            esperado += d.stock_teorico * d.costo_unitario_snapshot
+            fisico += (d.stock_fisico or Decimal('0.0000')) * d.costo_unitario_snapshot
+        self.total_esperado = esperado
+        self.total_fisico = fisico
+        self.diferencia_total = fisico - esperado
+
+    def procesar_toma(self):
+        """
+        Procesa la toma física:
+        - Crea AjusteInventario.
+        - Aplica movimientos de stock (entrada/salida).
+        - Bloquea la toma.
+        """
+        from django.db import transaction
+        with transaction.atomic():
+            if self.estado != 'BORRADOR':
+                raise ValueError("Solo se pueden procesar tomas en estado BORRADOR.")
+
+            config = ConfiguracionGlobal.objects.first()
+            permitir_negativo = config.permitir_stock_negativo if config else False
+
+            # Crear AjusteInventario
+            ajuste = AjusteInventario.objects.create(
+                toma_fisica=self,
+                almacen=self.almacen,
+                usuario=self.usuario,
+                estado='BORRADOR',
+                observacion=f"Generado automáticamente desde Toma Física #{self.id}"
+            )
+
+            total_costo_ajuste = Decimal('0.0000')
+
+            for detalle in self.detalles.all():
+                diferencia = (detalle.stock_fisico or Decimal('0.0000')) - detalle.stock_teorico
+
+                if diferencia == 0:
+                    continue
+
+                tipo_ajuste = 'ENTRADA' if diferencia > 0 else 'SALIDA'
+                cantidad_abs = abs(diferencia)
+                costo = detalle.costo_unitario_snapshot
+                subtotal = cantidad_abs * costo
+
+                # Validar stock para salidas
+                if tipo_ajuste == 'SALIDA':
+                    inventario = InventarioAlmacen.objects.filter(
+                        producto=detalle.producto,
+                        almacen=self.almacen
+                    ).first()
+
+                    stock_actual = inventario.stock_actual_unidades_base if inventario else Decimal('0.0000')
+
+                    if not permitir_negativo and stock_actual < cantidad_abs:
+                        raise ValueError(
+                            f"Stock insuficiente para ajustar '{detalle.producto.nombre}'. "
+                            f"Disponible: {stock_actual}, Requerido: {cantidad_abs}"
+                        )
+
+                # Aplicar movimiento de inventario
+                inventario, _ = InventarioAlmacen.objects.get_or_create(
+                    producto=detalle.producto,
+                    almacen=self.almacen,
+                    defaults={'stock_actual_unidades_base': Decimal('0.0000')}
+                )
+
+                if tipo_ajuste == 'ENTRADA':
+                    inventario.stock_actual_unidades_base += cantidad_abs
+                else:
+                    inventario.stock_actual_unidades_base -= cantidad_abs
+                inventario.save()
+
+                # Crear detalle del ajuste
+                DetalleAjusteInventario.objects.create(
+                    ajuste=ajuste,
+                    producto=detalle.producto,
+                    cantidad_ajustada=diferencia,  # Positivo o negativo
+                    costo_unitario_aplicado=costo,
+                    subtotal_costo=subtotal,
+                    tipo_ajuste=tipo_ajuste
+                )
+
+                total_costo_ajuste += subtotal
+
+            # Finalizar ajuste
+            ajuste.total_costo_ajuste = total_costo_ajuste
+            ajuste.estado = 'PROCESADO'
+            ajuste.save()
+
+            # Finalizar toma
+            self.calcular_totales()
+            self.estado = 'PROCESADO'
+            self.fecha_cierre = timezone.now()
+            self.save()
+
+    def anular_toma(self):
+        """
+        Anula la toma. Si ya fue procesada, revierte los movimientos de stock.
+        """
+        from django.db import transaction
+        with transaction.atomic():
+            if self.estado == 'ANULADO':
+                raise ValueError("La toma ya está anulada.")
+
+            # Si fue procesada, revertir ajustes
+            if self.estado == 'PROCESADO':
+                try:
+                    ajuste = self.ajusteinventario
+                except AjusteInventario.DoesNotExist:
+                    ajuste = None
+
+                if ajuste and ajuste.estado == 'PROCESADO':
+                    for detalle in ajuste.detalles.all():
+                        inventario = InventarioAlmacen.objects.filter(
+                            producto=detalle.producto,
+                            almacen=self.almacen
+                        ).first()
+
+                        if inventario:
+                            # Revertir: si fue entrada, restar; si fue salida, sumar
+                            if detalle.tipo_ajuste == 'ENTRADA':
+                                inventario.stock_actual_unidades_base -= abs(detalle.cantidad_ajustada)
+                            else:
+                                inventario.stock_actual_unidades_base += abs(detalle.cantidad_ajustada)
+                            inventario.save()
+
+                    ajuste.estado = 'ANULADO'
+                    ajuste.save()
+
+            self.estado = 'ANULADO'
+            self.save()
+
+
+class DetalleTomaFisica(models.Model):
+    toma_fisica = models.ForeignKey(TomaFisica, on_delete=models.CASCADE, related_name='detalles')
+    producto = models.ForeignKey(Producto, on_delete=models.RESTRICT)
+    presentacion = models.ForeignKey(PresentacionProducto, on_delete=models.RESTRICT, null=True, blank=True)
+    stock_teorico = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    stock_fisico = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    costo_unitario_snapshot = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+    observacion_linea = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        verbose_name = "Detalle de Toma Física"
+        verbose_name_plural = "Detalles de Toma Física"
+
+    @property
+    def diferencia(self):
+        return (self.stock_fisico or Decimal('0.0000')) - self.stock_teorico
+
+    @property
+    def subtotal_diferencia(self):
+        return self.diferencia * self.costo_unitario_snapshot
+
+    def __str__(self):
+        return f"{self.producto.nombre} - Teórico: {self.stock_teorico} | Físico: {self.stock_fisico}"
+
+
+class AjusteInventario(models.Model):
+    ESTADOS = (
+        ('BORRADOR', 'Borrador'),
+        ('PROCESADO', 'Procesado'),
+        ('ANULADO', 'Anulado'),
+    )
+
+    toma_fisica = models.OneToOneField(TomaFisica, on_delete=models.CASCADE, related_name='ajusteinventario', null=True, blank=True)
+    almacen = models.ForeignKey(Almacen, on_delete=models.RESTRICT)
+    usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
+    fecha = models.DateTimeField(auto_now_add=True)
+    estado = models.CharField(max_length=15, choices=ESTADOS, default='BORRADOR')
+    total_costo_ajuste = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    observacion = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = "Ajuste de Inventario"
+        verbose_name_plural = "Ajustes de Inventario"
+
+    def __str__(self):
+        origen = f"(Toma #{self.toma_fisica.id})" if self.toma_fisica else "(Manual)"
+        return f"Ajuste #{self.id} {origen} - {self.estado}"
+
+
+class DetalleAjusteInventario(models.Model):
+    TIPOS = (
+        ('ENTRADA', 'Entrada de Stock'),
+        ('SALIDA', 'Salida de Stock'),
+    )
+
+    ajuste = models.ForeignKey(AjusteInventario, on_delete=models.CASCADE, related_name='detalles')
+    producto = models.ForeignKey(Producto, on_delete=models.RESTRICT)
+    cantidad_ajustada = models.DecimalField(max_digits=15, decimal_places=4, help_text="Positivo=entrada, Negativo=salida")
+    costo_unitario_aplicado = models.DecimalField(max_digits=15, decimal_places=4)
+    subtotal_costo = models.DecimalField(max_digits=15, decimal_places=2)
+    tipo_ajuste = models.CharField(max_length=10, choices=TIPOS)
+
+    class Meta:
+        verbose_name = "Detalle de Ajuste"
+        verbose_name_plural = "Detalles de Ajuste"
+
+    def __str__(self):
+        signo = "+" if self.tipo_ajuste == 'ENTRADA' else ""
+        return f"{self.producto.nombre}: {signo}{self.cantidad_ajustada} ({self.tipo_ajuste})"

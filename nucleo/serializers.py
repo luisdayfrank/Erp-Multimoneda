@@ -9,7 +9,11 @@ from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, Sesion
     RutaMercadoCredito,
     RutaMercadoPago,
     RutaMercadoGasto,
-    BorradorFactura
+    BorradorFactura,
+    TomaFisica,
+    DetalleTomaFisica,
+    AjusteInventario,
+    DetalleAjusteInventario
     )
 from django.utils import timezone
 

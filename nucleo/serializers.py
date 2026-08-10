@@ -541,3 +541,150 @@ class ImportarExcelRutaSerializer(serializers.Serializer):
     """Serializer para recibir el archivo Excel y devolver JSON pre-llenado."""
     archivo = serializers.FileField()
     tasa_cambio = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
+
+
+# ==============================================================================
+# SERIALIZADORES DE TOMA FÍSICA Y AJUSTES
+# ==============================================================================
+
+class DetalleTomaFisicaSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    producto_codigo = serializers.CharField(source='producto.codigo_base', read_only=True)
+    unidad_medida = serializers.CharField(source='producto.unidad_medida.sigla', read_only=True)
+    diferencia = serializers.DecimalField(max_digits=15, decimal_places=4, read_only=True)
+    subtotal_diferencia = serializers.DecimalField(max_digits=15, decimal_places=4, read_only=True)
+    presentacion_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = DetalleTomaFisica
+        fields = [
+            'id', 'producto', 'producto_nombre', 'producto_codigo', 'unidad_medida',
+            'presentacion', 'presentacion_id',
+            'stock_teorico', 'stock_fisico', 'diferencia',
+            'costo_unitario_snapshot', 'subtotal_diferencia', 'observacion_linea'
+        ]
+
+
+class TomaFisicaListSerializer(serializers.ModelSerializer):
+    almacen_nombre = serializers.CharField(source='almacen.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+    cantidad_lineas = serializers.SerializerMethodField()
+    lineas_pendientes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TomaFisica
+        fields = [
+            'id', 'almacen', 'almacen_nombre', 'usuario', 'usuario_nombre',
+            'fecha_creacion', 'fecha_cierre', 'estado', 'estado_display',
+            'tipo', 'tipo_display', 'cantidad_muestra',
+            'total_esperado', 'total_fisico', 'diferencia_total',
+            'cantidad_lineas', 'lineas_pendientes', 'observacion'
+        ]
+
+    def get_cantidad_lineas(self, obj):
+        return obj.detalles.count()
+
+    def get_lineas_pendientes(self, obj):
+        # Líneas donde stock_fisico es 0 (asumiendo que 0 = no contado aún)
+        # O mejor: líneas donde stock_fisico no ha sido modificado del default
+        return obj.detalles.filter(stock_fisico=Decimal('0.0000')).count()
+
+
+class TomaFisicaDetalleSerializer(serializers.ModelSerializer):
+    almacen_nombre = serializers.CharField(source='almacen.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+    detalles = DetalleTomaFisicaSerializer(many=True, read_only=True)
+    resumen = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TomaFisica
+        fields = [
+            'id', 'almacen', 'almacen_nombre', 'usuario', 'usuario_nombre',
+            'fecha_creacion', 'fecha_cierre', 'estado', 'estado_display',
+            'tipo', 'tipo_display', 'cantidad_muestra',
+            'total_esperado', 'total_fisico', 'diferencia_total',
+            'observacion', 'detalles', 'resumen'
+        ]
+
+    def get_resumen(self, obj):
+        detalles = obj.detalles.all()
+        faltantes = sum(1 for d in detalles if d.diferencia < 0)
+        sobrantes = sum(1 for d in detalles if d.diferencia > 0)
+        cuadrados = sum(1 for d in detalles if d.diferencia == 0)
+        pendientes = sum(1 for d in detalles if d.stock_fisico == Decimal('0.0000'))
+
+        valor_faltantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia < 0)
+        valor_sobrantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia > 0)
+
+        return {
+            'total_lineas': len(detalles),
+            'faltantes': faltantes,
+            'sobrantes': sobrantes,
+            'cuadrados': cuadrados,
+            'pendientes': pendientes,
+            'valor_faltantes_usd': float(valor_faltantes),
+            'valor_sobrantes_usd': float(valor_sobrantes),
+            'valor_neto_diferencia_usd': float(valor_sobrantes - valor_faltantes)
+        }
+
+
+class CrearTomaFisicaSerializer(serializers.Serializer):
+    almacen_id = serializers.IntegerField(required=True)
+    tipo = serializers.ChoiceField(choices=TomaFisica.TIPOS, default='COMPLETO')
+    cantidad_muestra = serializers.IntegerField(required=False, default=10, min_value=1)
+    productos_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=False, allow_empty=True
+    )
+    observacion = serializers.CharField(required=False, allow_blank=True)
+
+
+class ActualizarConteoSerializer(serializers.Serializer):
+    detalles = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=False,
+        min_length=1
+    )
+
+    def validate_detalles(self, value):
+        for i, item in enumerate(value):
+            if 'detalle_id' not in item:
+                raise serializers.ValidationError(f"El item #{i+1} no tiene 'detalle_id'.")
+            if 'stock_fisico' not in item:
+                raise serializers.ValidationError(f"El item #{i+1} no tiene 'stock_fisico'.")
+            try:
+                float(item['stock_fisico'])
+            except (ValueError, TypeError):
+                raise serializers.ValidationError(f"El item #{i+1} tiene stock_fisico inválido.")
+        return value
+
+
+class DetalleAjusteInventarioSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    producto_codigo = serializers.CharField(source='producto.codigo_base', read_only=True)
+
+    class Meta:
+        model = DetalleAjusteInventario
+        fields = [
+            'id', 'producto', 'producto_nombre', 'producto_codigo',
+            'cantidad_ajustada', 'costo_unitario_aplicado',
+            'subtotal_costo', 'tipo_ajuste'
+        ]
+
+
+class AjusteInventarioSerializer(serializers.ModelSerializer):
+    almacen_nombre = serializers.CharField(source='almacen.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    toma_fisica_id = serializers.IntegerField(source='toma_fisica.id', read_only=True)
+    detalles = DetalleAjusteInventarioSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = AjusteInventario
+        fields = [
+            'id', 'toma_fisica', 'toma_fisica_id', 'almacen', 'almacen_nombre',
+            'usuario', 'usuario_nombre', 'fecha', 'estado',
+            'total_costo_ajuste', 'observacion', 'detalles'
+        ]

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventario - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; height: 100vh; overflow: hidden; }
+        .inv-container { height: calc(100vh - 56px); }
+        .sidebar-panel { height: 100%; overflow-y: auto; border-right: 1px solid #dee2e6; background: white; }
+        .main-panel { height: 100%; overflow-y: auto; padding: 20px; }
+        .toma-card { cursor: pointer; transition: all 0.2s; border-left: 4px solid transparent; }
+        .toma-card:hover { background-color: #f1f3f5; }
+        .toma-card.active { background-color: #e7f1ff; border-left-color: #0d6efd; }
+        .toma-card.PROCESADO { border-left-color: #198754; }
+        .toma-card.ANULADO { border-left-color: #dc3545; opacity: 0.7; }
+        .toma-card.BORRADOR { border-left-color: #ffc107; }
+
+        .producto-conteo-card {
+            border: 2px solid #dee2e6;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            background: white;
+            transition: transform 0.15s;
+        }
+        .producto-conteo-card:active { transform: scale(0.98); }
+
+        .progress-conteo { height: 8px; border-radius: 4px; }
+
+        .stat-box {
+            padding: 16px;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+        }
+        .stat-box.faltantes { background: linear-gradient(135deg, #dc3545, #b02a37); }
+        .stat-box.sobrantes { background: linear-gradient(135deg, #198754, #146c43); }
+        .stat-box.cuadrados { background: linear-gradient(135deg, #6c757d, #495057); }
+        .stat-box.pendientes { background: linear-gradient(135deg, #ffc107, #cc9a06); color: #212529; }
+
+        .linea-toma { transition: background 0.2s; }
+        .linea-toma:hover { background-color: #f8f9fa; }
+        .linea-toma.faltante { background-color: #fff5f5; }
+        .linea-toma.sobrante { background-color: #f0fff4; }
+        .linea-toma.cuadrado { background-color: #f8f9fa; }
+
+        /* Ticket de informe 58mm */
+        .ticket-informe {
+            display: none;
+            width: 100%;
+            max-width: 48mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 9px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            padding: 2mm;
+        }
+        .ticket-informe * { margin: 0; padding: 0; box-sizing: border-box; }
+        .ticket-informe .encabezado { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 2mm; margin-bottom: 2mm; }
+        .ticket-informe .encabezado h3 { font-size: 12px; font-weight: 700; }
+        .ticket-informe .fila { display: flex; justify-content: space-between; margin-bottom: 1mm; }
+        .ticket-informe .seccion { border-top: 1px dashed #000; padding-top: 1.5mm; margin-top: 1.5mm; }
+        .ticket-informe .total-final { font-size: 11px; font-weight: 700; border-top: 1px solid #000; padding-top: 1mm; margin-top: 1mm; }
+
+        @media print {
+            .inv-container, .navbar, .modal, .modal-backdrop { display: none !important; }
+            .ticket-informe.activo {
+                display: block !important;
+                position: absolute; left: 0; top: 0;
+                width: 48mm; margin: 0; padding: 0;
+            }
+            body { margin: 0 !important; padding: 0 !important; background: white !important; }
+            @page { size: 48mm auto; margin: 0; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="erp-navbar"></div>
+
+<div class="container-fluid inv-container">
+    <div class="row h-100">
+        <!-- Sidebar: Lista de Tomas -->
+        <div class="col-md-3 sidebar-panel p-0">
+            <div class="p-3 bg-dark text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fw-bold"><i class="bi bi-clipboard-data me-2"></i>Tomas Físicas</h5>
+            </div>
+            <div class="p-2">
+                <button class="btn btn-primary w-100 fw-bold mb-2" onclick="abrirModalNuevaToma()">
+                    <i class="bi bi-plus-lg me-1"></i> NUEVA TOMA
+                </button>
+                <div class="input-group input-group-sm mb-2">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="filtro-tomas" placeholder="Buscar..." onkeyup="filtrarTomas()">
+                </div>
+            </div>
+            <div id="lista-tomas" style="overflow-y: auto; max-height: calc(100% - 130px);">
+                <div class="text-center text-muted p-4">Cargando...</div>
+            </div>
+        </div>
+
+        <!-- Main: Detalle de Toma -->
+        <div class="col-md-9 main-panel bg-light">
+            <div id="panel-vacio" class="d-flex flex-column justify-content-center align-items-center h-100 text-muted">
+                <i class="bi bi-clipboard-data fs-1 mb-3"></i>
+                <h5>Selecciona una toma física o crea una nueva</h5>
+            </div>
+
+            <div id="panel-detalle" style="display: none;">
+                <!-- Header de Toma -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start flex-wrap">
+                            <div>
+                                <h4 class="fw-bold mb-1">Toma Física #<span id="det-toma-id">--</span></h4>
+                                <span class="badge" id="det-toma-estado">--</span>
+                                <span class="badge bg-secondary" id="det-toma-tipo">--</span>
+                                <p class="text-muted mb-0 mt-1">
+                                    <i class="bi bi-building me-1"></i><span id="det-toma-almacen">--</span> |
+                                    <i class="bi bi-person me-1"></i><span id="det-toma-usuario">--</span> |
+                                    <i class="bi bi-calendar me-1"></i><span id="det-toma-fecha">--</span>
+                                </p>
+                            </div>
+                            <div class="text-end mt-2 mt-md-0">
+                                <div id="det-toma-acciones">
+                                    <!-- Botones dinámicos -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="row g-3 mb-3" id="det-toma-stats">
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box faltantes">
+                            <div class="fs-4 fw-bold" id="stat-faltantes">0</div>
+                            <small>FALTANTES</small>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box sobrantes">
+                            <div class="fs-4 fw-bold" id="stat-sobrantes">0</div>
+                            <small>SOBRANTES</small>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box cuadrados">
+                            <div class="fs-4 fw-bold" id="stat-cuadrados">0</div>
+                            <small>CUADRADOS</small>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-box pendientes">
+                            <div class="fs-4 fw-bold" id="stat-pendientes">0</div>
+                            <small>PENDIENTES</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabla de Líneas -->
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold"><i class="bi bi-list-check me-2"></i>Detalle del Conteo</h6>
+                        <div>
+                            <button class="btn btn-sm btn-outline-success" id="btn-conteo-interactivo" onclick="iniciarConteoInteractivo()">
+                                <i class="bi bi-phone"></i> Conteo 1x1
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary ms-1" id="btn-descargar-excel" onclick="descargarExcelToma()">
+                                <i class="bi bi-file-earmark-excel"></i> Excel
+                            </button>
+                            <button class="btn btn-sm btn-outline-info ms-1" id="btn-cargar-excel" onclick="abrirModalCargarExcel()">
+                                <i class="bi bi-upload"></i> Cargar
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive" style="max-height: 450px; overflow-y: auto;">
+                            <table class="table table-sm table-hover mb-0 align-middle">
+                                <thead class="table-dark sticky-top">
+                                    <tr>
+                                        <th class="text-start">Producto</th>
+                                        <th class="text-center">Unidad</th>
+                                        <th class="text-end">Stock Teórico</th>
+                                        <th class="text-end">Stock Físico</th>
+                                        <th class="text-end">Diferencia</th>
+                                        <th class="text-end">Valor USD</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-detalles-toma"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-white">
+                        <div class="row text-end">
+                            <div class="col-md-4 offset-md-8">
+                                <small class="text-muted">Valor Faltantes:</small>
+                                <span class="text-danger fw-bold ms-2" id="footer-valor-faltantes">$ 0.00</span>
+                            </div>
+                            <div class="col-md-4 offset-md-8">
+                                <small class="text-muted">Valor Sobrantes:</small>
+                                <span class="text-success fw-bold ms-2" id="footer-valor-sobrantes">$ 0.00</span>
+                            </div>
+                            <div class="col-md-4 offset-md-8">
+                                <small class="text-muted">Diferencia Neta:</small>
+                                <span class="fw-bold ms-2" id="footer-valor-neto">$ 0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Nueva Toma -->
+<div class="modal fade" id="modalNuevaToma" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold"><i class="bi bi-plus-circle me-2"></i>Nueva Toma Física</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Almacén</label>
+                    <select class="form-select" id="nueva-toma-almacen"></select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Tipo de Toma</label>
+                    <select class="form-select" id="nueva-toma-tipo" onchange="cambiarTipoToma()">
+                        <option value="COMPLETO">Inventario Completo</option>
+                        <option value="MUESTRA_ALEATORIA">Muestra Aleatoria</option>
+                        <option value="POR_PRODUCTO">Por Productos Seleccionados</option>
+                        <option value="EXCEL">Carga desde Excel</option>
+                    </select>
+                </div>
+                <div class="mb-3" id="grupo-muestra" style="display: none;">
+                    <label class="form-label fw-bold">Cantidad de Productos (Muestra)</label>
+                    <input type="number" class="form-control" id="nueva-toma-muestra" value="10" min="1">
+                </div>
+                <div class="mb-3" id="grupo-productos" style="display: none;">
+                    <label class="form-label fw-bold">Buscar y Seleccionar Productos</label>
+                    <input type="text" class="form-control mb-2" id="buscador-productos-toma" placeholder="Escribe para filtrar..." onkeyup="filtrarProductosToma()">
+                    <div class="list-group" id="lista-productos-seleccion" style="max-height: 200px; overflow-y: auto;">
+                        <!-- Productos dinámicos -->
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Observación</label>
+                    <textarea class="form-control" id="nueva-toma-obs" rows="2" placeholder="Opcional..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button class="btn btn-primary fw-bold" onclick="crearNuevaToma()">CREAR TOMA</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Conteo Interactivo (1x1) -->
+<div class="modal fade" id="modalConteoInteractivo" data-bs-backdrop="static" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title fw-bold"><i class="bi bi-phone me-2"></i>Conteo Interactivo</h5>
+                <button type="button" class="btn-close btn-close-white" onclick="cerrarConteoInteractivo()"></button>
+            </div>
+            <div class="modal-body bg-light">
+                <!-- Progreso -->
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="fw-bold">Progreso</small>
+                        <small class="fw-bold" id="conteo-progreso-texto">0 / 0</small>
+                    </div>
+                    <div class="progress progress-conteo">
+                        <div class="progress-bar bg-success" id="conteo-progreso-barra" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Tarjeta Producto Actual -->
+                <div class="producto-conteo-card shadow-sm" id="conteo-tarjeta-producto">
+                    <div class="mb-2">
+                        <span class="badge bg-secondary" id="conteo-codigo">COD-001</span>
+                        <span class="badge bg-info text-dark" id="conteo-unidad">UND</span>
+                    </div>
+                    <h3 class="fw-bold mb-3" id="conteo-nombre">Nombre del Producto</h3>
+                    <div class="mb-3">
+                        <small class="text-muted d-block">Stock Teórico</small>
+                        <h4 class="text-primary fw-bold" id="conteo-teorico">0.00</h4>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Stock Físico Contado</label>
+                        <input type="number" class="form-control form-control-lg text-center fw-bold" 
+                               id="conteo-input-fisico" step="0.001" value="0" 
+                               onkeydown="manejarTeclaConteo(event)">
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <button class="btn btn-outline-secondary w-100" onclick="navegarConteo(-1)">
+                                <i class="bi bi-arrow-left"></i> Ant.
+                            </button>
+                        </div>
+                        <div class="col-4">
+                            <button class="btn btn-success w-100 fw-bold" onclick="guardarConteoActual()">
+                                <i class="bi bi-check-lg"></i> GUARDAR
+                            </button>
+                        </div>
+                        <div class="col-4">
+                            <button class="btn btn-outline-secondary w-100" onclick="navegarConteo(1)">
+                                Sig. <i class="bi bi-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Lista rápida -->
+                <div class="mt-3">
+                    <small class="text-muted fw-bold">Saltar a:</small>
+                    <div class="d-flex flex-wrap gap-1 mt-1" id="conteo-indicadores"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Cargar Excel -->
+<div class="modal fade" id="modalCargarExcel" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-dark">
+                <h5 class="modal-title fw-bold"><i class="bi bi-upload me-2"></i>Cargar Excel de Conteo</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Sube el archivo Excel con la columna <b>STOCK_FÍSICO</b> llena.</p>
+                <div class="mb-3">
+                    <input type="file" class="form-control" id="input-excel-toma" accept=".xlsx">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button class="btn btn-info fw-bold text-dark" onclick="procesarCargaExcel()">CARGAR Y APLICAR</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Informe Final -->
+<div class="modal fade" id="modalInforme" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title fw-bold"><i class="bi bi-file-text me-2"></i>Informe de Toma Física</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="modal-informe-body">
+                <!-- Contenido dinámico -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                <button class="btn btn-primary" onclick="imprimirInforme()"><i class="bi bi-printer me-1"></i> Imprimir</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ticket de Informe (Impresión) -->
+<div id="ticket-informe-impresion" class="ticket-informe">
+    <div class="encabezado">
+        <h3>INFORME TOMA FÍSICA</h3>
+        <p>#<span id="ticket-inf-id">--</span></p>
+        <p id="ticket-inf-fecha">--</p>
+        <p id="ticket-inf-almacen">--</p>
+    </div>
+    <div class="seccion">
+        <div class="fila"><span>Total Líneas:</span><span id="ticket-inf-total">0</span></div>
+        <div class="fila"><span>Cuadrados:</span><span id="ticket-inf-cuadrados">0</span></div>
+        <div class="fila"><span>Faltantes:</span><span id="ticket-inf-faltantes">0</span></div>
+        <div class="fila"><span>Sobrantes:</span><span id="ticket-inf-sobrantes">0</span></div>
+    </div>
+    <div class="seccion">
+        <p style="font-weight: bold; margin-bottom: 1mm;">FALTANTES:</p>
+        <div id="ticket-inf-lista-faltantes"></div>
+    </div>
+    <div class="seccion">
+        <p style="font-weight: bold; margin-bottom: 1mm;">SOBRANTES:</p>
+        <div id="ticket-inf-lista-sobrantes"></div>
+    </div>
+    <div class="seccion total-final">
+        <div class="fila"><span>Valor Faltantes:</span><span id="ticket-inf-valor-falt">$0.00</span></div>
+        <div class="fila"><span>Valor Sobrantes:</span><span id="ticket-inf-valor-sobr">$0.00</span></div>
+        <div class="fila"><span>DIFERENCIA NETA:</span><span id="ticket-inf-valor-neto">$0.00</span></div>
+    </div>
+    <div style="text-align: center; margin-top: 3mm;">
+        <p>_______________________</p>
+        <p style="font-size: 8px;">Firma Responsable</p>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="assets/js/api.js?v=6"></script>
+<script src="assets/js/menu.js"></script>
+<script src="assets/js/inventario.js?v=1"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 // assets/js/menu.js
-// Menú centralizado ERP - v1.0
-// Inyecta la navbar completa según el tipo de módulo.
+// Menú centralizado ERP - v1.1 (Auto-inicializable)
+// Inyecta la navbar completa automáticamente al cargar.
 
 const MENU_ITEMS = [
     { id: 'dashboard',   label: 'Dashboard',            icon: 'bi-speedometer2',    href: 'dashboard.html' },
@@ -12,6 +12,14 @@ const MENU_ITEMS = [
     { id: 'compras',     label: 'Registro de Compras',  icon: 'bi-bag-plus-fill',   href: 'compras.html' }
 ];
 
+const TITULOS_STANDARD = {
+    'dashboard.html':   'Panel Gerencial',
+    'clientes.html':    'Gestión de Clientes',
+    'proveedores.html': 'Gestión de Proveedores',
+    'inventario.html':  'Gestión de Inventario',
+    'compras.html':     'Ingreso de Mercancía'
+};
+
 function getPaginaActual() {
     const path = window.location.pathname;
     return path.substring(path.lastIndexOf('/') + 1) || 'dashboard.html';
@@ -22,7 +30,6 @@ function renderizarMenuItems(paginaActual) {
     let dividerPuesto = false;
 
     MENU_ITEMS.forEach(item => {
-        // Divider visual después de POS / Mercado
         if (item.id === 'clientes' && !dividerPuesto) {
             html += '<li><hr class="dropdown-divider"></li>';
             dividerPuesto = true;
@@ -40,18 +47,16 @@ function renderizarMenuItems(paginaActual) {
  * @param {string} config.tipo   - 'standard' | 'pos' | 'mercado'
  * @param {string} config.titulo - Título de la página (solo standard)
  */
-function renderizarNavbar(config = {}) {
+function renderizarNavbar(config) {
     const tipo = config.tipo || 'standard';
     const paginaActual = getPaginaActual();
     const menuItemsHTML = renderizarMenuItems(paginaActual);
 
     let navbarHTML = '';
 
-    // ───────────────────────────────────────────────
-    // NAVBAR ESTÁNDAR (dashboard, clientes, proveedores, inventario, compras)
-    // ───────────────────────────────────────────────
+    // ── NAVBAR ESTÁNDAR ──
     if (tipo === 'standard') {
-        const titulo = config.titulo || '';
+        const titulo = config.titulo || TITULOS_STANDARD[paginaActual] || '';
         navbarHTML = `
         <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
             <div class="container-fluid">
@@ -71,9 +76,7 @@ function renderizarNavbar(config = {}) {
         </nav>`;
     }
 
-    // ───────────────────────────────────────────────
-    // NAVBAR POS
-    // ───────────────────────────────────────────────
+    // ── NAVBAR POS ──
     else if (tipo === 'pos') {
         navbarHTML = `
         <nav class="navbar navbar-dark bg-dark shadow">
@@ -105,9 +108,7 @@ function renderizarNavbar(config = {}) {
         </nav>`;
     }
 
-    // ───────────────────────────────────────────────
-    // NAVBAR MERCADO
-    // ───────────────────────────────────────────────
+    // ── NAVBAR MERCADO ──
     else if (tipo === 'mercado') {
         navbarHTML = `
         <nav class="navbar navbar-dark bg-dark shadow">
@@ -133,7 +134,6 @@ function renderizarNavbar(config = {}) {
         </nav>`;
     }
 
-    // Inyección
     const container = document.getElementById('erp-navbar');
     if (container) {
         container.innerHTML = navbarHTML;
@@ -154,3 +154,20 @@ function cerrarSesion() {
         window.location.href = 'index.html';
     }
 }
+
+// =============================================================================
+// AUTO-INICIALIZACIÓN: detecta la página actual y renderiza sola.
+// =============================================================================
+document.addEventListener('DOMContentLoaded', () => {
+    const pagina = getPaginaActual();
+
+    if (pagina === 'pos.html') {
+        renderizarNavbar({ tipo: 'pos' });
+    }
+    else if (pagina === 'mercado.html') {
+        renderizarNavbar({ tipo: 'mercado' });
+    }
+    else {
+        renderizarNavbar({ tipo: 'standard' });
+    }
+});

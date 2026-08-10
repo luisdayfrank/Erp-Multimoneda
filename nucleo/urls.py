@@ -100,5 +100,17 @@ urlpatterns = [
 
     path('api/v1/almacenes/', AlmacenListAPIView.as_view(), name='api_almacenes'),
     path('api/v1/rutas/catalogo/', CatalogoRutaMercadoAPIView.as_view(), name='api_rutas_catalogo'),
-    
+
+    # Inventarios / Toma Física
+    path('api/v1/inventarios/tomas/', TomaFisicaListAPIView.as_view(), name='api_tomas_list'),
+    path('api/v1/inventarios/tomas/crear/', CrearTomaFisicaAPIView.as_view(), name='api_tomas_crear'),
+    path('api/v1/inventarios/tomas/<int:pk>/', TomaFisicaDetalleAPIView.as_view(), name='api_toma_detalle'),
+    path('api/v1/inventarios/tomas/<int:pk>/actualizar/', ActualizarConteoAPIView.as_view(), name='api_toma_actualizar'),
+    path('api/v1/inventarios/tomas/<int:pk>/procesar/', ProcesarTomaAPIView.as_view(), name='api_toma_procesar'),
+    path('api/v1/inventarios/tomas/<int:pk>/anular/', AnularTomaAPIView.as_view(), name='api_toma_anular'),
+    path('api/v1/inventarios/tomas/<int:pk>/generar-excel/', GenerarExcelTomaAPIView.as_view(), name='api_toma_generar_excel'),
+    path('api/v1/inventarios/tomas/<int:pk>/importar-excel/', ImportarExcelTomaAPIView.as_view(), name='api_toma_importar_excel'),
+    path('api/v1/inventarios/tomas/<int:pk>/informe/', InformeTomaAPIView.as_view(), name='api_toma_informe'),
+    path('api/v1/inventarios/ajustes/', AjusteInventarioListAPIView.as_view(), name='api_ajustes_list'),
+    path('api/v1/inventarios/ajustes/<int:pk>/', AjusteInventarioDetalleAPIView.as_view(), name='api_ajuste_detalle'),
 ]

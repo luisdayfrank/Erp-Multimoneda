@@ -42,7 +42,7 @@
             width: 100%;
             max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
-            font-size: 9px;
+            font-size: 8px;
             line-height: 1.25;
             color: #000;
             background: #fff;
@@ -164,9 +164,10 @@
            ============================================================ */
         .ticket-z-impresion {
             display: none;
-            width: 58mm;
+            width: 100%;
+            max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
-            font-size: 10px;
+            font-size: 8px;
             line-height: 1.3;
             color: #000;
             background: #fff;
@@ -219,25 +220,7 @@
 </head>
 <body>
 
-    <nav class="navbar navbar-dark bg-dark shadow">
-        <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1"><i class="bi bi-cpu-fill me-2"></i>ERP Sistema de Ventas</span>
-            <div class="d-flex text-white align-items-center">
-                <span class="badge bg-primary me-3 fs-6" id="tasaDisplay">Tasa: BS 0.00</span>
-                <span class="me-3">Cajero: <b id="nombreCajero">Cargando...</b></span>
-                <button class="btn btn-sm btn-warning fw-bold me-2 text-dark" data-bs-toggle="modal" data-bs-target="#modalEgresos">
-                    <i class="bi bi-box-arrow-up-right"></i> Gastos / Salidas
-                </button>
-                <button class="btn btn-outline-info btn-sm" onclick="abrirModalHistorial()">
-                    <i class="bi bi-receipt"></i> Historial Turno
-                </button>
-                <a href="mercado.html" class="btn btn-sm btn-info fw-bold me-2 text-white">
-                    <i class="bi bi-truck"></i> Mercado
-                </a>
-                <button class="btn btn-sm btn-danger fw-bold" data-bs-toggle="modal" data-bs-target="#modalCierreCaja">Cerrar Turno</button>
-            </div>
-        </div>
-    </nav>
+    <div id="erp-navbar"></div>
 
     <div class="container-fluid pos-container">
         <div class="row h-100">
@@ -699,8 +682,8 @@
             <p>Av. Principal, Local 0</p>
             <p>Tel: 0000-0000000</p>
             <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
-            <p style="font-weight: bold; font-size: 11px;">TICKET DE VENTA</p>
-            <p style="font-size: 10px; font-weight: bold;">#<span id="ticket-id">---</span></p>
+            <p style="font-weight: bold; font-size: 9px;">TICKET DE VENTA</p>
+            <p style="font-size: 9px; font-weight: bold;">#<span id="ticket-id">---</span></p>
             <p id="ticket-fecha" style="font-size: 8px;"></p>
         </div>
 
@@ -735,7 +718,7 @@
                 <span>TOTAL USD:</span>
                 <span>$ <span id="ticket-total-usd">0.00</span></span>
             </div>
-            <div class="fila-total" style="font-size: 10px;">
+            <div class="fila-total" style="font-size: 9px;">
                 <span>TOTAL BS:</span>
                 <span>BS <span id="ticket-total-bs">0.00</span></span>
             </div>
@@ -781,7 +764,7 @@
     <div id="ticket-z-impresion" class="ticket-z-impresion">
         <div class="ticket-encabezado">
             <h3>ERP Bimonetario</h3>
-            <p style="font-size: 12px; font-weight: bold;">CORTE Z</p>
+            <p style="font-size: 9px; font-weight: bold;">CORTE Z</p>
             <p id="z-fecha-cierre" style="font-size: 8px;"></p>
             <p style="font-size: 9px;">Cajero: <span id="z-cajero"></span></p>
             <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
@@ -797,7 +780,7 @@
             <div class="fila-total"><span>Declarado (USD):</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
             <div class="fila-total"><span>Declarado (BS):</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
             <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
-            <div class="fila-total" style="font-size: 11px; font-weight: bold;">
+            <div class="fila-total" style="font-size: 9px; font-weight: bold;">
                 <span>DESCUADRE:</span><span id="z-descuadre">CUADRE PERFECTO</span>
             </div>
         </div>
@@ -886,6 +869,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js?v=6"></script>
+    <script src="assets/js/menu.js"></script>
     <script src="assets/js/pos.js?v=6"></script>
 </body>
 </html>

@@ -10,7 +10,7 @@ const MENU_ITEMS = [
     { id: 'proveedores', label: 'Proveedores',          icon: 'bi-truck',           href: 'proveedores.html' },
     { id: 'inventario',  label: 'Inventario',           icon: 'bi-box-seam',        href: 'inventario.html' },
     { id: 'compras',     label: 'Registro de Compras',  icon: 'bi-bag-plus-fill',   href: 'compras.html' },
-    { id: 'ajustes',     label: 'Ajustes de Inventario', icon: 'bi-clipboard-data', href: 'ajustes.html' }
+    { id: 'conteo',     label: 'Ajustes de Inventario', icon: 'bi-clipboard-data', href: 'conteo.html' }
 
 ];
 
@@ -20,7 +20,7 @@ const TITULOS_STANDARD = {
     'proveedores.html': 'Gestión de Proveedores',
     'inventario.html':  'Gestión de Inventario',
     'compras.html':     'Ingreso de Mercancía',
-    'ajustes.html':     'Ajustes de Inventario',
+    'conteo.html':     'Ajustes de Inventario',
 };
 
 function getPaginaActual() {

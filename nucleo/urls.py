@@ -39,6 +39,17 @@ from .api import (
     ReabrirRutaMercadoAPIView,
     AlmacenListAPIView,
     CatalogoRutaMercadoAPIView,
+    CrearTomaFisicaAPIView, 
+    TomaFisicaListAPIView, 
+    TomaFisicaDetalleAPIView,
+    ActualizarConteoAPIView, 
+    ProcesarTomaAPIView, 
+    AnularTomaAPIView,
+    GenerarExcelTomaAPIView, 
+    ImportarExcelTomaAPIView,
+    AjusteInventarioListAPIView, 
+    AjusteInventarioDetalleAPIView, 
+    InformeTomaAPIView,
 )
 
 urlpatterns = [

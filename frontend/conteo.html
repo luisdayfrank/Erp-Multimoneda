@@ -76,6 +76,82 @@
             body { margin: 0 !important; padding: 0 !important; background: white !important; }
             @page { size: 48mm auto; margin: 0; }
         }
+
+        /* ============================================
+           FIX PC: Reset de scroll implícito en JS
+           FIX MÓVIL: Maestro-Detalle con Slide
+           ============================================ */
+
+        /* Altura dinámica para móviles modernos */
+        @supports (height: 100dvh) {
+            body { height: 100dvh; }
+            .inv-container { height: calc(100dvh - 56px); }
+        }
+
+        /* Botón volver: oculto en desktop, visible en móvil */
+        .btn-volver-lista {
+            display: none !important;
+        }
+
+        @media (max-width: 767.98px) {
+            .btn-volver-lista {
+                display: inline-flex !important;
+                align-items: center;
+            }
+
+            .inv-container {
+                position: relative;
+                overflow: hidden;
+            }
+
+            /* Ambos paneles comparten el mismo espacio físico */
+            .sidebar-panel,
+            .main-panel {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                transition: transform 0.25s ease-in-out, opacity 0.25s ease-in-out;
+                will-change: transform;
+            }
+
+            /* Lista visible por defecto */
+            .sidebar-panel {
+                transform: translateX(0);
+                opacity: 1;
+                z-index: 1;
+                border-right: none;
+            }
+
+            /* Detalle oculto fuera de pantalla a la derecha */
+            .main-panel {
+                transform: translateX(100%);
+                opacity: 0;
+                z-index: 2;
+                padding: 12px;
+                background-color: #f8f9fa;
+            }
+
+            /* Estado activo: mostrando detalle */
+            .inv-container.modo-detalle .sidebar-panel {
+                transform: translateX(-30%);
+                opacity: 0;
+                pointer-events: none;
+            }
+
+            .inv-container.modo-detalle .main-panel {
+                transform: translateX(0);
+                opacity: 1;
+            }
+
+            /* Compacidad en móvil */
+            .stat-box { padding: 10px; }
+            .stat-box small { font-size: 0.7rem; }
+            .stat-box .fs-4 { font-size: 1.25rem !important; }
+            .table-sm td, .table-sm th { font-size: 0.85rem; }
+            .card-body { padding: 0.75rem; }
+        }
     </style>
 </head>
 <body>
@@ -115,15 +191,20 @@
                 <div class="card shadow-sm mb-3">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start flex-wrap">
-                            <div>
-                                <h4 class="fw-bold mb-1">Toma Física #<span id="det-toma-id">--</span></h4>
-                                <span class="badge" id="det-toma-estado">--</span>
-                                <span class="badge bg-secondary" id="det-toma-tipo">--</span>
-                                <p class="text-muted mb-0 mt-1">
-                                    <i class="bi bi-building me-1"></i><span id="det-toma-almacen">--</span> |
-                                    <i class="bi bi-person me-1"></i><span id="det-toma-usuario">--</span> |
-                                    <i class="bi bi-calendar me-1"></i><span id="det-toma-fecha">--</span>
-                                </p>
+                            <div class="d-flex align-items-start gap-2">
+                                <button class="btn btn-sm btn-outline-dark btn-volver-lista" onclick="volverALista()">
+                                    <i class="bi bi-arrow-left"></i> <span class="d-none d-sm-inline">Volver</span>
+                                </button>
+                                <div>
+                                    <h4 class="fw-bold mb-1">Toma Física #<span id="det-toma-id">--</span></h4>
+                                    <span class="badge" id="det-toma-estado">--</span>
+                                    <span class="badge bg-secondary" id="det-toma-tipo">--</span>
+                                    <p class="text-muted mb-0 mt-1">
+                                        <i class="bi bi-building me-1"></i><span id="det-toma-almacen">--</span> |
+                                        <i class="bi bi-person me-1"></i><span id="det-toma-usuario">--</span> |
+                                        <i class="bi bi-calendar me-1"></i><span id="det-toma-fecha">--</span>
+                                    </p>
+                                </div>
                             </div>
                             <div class="text-end mt-2 mt-md-0">
                                 <div id="det-toma-acciones">

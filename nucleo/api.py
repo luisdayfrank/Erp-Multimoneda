@@ -322,6 +322,7 @@ class DashboardResumenAPIView(APIView):
         hoy = timezone.now().date()
         inicio_mes = hoy.replace(day=1)
 
+        # Ventas del POS
         ventas_hoy = Venta.objects.filter(
             fecha__date=hoy, estado='PROCESADA'
         ).aggregate(
@@ -332,6 +333,18 @@ class DashboardResumenAPIView(APIView):
         ventas_mes = Venta.objects.filter(
             fecha__date__gte=inicio_mes, estado='PROCESADA'
         ).aggregate(total_usd=Sum('total_principal'))
+
+        # >>> NUEVO: Ventas de Rutas de Mercado <<<
+        rutas_hoy = RutaMercado.objects.filter(
+            fecha__date=hoy, estado='CERRADA'
+        ).aggregate(total_usd=Sum('total_venta_usd'))
+
+        rutas_mes = RutaMercado.objects.filter(
+            fecha__date__gte=inicio_mes, estado='CERRADA'
+        ).aggregate(total_usd=Sum('total_venta_usd'))
+
+        total_hoy_usd = (ventas_hoy['total_usd'] or Decimal('0.00')) + (rutas_hoy['total_usd'] or Decimal('0.00'))
+        total_mes_usd = (ventas_mes['total_usd'] or Decimal('0.00')) + (rutas_mes['total_usd'] or Decimal('0.00'))
 
         cxc_pendientes = CuentaPorCobrar.objects.filter(
             estado__in=['PENDIENTE', 'VENCIDA']
@@ -360,9 +373,9 @@ class DashboardResumenAPIView(APIView):
 
         return Response({
             "ventas": {
-                "hoy_total": ventas_hoy['total_usd'] or 0.00,
+                "hoy_total": float(total_hoy_usd),
                 "hoy_cantidad": ventas_hoy['cantidad_facturas'] or 0,
-                "mes_total": ventas_mes['total_usd'] or 0.00,
+                "mes_total": float(total_mes_usd),
             },
             "finanzas": {
                 "por_cobrar_total": cxc_pendientes['total_deuda'] or 0.00,
@@ -582,14 +595,21 @@ class ProductoDetalleHistorialAPIView(APIView):
                     "cantidad": float(cantidad_base)
                 })
 
-            for e in egresos:
-                cantidad_base = e.cantidad * e.presentacion.factor_conversion
-                movimientos.append({
-                    "fecha": e.egreso.fecha,
-                    "tipo": "SALIDA",
-                    "motivo": f"Egreso #{e.egreso.id} ({e.egreso.concepto.nombre})",
-                    "cantidad": float(cantidad_base)
-                })
+            # >>> NUEVO: Movimientos de Rutas de Mercado <<<
+            rutas = RutaMercadoDetalle.objects.filter(
+                presentacion__producto=producto,
+                ruta__estado='CERRADA'
+            ).select_related('ruta', 'presentacion').order_by('-ruta__fecha')[:30]
+
+            for rm in rutas:
+                cantidad_base = rm.cantidad_vendida * rm.presentacion.factor_conversion
+                if cantidad_base > 0:
+                    movimientos.append({
+                        "fecha": rm.ruta.fecha,
+                        "tipo": "SALIDA",
+                        "motivo": f"Ruta Mercado #{rm.ruta.id}",
+                        "cantidad": float(cantidad_base)
+                    })
 
             movimientos.sort(key=lambda x: x['fecha'], reverse=True)
 

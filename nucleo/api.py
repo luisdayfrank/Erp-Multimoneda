@@ -319,33 +319,48 @@ class DashboardResumenAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 
     def get(self, request):
-        hoy = timezone.localdate()
-        inicio_mes = hoy.replace(day=1)
+        from datetime import datetime, time
+        from zoneinfo import ZoneInfo
+        from decimal import Decimal
 
-        # Ventas del POS
+        caracas = ZoneInfo('America/Caracas')
+        now_utc = timezone.now()
+
+        # Calcular "hoy" y "inicio de mes" en Caracas, luego convertir a UTC para la query
+        hoy_caracas = now_utc.astimezone(caracas).date()
+        inicio_hoy = datetime.combine(hoy_caracas, time.min, tzinfo=caracas)
+        fin_hoy = datetime.combine(hoy_caracas, time.max, tzinfo=caracas)
+        inicio_mes = datetime.combine(hoy_caracas.replace(day=1), time.min, tzinfo=caracas)
+
+        # Django convertirá estos aware-datetimes a UTC automáticamente para la query.
+        # NO usa CONVERT_TZ de MySQL, compara timestamp UTC directamente.
+        # Por eso funciona aunque MariaDB no tenga tablas de timezone.
+
+        # VENTAS POS
         ventas_hoy = Venta.objects.filter(
-            fecha__date=hoy, estado='PROCESADA'
+            fecha__gte=inicio_hoy, fecha__lte=fin_hoy, estado='PROCESADA'
         ).aggregate(
             total_usd=Sum('total_principal'),
             cantidad_facturas=Count('id')
         )
 
         ventas_mes = Venta.objects.filter(
-            fecha__date__gte=inicio_mes, estado='PROCESADA'
+            fecha__gte=inicio_mes, fecha__lte=fin_hoy, estado='PROCESADA'
         ).aggregate(total_usd=Sum('total_principal'))
 
-        # >>> NUEVO: Ventas de Rutas de Mercado <<<
+        # RUTAS DE MERCADO
         rutas_hoy = RutaMercado.objects.filter(
-            fecha__date=hoy, estado='CERRADA'
+            fecha__gte=inicio_hoy, fecha__lte=fin_hoy, estado='CERRADA'
         ).aggregate(total_usd=Sum('total_venta_usd'))
 
         rutas_mes = RutaMercado.objects.filter(
-            fecha__date__gte=inicio_mes, estado='CERRADA'
+            fecha__gte=inicio_mes, fecha__lte=fin_hoy, estado='CERRADA'
         ).aggregate(total_usd=Sum('total_venta_usd'))
 
         total_hoy_usd = (ventas_hoy['total_usd'] or Decimal('0.00')) + (rutas_hoy['total_usd'] or Decimal('0.00'))
         total_mes_usd = (ventas_mes['total_usd'] or Decimal('0.00')) + (rutas_mes['total_usd'] or Decimal('0.00'))
 
+        # CXC / CXP / STOCK (sin cambios)
         cxc_pendientes = CuentaPorCobrar.objects.filter(
             estado__in=['PENDIENTE', 'VENCIDA']
         ).aggregate(

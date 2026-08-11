@@ -121,9 +121,30 @@ async function seleccionarToma(id) {
         detallesToma = tomaActiva.detalles || [];
         renderizarListaTomas();
         renderizarDetalleToma();
+
+        // FIX PC: Siempre mostrar el detalle desde el tope
+        const mainPanel = document.querySelector('.main-panel');
+        if (mainPanel) mainPanel.scrollTop = 0;
+
+        // FIX MÓVIL: Activar vista de detalle (slide)
+        if (window.innerWidth < 768) {
+            document.querySelector('.inv-container').classList.add('modo-detalle');
+        }
     } catch (e) {
         alert("Error cargando detalle: " + (e.detail || e.error || "Desconocido"));
     }
+}
+
+function volverALista() {
+    const container = document.querySelector('.inv-container');
+    if (container) container.classList.remove('modo-detalle');
+
+    tomaActiva = null;
+    detallesToma = [];
+    renderizarListaTomas();
+
+    document.getElementById('panel-detalle').style.display = 'none';
+    document.getElementById('panel-vacio').style.display = 'flex';
 }
 
 function renderizarDetalleToma() {

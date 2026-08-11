@@ -319,7 +319,7 @@ class DashboardResumenAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 
     def get(self, request):
-        hoy = timezone.now().date()
+        hoy = timezone.localdate()
         inicio_mes = hoy.replace(day=1)
 
         # Ventas del POS

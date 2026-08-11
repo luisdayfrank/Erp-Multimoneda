@@ -417,6 +417,11 @@ class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
             'precio_venta_bs', 'subtotal_bs', 'subtotal_usd'
         ]
 
+    def get_nombre_presentacion(self, obj):
+        factor = int(obj.presentacion.factor_conversion) if obj.presentacion.factor_conversion % 1 == 0 else float(obj.presentacion.factor_conversion)
+        if obj.presentacion.unidad_medida:
+            return f"{obj.presentacion.unidad_medida.nombre} (x{factor})"
+        return f"x{factor}"
 
 class RutaMercadoCreditoSerializer(serializers.ModelSerializer):
     cliente = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -472,12 +477,6 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             'total_creditos_bs', 'total_gastos_bs',
             'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
         ]
-
-    def get_nombre_presentacion(self, obj):
-        factor = int(obj.presentacion.factor_conversion) if obj.presentacion.factor_conversion % 1 == 0 else float(obj.presentacion.factor_conversion)
-        if obj.presentacion.unidad_medida:
-            return f"{obj.presentacion.unidad_medida.nombre} (x{factor})"
-        return f"x{factor}"
     
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])

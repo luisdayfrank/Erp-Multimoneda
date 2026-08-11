@@ -1,14 +1,14 @@
 // assets/js/auth.js
 
 // ==============================================================================
-// 1. VERIFICACI”N INICIAL
+// 1. VERIFICACI√ìN INICIAL
 // ==============================================================================
 document.addEventListener('DOMContentLoaded', () => {
-    // Si el usuario ya tiene un token guardado (ya iniciÛ sesiÛn antes y no ha cerrado),
+    // Si el usuario ya tiene un token guardado (ya inici√≥ sesi√≥n antes y no ha cerrado),
     // lo enviamos directamente al Punto de Venta para que no tenga que poner la clave de nuevo.
     const tokenGuardado = localStorage.getItem('access_token');
     if (tokenGuardado) {
-        window.location.href = 'pos.html';
+        window.location.href = 'dashboard.html';
     }
 });
 
@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // 2. PROCESAMIENTO DEL FORMULARIO DE LOGIN
 // ==============================================================================
 document.getElementById('loginForm').addEventListener('submit', async function(event) {
-    event.preventDefault(); // Evitamos que la p·gina recargue al hacer submit
+    event.preventDefault(); // Evitamos que la p√°gina recargue al hacer submit
 
     // Capturamos los datos
     const user = document.getElementById('username').value.trim();
@@ -45,16 +45,16 @@ document.getElementById('loginForm').addEventListener('submit', async function(e
         // Si Django rechaza las credenciales (Status 400 o 401)
         if (!response.ok) {
             // DRF SimpleJWT suele devolver el mensaje en la propiedad "detail"
-            throw new Error(data.detail || 'Usuario o contraseÒa incorrectos.');
+            throw new Error(data.detail || 'Usuario o contrase√±a incorrectos.');
         }
 
-        // °…XITO! AQUÕ EST¡ LA CORRECCI”N CRÕTICA:
-        // Guardamos las llaves en la "bÛveda" del navegador para que no se pierdan.
+        // ¬°√âXITO! AQU√ç EST√Å LA CORRECCI√ìN CR√çTICA:
+        // Guardamos las llaves en la "b√≥veda" del navegador para que no se pierdan.
         localStorage.setItem('access_token', data.access);
         localStorage.setItem('refresh_token', data.refresh);
 
-        // °Bienvenido! Lo redirigimos a la pantalla principal de la caja
-        window.location.href = 'pos.html';
+        // ¬°Bienvenido! Lo redirigimos a la pantalla principal de la caja
+        window.location.href = 'dashboard.html';
 
     } catch (error) {
         // Mostramos la alerta roja en la pantalla

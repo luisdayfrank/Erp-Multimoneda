@@ -319,42 +319,38 @@ class DashboardResumenAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 
     def get(self, request):
-        from datetime import datetime, time
-        from zoneinfo import ZoneInfo
+        from datetime import datetime, time, timedelta
         from decimal import Decimal
 
-        caracas = ZoneInfo('America/Caracas')
-        now_utc = timezone.now()
+        # timezone.localtime() respeta TIME_ZONE del .env automáticamente
+        ahora = timezone.localtime()
+        hoy = ahora.date()
+        inicio_mes = hoy.replace(day=1)
 
-        # Calcular "hoy" y "inicio de mes" en Caracas, luego convertir a UTC para la query
-        hoy_caracas = now_utc.astimezone(caracas).date()
-        inicio_hoy = datetime.combine(hoy_caracas, time.min, tzinfo=caracas)
-        fin_hoy = datetime.combine(hoy_caracas, time.max, tzinfo=caracas)
-        inicio_mes = datetime.combine(hoy_caracas.replace(day=1), time.min, tzinfo=caracas)
+        # Construimos rangos naive en Caracas y los convertimos a aware
+        inicio_hoy = timezone.make_aware(datetime.combine(hoy, time.min))
+        fin_hoy = timezone.make_aware(datetime.combine(hoy + timedelta(days=1), time.min))
+        inicio_mes_dt = timezone.make_aware(datetime.combine(inicio_mes, time.min))
 
-        # Django convertirá estos aware-datetimes a UTC automáticamente para la query.
-        # NO usa CONVERT_TZ de MySQL, compara timestamp UTC directamente.
-        # Por eso funciona aunque MariaDB no tenga tablas de timezone.
-
-        # VENTAS POS
+        # VENTAS POS (usamos __lt en lugar de __lte para evitar inclusión del límite)
         ventas_hoy = Venta.objects.filter(
-            fecha__gte=inicio_hoy, fecha__lte=fin_hoy, estado='PROCESADA'
+            fecha__gte=inicio_hoy, fecha__lt=fin_hoy, estado='PROCESADA'
         ).aggregate(
             total_usd=Sum('total_principal'),
             cantidad_facturas=Count('id')
         )
 
         ventas_mes = Venta.objects.filter(
-            fecha__gte=inicio_mes, fecha__lte=fin_hoy, estado='PROCESADA'
+            fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy, estado='PROCESADA'
         ).aggregate(total_usd=Sum('total_principal'))
 
         # RUTAS DE MERCADO
         rutas_hoy = RutaMercado.objects.filter(
-            fecha__gte=inicio_hoy, fecha__lte=fin_hoy, estado='CERRADA'
+            fecha__gte=inicio_hoy, fecha__lt=fin_hoy, estado='CERRADA'
         ).aggregate(total_usd=Sum('total_venta_usd'))
 
         rutas_mes = RutaMercado.objects.filter(
-            fecha__gte=inicio_mes, fecha__lte=fin_hoy, estado='CERRADA'
+            fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy, estado='CERRADA'
         ).aggregate(total_usd=Sum('total_venta_usd'))
 
         total_hoy_usd = (ventas_hoy['total_usd'] or Decimal('0.00')) + (rutas_hoy['total_usd'] or Decimal('0.00'))
@@ -401,7 +397,6 @@ class DashboardResumenAPIView(APIView):
                 "inventario_bajo": lista_alertas_stock
             }
         }, status=status.HTTP_200_OK)
-
 
 class DatosInicialesPOSAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]

@@ -868,15 +868,26 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
 
     const tbody = document.getElementById('ticket-items');
     tbody.innerHTML = '';
+    //carritoFacturado.forEach(function(item) {
+    //    const row = document.createElement('tr');
+    //    row.innerHTML = '' +
+    //        '<td style="text-align: center;">' + parseFloat(item.cantidad).toFixed(2) + '</td>' +
+    //        '<td>' + item.nombre + '<br><small style="font-size: 8px;">$' + item.precio_unitario.toFixed(2) + ' c/u</small></td>' +
+    //        '<td style="text-align: right;">$' + item.subtotal.toFixed(2) + '</td>';
+    //    tbody.appendChild(row);
+    //});
+
     carritoFacturado.forEach(function(item) {
         const row = document.createElement('tr');
+        let nombreCorto = item.nombre;
+        if (nombreCorto.length > 22) nombreCorto = nombreCorto.substring(0, 20) + '…';
         row.innerHTML = '' +
             '<td style="text-align: center;">' + parseFloat(item.cantidad).toFixed(2) + '</td>' +
-            '<td>' + item.nombre + '<br><small style="font-size: 8px;">$' + item.precio_unitario.toFixed(2) + ' c/u</small></td>' +
+            '<td style="word-break: break-word;">' + nombreCorto + '</td>' +
             '<td style="text-align: right;">$' + item.subtotal.toFixed(2) + '</td>';
         tbody.appendChild(row);
     });
-
+    
     document.getElementById('ticket-subtotal').innerText = totales.subtotal;
     document.getElementById('ticket-iva').innerText = totales.impuestos;
     document.getElementById('ticket-total-usd').innerText = totales.total_usd;

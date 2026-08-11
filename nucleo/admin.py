@@ -385,8 +385,14 @@ class CuentaPorCobrarAdmin(admin.ModelAdmin):
     list_display = ('id', 'get_venta_info', 'cliente', 'monto_total', 'saldo_pendiente', 'estado')
     list_filter = ('estado', 'fecha_vencimiento')
     search_fields = ('cliente__nombre',)
-    readonly_fields = ('monto_total', 'saldo_pendiente', 'estado')
     inlines = [PagoCuentaCobrarInline]
+
+    def get_readonly_fields(self, request, obj=None):
+        # Al crear: solo estado es readonly (tiene default). Monto y saldo deben ser editables.
+        # Al editar: todo bloqueado para evitar desincronización.
+        if obj:
+            return ('monto_total', 'saldo_pendiente', 'estado')
+        return ('estado',)
 
     def get_venta_info(self, obj):
         if obj.venta:
@@ -394,14 +400,18 @@ class CuentaPorCobrarAdmin(admin.ModelAdmin):
         return "Deuda Inicial"
     get_venta_info.short_description = 'Origen'
 
+
 @admin.register(CuentaPorPagar)
 class CuentaPorPagarAdmin(admin.ModelAdmin):
     list_display = ('id', 'compra', 'proveedor', 'monto_total', 'saldo_pendiente', 'estado')
     list_filter = ('estado', 'fecha_vencimiento')
     search_fields = ('proveedor__nombre',)
-    readonly_fields = ('monto_total', 'saldo_pendiente', 'estado')
     inlines = [PagoCuentaPagarInline]
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj:
+            return ('monto_total', 'saldo_pendiente', 'estado')
+        return ('estado',)
 
 @admin.register(ConceptoEgreso)
 class ConceptoEgresoAdmin(admin.ModelAdmin):

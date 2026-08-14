@@ -969,7 +969,7 @@ class GenerarExcelRutaAPIView(APIView):
                 None,                         # Entrada (editable)
                 f'=C{idx}-D{idx}',            # Vendido
                 precio_bs,                    # Precio BS (editable, sugerido)
-                f'=F{idx}/Config!B$1',         # Precio $
+                f"=F{idx}/'Config'!B$1",         # Precio $
                 f'=E{idx}*G{idx}',            # Total $
             ])
 

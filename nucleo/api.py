@@ -940,7 +940,7 @@ class GenerarExcelRutaAPIView(APIView):
         ws_config.sheet_state = 'hidden'
 
         # Encabezados (ID oculto pero presente para importación exacta)
-        headers = ['ID', 'PRODUCTO', 'SALIDA', 'ENTRADA', 'VENDIDO', 'PRECIO BS', 'PRECIO $', 'TOTAL $']
+        headers = ['ID', 'PRODUCTO', 'SALIDA', 'ENTRADA', 'VENDIDO', 'PRECIO BS', 'PRECIO $', 'TOTAL BS', 'TOTAL $']
         ws.append(headers)
 
         # Estilo header
@@ -970,6 +970,7 @@ class GenerarExcelRutaAPIView(APIView):
                 f'=C{idx}-D{idx}',            # Vendido
                 precio_bs,                    # Precio BS (editable, sugerido)
                 f"=F{idx}/'Config'!B$1",         # Precio $
+                f'=E{idx}*F{idx}',                # Total BS
                 f'=E{idx}*G{idx}',            # Total $
             ])
 

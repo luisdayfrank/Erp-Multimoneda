@@ -484,15 +484,55 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "monto_total": float(c.monto_total),
                     "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
                 } for c in cxc_pendientes],
-                "ventas": [
-                    {
-                        "id": v.id, 
-                        "fecha": v.fecha, 
+                    "ventas": ventas_data,   # <-- MISMA CLAVE, ahora incluye deudas iniciales
+                    "pagos": pagos_data,             # <-- MISMA CLAVE, + flag es_abono_deuda_inicial
+                # ═══════════════════════════════════════════════════════
+                # HISTORIAL UNIFICADO: Ventas reales + Deudas iniciales
+                # ═══════════════════════════════════════════════════════
+                ventas_data = []
+                
+                # 1. Inyectar Deudas Iniciales (CxC sin venta asociada)
+                deudas_iniciales = CuentaPorCobrar.objects.filter(cliente=cliente, venta=None)
+                for cxc_ini in deudas_iniciales:
+                    ventas_data.append({
+                        "id": None,                       # No es una Venta real
+                        "cxc_id": cxc_ini.id,             # ID real de la CxC para referencia
+                        "fecha": timezone.make_aware(datetime.combine(cxc_ini.fecha_vencimiento, time.min)) if cxc_ini.fecha_vencimiento else timezone.now(),
+                        "tipo": "DEUDA_INICIAL",          # El frontend pinta esto diferente
+                        "monto": float(cxc_ini.monto_total),
+                        "estado": cxc_ini.estado,
+                        "es_deuda_inicial": True,
+                        "saldo_pendiente": float(cxc_ini.saldo_pendiente)
+                    })
+
+                # 2. Ventas reales del sistema
+                for v in ventas:
+                    ventas_data.append({
+                        "id": v.id,
+                        "cxc_id": v.cuentaporcobrar.id if hasattr(v, 'cuentaporcobrar') else None,
+                        "fecha": v.fecha,
                         "tipo": v.tipo,
-                        "monto": float(v.total_principal), 
-                        "estado": v.estado
-                    } for v in ventas
-                ],
+                        "monto": float(v.total_principal),
+                        "estado": v.estado,
+                        "es_deuda_inicial": False,
+                        "saldo_pendiente": float(v.cuentaporcobrar.saldo_pendiente) if hasattr(v, 'cuentaporcobrar') else 0.00
+                    })
+
+                # Ordenar todo junto por fecha, más reciente primero
+                ventas_data.sort(key=lambda x: x['fecha'], reverse=True)
+
+                # 3. Pagos (por ahora se quedan igual, Fase 2 los reemplaza por recibos)
+                pagos_data = []
+                for p in pagos:
+                    pagos_data.append({
+                        "id": p.id, 
+                        "fecha": p.fecha, 
+                        "monto": float(p.monto_abono_principal), 
+                        "referencia": p.referencia, 
+                        "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
+                        "cxc_id": p.cuenta.id,
+                        "es_abono_deuda_inicial": p.cuenta.venta is None  # <-- NUEVO flag útil
+                    })
                 "pagos": [
                     {
                         "id": p.id, 

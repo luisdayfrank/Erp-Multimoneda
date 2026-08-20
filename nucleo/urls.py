@@ -49,7 +49,8 @@ from .api import (
     ImportarExcelTomaAPIView,
     AjusteInventarioListAPIView, 
     AjusteInventarioDetalleAPIView, 
-    InformeTomaAPIView
+    InformeTomaAPIView,
+    ReciboAbonoDetalleAPIView
 )
 
 urlpatterns = [
@@ -72,7 +73,8 @@ urlpatterns = [
     # Cuentas por Cobrar (CxC)
     path('api/v1/cxc/abonar/', RegistrarAbonoCxCAPIView.as_view(), name='api_cxc_abonar'),
     path('api/v1/cxc/abonar-masivo/', RegistrarAbonoMasivoAPIView.as_view(), name='api_cxc_abonar_masivo'),  # >>> NUEVO <<<
-
+    path('api/v1/cxc/recibos/<int:pk>/', ReciboAbonoDetalleAPIView.as_view(), name='api_cxc_recibo_detalle'),
+    
     # Proveedores y Compras
     path('api/v1/proveedores/', ProveedorListCreateAPIView.as_view(), name='api_proveedores'),
     path('api/v1/proveedores/<int:pk>/editar/', ProveedorUpdateAPIView.as_view(), name='api_proveedor_editar'),

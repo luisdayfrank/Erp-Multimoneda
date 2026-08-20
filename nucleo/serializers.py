@@ -691,3 +691,56 @@ class AjusteInventarioSerializer(serializers.ModelSerializer):
             'usuario', 'usuario_nombre', 'fecha', 'estado',
             'total_costo_ajuste', 'observacion', 'detalles'
         ]
+
+# ==============================================================================
+# SERIALIZADORES DE RECIBOS DE ABONO
+# ==============================================================================
+
+class ReciboAbonoAplicacionSerializer(serializers.ModelSerializer):
+    cuenta_id = serializers.IntegerField(source='cuenta.id', read_only=True)
+    venta_id = serializers.IntegerField(source='cuenta.venta.id', read_only=True)
+    cliente_nombre = serializers.CharField(source='cuenta.cliente.nombre', read_only=True)
+    es_deuda_inicial = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ReciboAbonoAplicacion
+        fields = [
+            'id', 'cuenta', 'cuenta_id', 'venta_id', 'cliente_nombre', 'es_deuda_inicial',
+            'monto_aplicado', 'saldo_antes', 'saldo_despues', 
+            'saldo_la_factura', 'origen_dinero'
+        ]
+    
+    def get_es_deuda_inicial(self, obj):
+        return obj.cuenta.venta is None
+
+
+class ReciboAbonoListSerializer(serializers.ModelSerializer):
+    cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    total_aplicado = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    facturas_afectadas_count = serializers.IntegerField(read_only=True)
+    
+    class Meta:
+        model = ReciboAbono
+        fields = [
+            'id', 'cliente', 'cliente_nombre', 'usuario', 'usuario_nombre',
+            'fecha', 'monto_total_entregado', 'total_aplicado', 
+            'sobrante_a_favor', 'origen', 'referencia',
+            'facturas_afectadas_count'
+        ]
+
+
+class ReciboAbonoDetalleSerializer(serializers.ModelSerializer):
+    cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    aplicaciones = ReciboAbonoAplicacionSerializer(many=True, read_only=True)
+    total_aplicado = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = ReciboAbono
+        fields = [
+            'id', 'cliente', 'cliente_nombre', 'usuario', 'usuario_nombre',
+            'fecha', 'monto_total_entregado', 'total_aplicado', 'sobrante_a_favor',
+            'desglose_metodos', 'tasa_cambio', 'referencia', 'origen', 'venta_origen',
+            'aplicaciones'
+        ]

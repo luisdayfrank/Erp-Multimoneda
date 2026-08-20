@@ -37,7 +37,8 @@ from .models import (
     RutaMercadoPago,
     RutaMercadoGasto,
     BorradorFactura,
-    TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario
+    TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
+    ReciboAbono, ReciboAbonoAplicacion
 )
 
 # ==============================================================================

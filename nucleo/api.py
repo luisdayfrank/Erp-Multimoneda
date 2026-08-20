@@ -13,7 +13,7 @@ from django.db import transaction
 from django.db.models import Sum, Count, Q, DecimalField
 from django.utils import timezone
 from django.db.models.functions import Coalesce
-from datetime import timedelta
+from datetime import timedelta, datetime, time
 from .models import (
     ConfiguracionGlobal, BorradorFactura,
     PresentacionProducto, Venta, Compra, CuentaPorCobrar, 
@@ -467,7 +467,65 @@ class ClienteDetalleHistorialAPIView(APIView):
             data_cliente = ClienteSerializer(cliente).data
             deuda_total = cxc_pendientes.aggregate(total=Sum('saldo_pendiente'))['total'] or 0.00
 
-            # >>> NUEVO: Incluimos deuda_inicial en la respuesta <<<
+            # ═══════════════════════════════════════════════════════
+            # DOCUMENTOS: Ventas reales + Deudas iniciales unificados
+            # ═══════════════════════════════════════════════════════
+            documentos = []
+
+            # Deudas iniciales (CxC sin venta asociada)
+            deudas_iniciales = CuentaPorCobrar.objects.filter(cliente=cliente, venta=None)
+            for cxc_ini in deudas_iniciales:
+                documentos.append({
+                    "id": None,
+                    "cxc_id": cxc_ini.id,
+                    "fecha": timezone.make_aware(
+                        datetime.combine(cxc_ini.fecha_vencimiento, time.min)
+                    ) if cxc_ini.fecha_vencimiento else timezone.now(),
+                    "tipo": "DEUDA_INICIAL",
+                    "monto": float(cxc_ini.monto_total),
+                    "estado": cxc_ini.estado,
+                    "es_deuda_inicial": True,
+                    "saldo_pendiente": float(cxc_ini.saldo_pendiente),
+                    "numero_factura": None,
+                })
+
+            # Ventas reales
+            for v in ventas:
+                cxc_relacionada = getattr(v, 'cuentaporcobrar', None)
+                documentos.append({
+                    "id": v.id,
+                    "cxc_id": cxc_relacionada.id if cxc_relacionada else None,
+                    "fecha": v.fecha,
+                    "tipo": v.tipo,
+                    "monto": float(v.total_principal),
+                    "estado": v.estado,
+                    "es_deuda_inicial": False,
+                    "saldo_pendiente": float(cxc_relacionada.saldo_pendiente) if cxc_relacionada else 0.00,
+                    "numero_factura": v.id,
+                })
+
+            # Ordenar por fecha descendente
+            documentos.sort(
+                key=lambda x: x['fecha'] or timezone.make_aware(datetime.min),
+                reverse=True
+            )
+
+            # Pagos mejorados
+            pagos_data = []
+            for p in pagos:
+                es_a_deuda_inicial = (p.cuenta.venta is None)
+                pagos_data.append({
+                    "id": p.id,
+                    "fecha": p.fecha,
+                    "monto": float(p.monto_abono_principal),
+                    "referencia": p.referencia,
+                    "tasa_cambio": float(p.tasa_cambio_pago),
+                    "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
+                    "cxc_id": p.cuenta.id,
+                    "es_abono_deuda_inicial": es_a_deuda_inicial,
+                    "tipo_documento_afectado": "DEUDA_INICIAL" if es_a_deuda_inicial else "VENTA",
+                })
+
             return Response({
                 "cliente": data_cliente,
                 "deuda_total": float(deuda_total),
@@ -484,28 +542,12 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "monto_total": float(c.monto_total),
                     "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
                 } for c in cxc_pendientes],
-                "ventas": [
-                    {
-                        "id": v.id, 
-                        "fecha": v.fecha, 
-                        "tipo": v.tipo,
-                        "monto": float(v.total_principal), 
-                        "estado": v.estado
-                    } for v in ventas
-                ],
-                "pagos": [
-                    {
-                        "id": p.id, 
-                        "fecha": p.fecha, 
-                        "monto": float(p.monto_abono_principal), 
-                        "referencia": p.referencia, 
-                        "factura_id": p.cuenta.venta.id if p.cuenta.venta else None
-                    } for p in pagos
-                ]
+                "ventas": documentos,
+                "pagos": pagos_data,
             })
         except Cliente.DoesNotExist:
             return Response({"error": "Cliente no encontrado"}, status=404)
-
+            
 class ClienteUpdateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 

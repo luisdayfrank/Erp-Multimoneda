@@ -257,7 +257,31 @@ async function verFichaCliente(id) {
         renderizarFacturasPendientes(data.facturas_pendientes);
 
         // 3. Renderizar Pantalla Oculta (Historial Completo)
-        renderizarMovimientos(data.ventas, data.recibos);
+        //renderizarMovimientos(data.ventas, data.recibos);
+
+        // Mezclar recibos nuevos + pagos legacy (abonos antiguos sin recibo)
+        const recibosCompletos = [
+            ...(data.recibos || []),
+            // Convertir pagos legacy a formato similar a recibos
+            ...(data.pagos || []).filter(p => !data.recibos || !data.recibos.some(r => 
+                // Si un pago legacy ya está cubierto por un recibo, no duplicar
+                // Esto es aproximado; en producción podrías marcar los pagos con recibo_id
+                false
+            )).map(p => ({
+                id: `P${p.id}`,
+                fecha: p.fecha,
+                monto_total_entregado: p.monto,
+                total_aplicado: p.monto,
+                sobrante_a_favor: 0,
+                origen: 'LEGACY',
+                referencia: p.referencia || 'Abono registrado (versión anterior)',
+                facturas_afectadas: 1,
+                usuario: null,
+                desglose_metodos: [],
+                _es_legacy: true
+            }))
+        ];
+        renderizarMovimientos(data.ventas, recibosCompletos);
 
         // 4. Asegurarnos que siempre abra en la vista de facturas
         toggleVistasFicha('facturas');

@@ -567,6 +567,62 @@ class Venta(TransaccionBase):
                         referencia=" | ".join(ref_parts)
                     ) 
 
+                # >>> PASO 7: CREAR RECIBO DE ABONO (Fase 3 - Opción A) <<<
+                # Construir lista de abonos aplicados para el recibo
+                abonos_para_recibo = []
+                
+                # Abonos a facturas viejas (desde Paso 1 y 1.5)
+                for ab in abonos_viejas:
+                    try:
+                        cxc_vieja = CuentaPorCobrar.objects.get(pk=ab['cxc_id'])
+                        abonos_para_recibo.append({
+                            'cxc': cxc_vieja,
+                            'monto_aplicado': ab['monto_aplicado'],
+                            'saldo_antes': ab['monto_aplicado'] + ab['saldo_restante'],
+                            'saldo_despues': ab['saldo_restante'],
+                            'origen_dinero': 'EFECTIVO' if ab.get('origen') == 'EFECTIVO' else 'SALDO_FAVOR'
+                        })
+                    except CuentaPorCobrar.DoesNotExist:
+                        pass
+
+                # Abono a la nueva factura (desde Paso 6)
+                if monto_abono_registrado > 0 or saldo_favor_a_nueva > 0:
+                    abonos_para_recibo.append({
+                        'cxc': cxc,
+                        'monto_aplicado': monto_abono_registrado,
+                        'saldo_antes': self.total_principal,
+                        'saldo_despues': saldo_restante,
+                        'origen_dinero': 'SALDO_FAVOR' if saldo_favor_a_nueva > 0 else 'EFECTIVO'
+                    })
+
+                # Desglose de métodos de pago
+                desglose = []
+                for pago in self.pagos.all():
+                    desglose.append({
+                        'metodo_id': pago.metodo.id,
+                        'metodo_nombre': pago.metodo.nombre,
+                        'monto_pagado': float(pago.monto_pagado),
+                        'monto_equivalente_principal': float(pago.monto_equivalente_principal),
+                        'referencia': pago.referencia or ''
+                    })
+
+                # Monto total del recibo = dinero físico + saldo a favor usado
+                monto_total_recibo = dinero_fisico + saldo_favor_usado + saldo_favor_a_nueva
+
+                if abonos_para_recibo:
+                    ReciboAbono.crear_desde_abonos(
+                        cliente=cliente,
+                        usuario=self.usuario,
+                        tasa_cambio=self.tasa_cambio_historica,
+                        monto_total=monto_total_recibo,
+                        desglose_metodos=desglose,
+                        origen='POS_VENTA',
+                        abonos_list=abonos_para_recibo,
+                        venta_origen=self,
+                        sobrante=sobrante,
+                        referencia=f"Recibo desde Venta #{self.id}"
+                    )
+            
             # 4. Cambiar estado
             self.estado = 'PROCESADA'
             self.save()
@@ -1436,6 +1492,47 @@ class ReciboAbono(models.Model):
     
     def __str__(self):
         return f"Recibo #{self.id} - {self.cliente.nombre} - ${self.monto_total_entregado:.2f}"
+
+    @classmethod
+    def crear_desde_abonos(cls, cliente, usuario, tasa_cambio, monto_total, 
+                           desglose_metodos, origen, abonos_list, venta_origen=None, 
+                           sobrante=Decimal('0.00'), referencia=''):
+        """
+        Crea un ReciboAbono + sus aplicaciones a partir de una lista de abonos ya ejecutados.
+        Cada item de abonos_list debe ser: {
+            'cxc': cuenta_por_cobrar_obj,
+            'monto_aplicado': Decimal,
+            'saldo_antes': Decimal,
+            'saldo_despues': Decimal,
+            'origen_dinero': 'EFECTIVO' | 'SALDO_FAVOR'
+        }
+        Retorna el ReciboAbono creado.
+        """
+        with transaction.atomic():
+            recibo = cls.objects.create(
+                cliente=cliente,
+                usuario=usuario,
+                monto_total_entregado=monto_total,
+                desglose_metodos=desglose_metodos,
+                tasa_cambio=tasa_cambio,
+                sobrante_a_favor=sobrante,
+                referencia=referencia,
+                origen=origen,
+                venta_origen=venta_origen
+            )
+
+            for ab in abonos_list:
+                ReciboAbonoAplicacion.objects.create(
+                    recibo=recibo,
+                    cuenta=ab['cxc'],
+                    monto_aplicado=ab['monto_aplicado'],
+                    saldo_antes=ab['saldo_antes'],
+                    saldo_despues=ab['saldo_despues'],
+                    saldo_la_factura=(ab['saldo_despues'] <= Decimal('0.00')),
+                    origen_dinero=ab.get('origen_dinero', 'EFECTIVO')
+                )
+
+            return recibo
     
     @property
     def total_aplicado(self):

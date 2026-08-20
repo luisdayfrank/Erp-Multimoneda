@@ -13,7 +13,8 @@ from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, Sesion
     TomaFisica,
     DetalleTomaFisica,
     AjusteInventario,
-    DetalleAjusteInventario
+    DetalleAjusteInventario,
+    ReciboAbono, ReciboAbonoAplicacion
     )
 from django.utils import timezone
 

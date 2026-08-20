@@ -623,7 +623,7 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "monto_total": float(c.monto_total),
                     "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
                 } for c in cxc_pendientes],
-                "documentos": documentos,
+                "ventas": documentos,
                 "recibos": recibos_data,
                 "pagos": pagos_data,
             })

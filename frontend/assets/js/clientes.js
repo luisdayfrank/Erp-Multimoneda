@@ -257,7 +257,7 @@ async function verFichaCliente(id) {
         renderizarFacturasPendientes(data.facturas_pendientes);
 
         // 3. Renderizar Pantalla Oculta (Historial Completo)
-        renderizarMovimientos(data.ventas, data.pagos);
+        renderizarMovimientos(data.ventas, data.recibos);
 
         // 4. Asegurarnos que siempre abra en la vista de facturas
         toggleVistasFicha('facturas');
@@ -323,13 +323,13 @@ function renderizarFacturasPendientes(facturas) {
 // ==============================================================================
 // RENDERIZADO DE HISTORIAL DE MOVIMIENTOS (CON TIPO DE VENTA)
 // ==============================================================================
-function renderizarMovimientos(ventas, pagos) {
+function renderizarMovimientos(ventas, recibos) {
     const contenedor = document.getElementById('contenedor-movimientos');
     contenedor.innerHTML = '';
 
     let movimientos = [
         ...ventas.map(v => ({...v, clase: 'VENTA', icon: 'bi-cart-fill', color: 'text-dark'})),
-        ...pagos.map(p => ({...p, clase: 'ABONO', icon: 'bi-cash-coin', color: 'text-success'}))
+        ...(recibos || []).map(r => ({...r, clase: 'RECIBO', icon: 'bi-receipt-cutoff', color: 'text-success'}))
     ].sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
     if (movimientos.length === 0) {
@@ -341,30 +341,54 @@ function renderizarMovimientos(ventas, pagos) {
         const fecha = new Date(m.fecha).toLocaleDateString();
         const hora = new Date(m.fecha).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
-        // >>> NUEVO: Badge de tipo en el historial <<<
+        // Badge de tipo
         let badgeTipo = '';
         if (m.clase === 'VENTA') {
-            badgeTipo = m.tipo === 'CREDITO' 
-                ? '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>' 
-                : '<span class="badge bg-success ms-1">CONTADO</span>';
+            if (m.tipo === 'DEUDA_INICIAL') {
+                badgeTipo = '<span class="badge bg-secondary ms-1">DEUDA INICIAL</span>';
+            } else if (m.tipo === 'CREDITO') {
+                badgeTipo = '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>';
+            } else {
+                badgeTipo = '<span class="badge bg-success ms-1">CONTADO</span>';
+            }
+        } else if (m.clase === 'RECIBO') {
+            badgeTipo = `<span class="badge bg-info text-dark ms-1">RECIBO #${m.id}</span>`;
         }
 
-        let tituloCelda = m.clase === 'VENTA'
-            ? `<div class="fw-bold text-primary" style="cursor:pointer; text-decoration:underline;" onclick="verDetalleFactura(${m.id}, 'historial')" title="Ver detalles de esta venta">Compra de Mercancía (Factura #${m.id}) ${badgeTipo}</div>`
-            : `<div class="fw-bold text-dark">Abono: ${m.referencia}</div>`;
+        // Título de la fila
+        let tituloCelda;
+        if (m.clase === 'VENTA') {
+            tituloCelda = `<div class="fw-bold text-primary" style="cursor:pointer; text-decoration:underline;" onclick="verDetalleFactura(${m.id}, 'historial')" title="Ver detalles de esta venta">Compra de Mercancía (Factura #${m.id}) ${badgeTipo}</div>`;
+        } else {
+            tituloCelda = `<div class="fw-bold text-dark">Recibo de Abono ${badgeTipo}<br><small class="text-muted">${m.referencia || ''}</small></div>`;
+        }
+
+        // Subtítulo (facturas afectadas para recibos)
+        let subtitulo = '';
+        if (m.clase === 'RECIBO') {
+            subtitulo = `<div class="small text-muted"><i class="bi bi-check-circle me-1"></i>${m.facturas_afectadas || 0} facturas pagadas</div>`;
+        }
+
+        // Monto y signo
+        const esNegativo = m.clase === 'VENTA';
+        const montoDisplay = esNegativo 
+            ? `-$ ${m.monto.toFixed(2)}` 
+            : `+$ ${(m.monto_total_entregado || m.monto).toFixed(2)}`;
 
         const html = `
             <div class="d-flex align-items-center p-3 border-bottom bg-white text-dark">
                 <div class="me-3 fs-4 ${m.color}"><i class="bi ${m.icon}"></i></div>
                 <div class="flex-grow-1">
-                    <div class="fw-bold text-uppercase small text-muted">${m.clase} ${m.clase === 'ABONO' ? '(A Fact. #'+m.factura_id+')' : '#'+m.id}</div>
+                    <div class="fw-bold text-uppercase small text-muted">${m.clase} ${m.clase === 'RECIBO' ? `#${m.id}` : ''}</div>
                     ${tituloCelda}
+                    ${subtitulo}
                     <div class="small text-muted">${fecha} - ${hora}</div>
                 </div>
                 <div class="text-end">
-                    <h5 class="mb-0 fw-bold ${m.clase === 'VENTA' ? 'text-dark' : 'text-success'}">
-                        ${m.clase === 'VENTA' ? '-' : '+'}$ ${m.monto.toFixed(2)}
+                    <h5 class="mb-0 fw-bold ${esNegativo ? 'text-dark' : 'text-success'}">
+                        ${montoDisplay}
                     </h5>
+                    ${m.sobrante_a_favor > 0 ? `<small class="text-success">+Saldo: $${m.sobrante_a_favor.toFixed(2)}</small>` : ''}
                 </div>
             </div>
         `;

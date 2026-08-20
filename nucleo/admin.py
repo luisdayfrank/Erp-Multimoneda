@@ -503,3 +503,35 @@ class AjusteInventarioAdmin(admin.ModelAdmin):
     list_filter = ('estado', 'almacen', 'fecha')
     readonly_fields = ('fecha', 'total_costo_ajuste')
     inlines = [DetalleAjusteInventarioInline]
+
+# ==============================================================================
+# RECIBOS DE ABONO
+# ==============================================================================
+
+class ReciboAbonoAplicacionInline(admin.TabularInline):
+    model = ReciboAbonoAplicacion
+    extra = 0
+    readonly_fields = ('cuenta', 'monto_aplicado', 'saldo_antes', 'saldo_despues', 'saldo_la_factura', 'origen_dinero')
+    can_delete = False
+
+@admin.register(ReciboAbono)
+class ReciboAbonoAdmin(admin.ModelAdmin):
+    list_display = ('id', 'cliente', 'fecha', 'monto_total_entregado', 'total_aplicado_display', 'sobrante_a_favor', 'origen', 'usuario')
+    list_filter = ('origen', 'fecha', 'usuario')
+    search_fields = ('cliente__nombre', 'referencia')
+    readonly_fields = ('fecha', 'total_aplicado_display', 'facturas_afectadas_display')
+    inlines = [ReciboAbonoAplicacionInline]
+    
+    def total_aplicado_display(self, obj):
+        return f"${obj.total_aplicado:.2f}"
+    total_aplicado_display.short_description = 'Total Aplicado'
+    
+    def facturas_afectadas_display(self, obj):
+        return obj.facturas_afectadas_count
+    facturas_afectadas_display.short_description = 'Facturas Afectadas'
+
+@admin.register(ReciboAbonoAplicacion)
+class ReciboAbonoAplicacionAdmin(admin.ModelAdmin):
+    list_display = ('recibo', 'cuenta', 'monto_aplicado', 'saldo_antes', 'saldo_despues', 'saldo_la_factura', 'origen_dinero')
+    list_filter = ('saldo_la_factura', 'origen_dinero')
+    readonly_fields = ('saldo_antes', 'saldo_despues')

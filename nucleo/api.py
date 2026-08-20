@@ -27,7 +27,7 @@ from .models import (
     RutaMercadoPago,
     RutaMercadoGasto,
     TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
-    InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto
+    InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto, ReciboAbono
 )
 from .serializers import (
     PresentacionProductoSerializer, VentaSerializer, CompraSerializer, 
@@ -199,7 +199,9 @@ class RegistrarAbonoMasivoAPIView(APIView):
         except Cliente.DoesNotExist:
             return Response({"error": "Cliente no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
+        # Calcular total del abono en USD
         total_abono_usd = Decimal('0.00')
+        desglose_metodos = []
         for pago in pagos_data:
             monto = Decimal(str(pago['monto_pagado']))
             metodo = MetodoPago.objects.get(pk=pago['metodo_id'])
@@ -210,11 +212,20 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 monto_usd = monto
             total_abono_usd += monto_usd
 
+            desglose_metodos.append({
+                'metodo_id': metodo.id,
+                'metodo_nombre': metodo.nombre,
+                'monto_pagado': float(monto),
+                'monto_equivalente_usd': float(monto_usd),
+                'referencia': pago.get('referencia', '')
+            })
+
         facturas_pendientes = CuentaPorCobrar.objects.filter(
             cliente=cliente,
             estado__in=['PENDIENTE', 'VENCIDA']
-        ).select_related('venta').order_by('venta__fecha')
+        ).select_related('venta').order_by('id')
 
+        # Caso: no hay facturas y el cliente quiere guardar saldo a favor
         if not facturas_pendientes.exists() and total_abono_usd > 0:
             if not guardar_saldo_favor:
                 return Response({
@@ -225,14 +236,28 @@ class RegistrarAbonoMasivoAPIView(APIView):
             else:
                 cliente.saldo_a_favor += total_abono_usd
                 cliente.save(update_fields=['saldo_a_favor'])
+                
+                ReciboAbono.objects.create(
+                    cliente=cliente,
+                    usuario=request.user,
+                    monto_total_entregado=total_abono_usd,
+                    desglose_metodos=desglose_metodos,
+                    tasa_cambio=tasa_cambio,
+                    sobrante_a_favor=total_abono_usd,
+                    origen='ABONO_MASIVO',
+                    referencia="Saldo a favor - Cliente sin facturas pendientes"
+                )
+                
                 return Response({
                     "mensaje": "Saldo a favor guardado exitosamente.",
                     "saldo_a_favor_total": float(cliente.saldo_a_favor),
                     "monto_guardado": float(total_abono_usd)
                 }, status=status.HTTP_200_OK)
 
+        # Distribuir abono FIFO
         abono_restante = total_abono_usd
         facturas_pagadas = []
+        abonos_para_recibo = []
 
         for cxc in facturas_pendientes:
             if abono_restante <= Decimal('0.00'):
@@ -257,12 +282,21 @@ class RegistrarAbonoMasivoAPIView(APIView):
             cxc.save()
 
             abono_restante -= monto_aplicar
+
             facturas_pagadas.append({
                 "cxc_id": cxc.id,
                 "venta_id": cxc.venta.id if cxc.venta else None,
                 "monto_aplicado": float(monto_aplicar),
                 "saldo_restante": float(cxc.saldo_pendiente),
                 "estado": cxc.estado
+            })
+
+            abonos_para_recibo.append({
+                'cxc': cxc,
+                'monto_aplicado': monto_aplicar,
+                'saldo_antes': saldo_antes,
+                'saldo_despues': cxc.saldo_pendiente,
+                'origen_dinero': 'EFECTIVO'
             })
 
         saldo_sobrante = Decimal('0.00')
@@ -279,6 +313,19 @@ class RegistrarAbonoMasivoAPIView(APIView):
                     "facturas_pagadas": facturas_pagadas
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+        if abonos_para_recibo:
+            ReciboAbono.crear_desde_abonos(
+                cliente=cliente,
+                usuario=request.user,
+                tasa_cambio=tasa_cambio,
+                monto_total=total_abono_usd,
+                desglose_metodos=desglose_metodos,
+                origen='ABONO_MASIVO',
+                abonos_list=abonos_para_recibo,
+                sobrante=saldo_sobrante,
+                referencia=f"Abono masivo - {len(facturas_pagadas)} facturas afectadas"
+            )
+
         return Response({
             "mensaje": "Abono procesado exitosamente.",
             "total_abono": float(total_abono_usd),
@@ -286,7 +333,6 @@ class RegistrarAbonoMasivoAPIView(APIView):
             "saldo_a_favor": float(cliente.saldo_a_favor),
             "saldo_sobrante_guardado": float(saldo_sobrante)
         }, status=status.HTTP_201_CREATED)
-
 
 class RegistrarAbonoCxCAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
@@ -526,6 +572,41 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "tipo_documento_afectado": "DEUDA_INICIAL" if es_a_deuda_inicial else "VENTA",
                 })
 
+            # ═══════════════════════════════════════════════════════
+            # RECIBOS (nuevo) + Pagos legacy (compatibilidad)
+            # ═══════════════════════════════════════════════════════
+            recibos = ReciboAbono.objects.filter(cliente=cliente).order_by('-fecha')
+            recibos_data = []
+            for r in recibos:
+                recibos_data.append({
+                    "id": r.id,
+                    "fecha": r.fecha,
+                    "monto_total_entregado": float(r.monto_total_entregado),
+                    "total_aplicado": float(r.total_aplicado),
+                    "sobrante_a_favor": float(r.sobrante_a_favor),
+                    "origen": r.origen,
+                    "referencia": r.referencia,
+                    "facturas_afectadas": r.facturas_afectadas_count,
+                    "usuario": r.usuario.username if r.usuario else None,
+                    "desglose_metodos": r.desglose_metodos,
+                })
+
+            # Pagos legacy (por compatibilidad del frontend)
+            pagos_data = []
+            for p in pagos:
+                es_a_deuda_inicial = (p.cuenta.venta is None)
+                pagos_data.append({
+                    "id": p.id,
+                    "fecha": p.fecha,
+                    "monto": float(p.monto_abono_principal),
+                    "referencia": p.referencia,
+                    "tasa_cambio": float(p.tasa_cambio_pago),
+                    "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
+                    "cxc_id": p.cuenta.id,
+                    "es_abono_deuda_inicial": es_a_deuda_inicial,
+                    "tipo_documento_afectado": "DEUDA_INICIAL" if es_a_deuda_inicial else "VENTA",
+                })
+
             return Response({
                 "cliente": data_cliente,
                 "deuda_total": float(deuda_total),
@@ -542,7 +623,8 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "monto_total": float(c.monto_total),
                     "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
                 } for c in cxc_pendientes],
-                "ventas": documentos,
+                "documentos": documentos,
+                "recibos": recibos_data,
                 "pagos": pagos_data,
             })
         except Cliente.DoesNotExist:
@@ -1355,6 +1437,25 @@ class VentasTurnoAPIView(APIView):
 
         return Response(data, status=status.HTTP_200_OK)
 
+class ReciboAbonoDetalleAPIView(APIView):
+    """
+    GET /api/v1/cxc/recibos/<id>/
+    Devuelve el detalle completo de un recibo: métodos, facturas pagadas, saldos, etc.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            recibo = ReciboAbono.objects.prefetch_related(
+                'aplicaciones__cuenta__venta',
+                'aplicaciones__cuenta__cliente'
+            ).select_related('cliente', 'usuario', 'venta_origen').get(pk=pk)
+            
+            serializer = ReciboAbonoDetalleSerializer(recibo)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except ReciboAbono.DoesNotExist:
+            return Response({"error": "Recibo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
 # ==============================================================================
 # TOMA FÍSICA DE INVENTARIO - API VIEWS

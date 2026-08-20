@@ -1399,3 +1399,76 @@ class DetalleAjusteInventario(models.Model):
     def __str__(self):
         signo = "+" if self.tipo_ajuste == 'ENTRADA' else ""
         return f"{self.producto.nombre}: {signo}{self.cantidad_ajustada} ({self.tipo_ajuste})"
+
+# ==============================================================================
+# 9. RECIBOS DE ABONO (Unificación de pagos)
+# ==============================================================================
+
+class ReciboAbono(models.Model):
+    """
+    Representa el acto físico de pago. Un recibo = un momento en que el cliente entregó dinero.
+    Puede abonar 1 o N facturas (deudas) en ese mismo acto.
+    """
+    cliente = models.ForeignKey(Cliente, on_delete=models.RESTRICT, related_name='recibos')
+    usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, help_text="Cajero que recibió el pago")
+    fecha = models.DateTimeField(auto_now_add=True)
+    
+    monto_total_entregado = models.DecimalField(max_digits=15, decimal_places=2)
+    desglose_metodos = models.JSONField(default=list, help_text="Lista de métodos usados en este recibo")
+    tasa_cambio = models.DecimalField(max_digits=15, decimal_places=2)
+    sobrante_a_favor = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    referencia = models.CharField(max_length=200, blank=True)
+    
+    ORIGENES = (
+        ('POS_VENTA', 'Pago en Punto de Venta (al facturar)'),
+        ('ABONO_MASIVO', 'Abono Masivo desde módulo Clientes'),
+        ('ABONO_CXC', 'Abono directo a CxC'),
+        ('RUTA_MERCADO', 'Cobranza en Ruta de Mercado'),
+    )
+    origen = models.CharField(max_length=20, choices=ORIGENES, default='ABONO_MASIVO')
+    
+    venta_origen = models.ForeignKey(Venta, on_delete=models.SET_NULL, null=True, blank=True, related_name='recibos')
+    
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = "Recibo de Abono"
+        verbose_name_plural = "Recibos de Abono"
+    
+    def __str__(self):
+        return f"Recibo #{self.id} - {self.cliente.nombre} - ${self.monto_total_entregado:.2f}"
+    
+    @property
+    def total_aplicado(self):
+        return sum(app.monto_aplicado for app in self.aplicaciones.all())
+    
+    @property
+    def facturas_afectadas_count(self):
+        return self.aplicaciones.count()
+
+
+class ReciboAbonoAplicacion(models.Model):
+    """
+    Cada línea de distribución: este recibo abonó X monto a Y factura/CxC.
+    """
+    recibo = models.ForeignKey(ReciboAbono, on_delete=models.CASCADE, related_name='aplicaciones')
+    cuenta = models.ForeignKey(CuentaPorCobrar, on_delete=models.RESTRICT, related_name='aplicaciones_recibo')
+    
+    monto_aplicado = models.DecimalField(max_digits=15, decimal_places=2)
+    saldo_antes = models.DecimalField(max_digits=15, decimal_places=2)
+    saldo_despues = models.DecimalField(max_digits=15, decimal_places=2)
+    saldo_la_factura = models.BooleanField(default=False)
+    
+    origen_dinero = models.CharField(
+        max_length=20,
+        choices=(('EFECTIVO', 'Dinero físico entregado'), ('SALDO_FAVOR', 'Saldo a favor del cliente')),
+        default='EFECTIVO'
+    )
+    
+    class Meta:
+        verbose_name = "Aplicación de Recibo"
+        verbose_name_plural = "Aplicaciones de Recibo"
+        unique_together = ('recibo', 'cuenta')
+    
+    def __str__(self):
+        estado = "SALDADA" if self.saldo_la_factura else "PARCIAL"
+        return f"Recibo #{self.recibo.id} → CxC #{self.cuenta.id}: ${self.monto_aplicado:.2f} ({estado})"

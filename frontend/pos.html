@@ -101,9 +101,25 @@
             vertical-align: top;
             font-weight: 400;
         }
-        .ticket-items td:nth-child(1) { width: 10%; text-align: center; }
-        .ticket-items td:nth-child(2) { width: 48%; padding-right: 0.3mm; word-break: break-word; }
-        .ticket-items td:nth-child(3) { width: 42%; text-align: right; }
+        /* >>> NUEVO: formato 2 líneas por producto (Cant X Precio / Nombre + Total) <<< */
+        .ticket-items td.der {
+            text-align: right;
+        }
+        .ticket-items td.cant-precio {
+            font-size: 8px;
+            font-weight: 700;
+            padding-top: 0.8mm;
+        }
+        .ticket-items tr.sep td {
+            border-top: 1px dotted #000;
+        }
+        /* Fila flexible reutilizable (deudas / pagos / totales de bloque) */
+        .ticket-fila {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.3mm;
+            font-weight: 600;
+        }
         .ticket-totales {
             border-top: 1px dashed #000;
             padding-top: 1mm;
@@ -159,6 +175,14 @@
         }
         .ticket-footer p {
             margin-bottom: 0.3mm;
+        }
+        /* >>> NUEVO: caja de PENDIENTE TOTAL destacada <<< */
+        .ticket-pendiente {
+            display: none;
+            border: 2px solid #000;
+            padding: 1.2mm 1mm;
+            margin-bottom: 1mm;
+            text-align: center;
         }
         /* ============================================================
            TICKET CORTE Z - ESTILOS PANTALLA (oculto)
@@ -674,7 +698,7 @@
     </div>
 
     <!-- ============================================================
-         TICKET DE VENTA - 58mm - VERSIÓN CORREGIDA
+         TICKET DE VENTA - 58mm - VERSIÓN 2 LÍNEAS POR PRODUCTO
          ============================================================ -->
     <div id="ticket-impresion" class="ticket-impresion">
         <div class="ticket-encabezado">
@@ -698,8 +722,7 @@
         <table class="ticket-items">
             <thead>
                 <tr>
-                    <th>Cant</th>
-                    <th>Descripción</th>
+                    <th colspan="2">Descripción (Cant X Precio)</th>
                     <th style="text-align: right;">Total</th>
                 </tr>
             </thead>
@@ -728,27 +751,43 @@
             </div>
         </div>
 
-        <!-- >>> NUEVO: Abonos a deudas anteriores <<< -->
-        <div id="ticket-abonos-viejos-section" class="ticket-pagos" style="display: none; border-top: 1px dashed #000; padding-top: 1.5mm; margin-bottom: 1.5mm; font-size: 10px; font-weight: 600;">
-            <p style="font-weight: bold; margin-bottom: 1mm;">ABONOS A DEUDAS ANTERIORES:</p>
-            <div id="ticket-abonos-viejos-lista"></div>
+        <!-- >>> NUEVO: Bloque DEUDAS (CxC anterior + nueva factura) <<< -->
+        <div id="ticket-deudas-section" class="ticket-pagos" style="display: none;">
+            <p style="font-weight: bold; margin-bottom: 1mm;">DEUDAS:</p>
+            <div id="ticket-deudas-lista"></div>
+            <div class="ticket-fila" style="border-top: 1px dashed #000; padding-top: 0.5mm; margin-top: 0.5mm; font-weight: bold;">
+                <span>TOTAL DEUDA:</span>
+                <span>$ <span id="ticket-deuda-total">0.00</span></span>
+            </div>
         </div>
 
+        <!-- >>> MEJORADO: Pagos y abonos con doble moneda <<< -->
         <div id="ticket-pagos-section" class="ticket-pagos" style="display: none;">
-            <p style="font-weight: bold; margin-bottom: 1mm;">MÉTODOS DE PAGO:</p>
+            <p style="font-weight: bold; margin-bottom: 1mm;">PAGOS Y ABONOS:</p>
             <div id="ticket-pagos-lista"></div>
+            <div class="ticket-fila" style="border-top: 1px dashed #000; padding-top: 0.5mm; margin-top: 0.5mm; font-weight: bold;">
+                <span>TOTAL PAGADO:</span>
+                <span>$ <span id="ticket-pagos-total">0.00</span></span>
+            </div>
         </div>
 
         <div id="ticket-vuelto-section" class="ticket-vuelto" style="display: none;">
-            <div class="fila-total">
+            <div class="ticket-fila">
                 <span>VUELTO:</span>
                 <span>$ <span id="ticket-vuelto">0.00</span></span>
             </div>
         </div>
 
-        <div id="ticket-credito-section" class="ticket-credito" style="display: none;">
-            ✓ VENTA A CRÉDITO<br>
-            <span style="font-size: 9px;">Saldo pendiente registrado en CxC</span>
+        <!-- >>> NUEVO: PENDIENTE TOTAL destacado <<< -->
+        <div id="ticket-pendiente-section" class="ticket-pendiente">
+            <div id="ticket-pendiente-linea" style="font-size: 12px; font-weight: 700;">
+                <span id="ticket-pendiente-titulo">PENDIENTE TOTAL:</span>
+                $ <span id="ticket-pendiente">0.00</span>
+            </div>
+            <div id="ticket-pendiente-nota" style="font-size: 7px; font-weight: 400;">(incluye deudas anteriores)</div>
+            <div id="ticket-a-favor-linea" style="font-size: 9px; font-weight: 700; display: none;">
+                A FAVOR: $ <span id="ticket-a-favor">0.00</span>
+            </div>
         </div>
 
         <div class="ticket-footer">
@@ -871,6 +910,6 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js?v=6"></script>
     <script src="assets/js/menu.js"></script>
-    <script src="assets/js/pos.js?v=6"></script>
+    <script src="assets/js/pos.js?v=7"></script>
 </body>
 </html>

@@ -886,6 +886,48 @@ function actualizarCantidadManual(idPresentacion, valor) {
 }
 
 // ==============================================================================
+// HELPER: Abrevia la unidad de la presentacion para el ticket
+// "UNIDAD (X12)" -> "UND" | "Kilo" -> "KG" | "Litro" -> "LT"
+// ==============================================================================
+function abreviarUnidad(nombrePresentacion) {
+    if (!nombrePresentacion) return '';
+    let u = String(nombrePresentacion).toUpperCase().trim();
+
+    // Quitar todo lo que este entre parentesis: "UNIDAD (X12)" -> "UNIDAD"
+    u = u.replace(/\(.*?\)/g, '').trim();
+
+    const mapaAbreviaturas = {
+        'UNIDAD': 'UND', 'UNIDADES': 'UND',
+        'KILO': 'KG', 'KILOS': 'KG', 'KILOGRAMO': 'KG', 'KILOGRAMOS': 'KG',
+        'LITRO': 'LT', 'LITROS': 'LT', 'MILILITRO': 'ML', 'MILILITROS': 'ML',
+        'GRAMO': 'GR', 'GRAMOS': 'GR',
+        'CAJA': 'CAJ', 'CAJAS': 'CAJ',
+        'PAQUETE': 'PQT', 'PAQUETES': 'PQT',
+        'BOLSA': 'BOL', 'BOLSAS': 'BOL',
+        'BOTELLA': 'BOT', 'BOTELLAS': 'BOT',
+        'LATA': 'LTA', 'LATAS': 'LTA',
+        'SACO': 'SAC', 'SACOS': 'SAC',
+        'BARRA': 'BRA', 'BARRAS': 'BRA',
+        'FRASCO': 'FRC', 'FRASCOS': 'FRC',
+        'POTE': 'PTE', 'POTES': 'PTE',
+        'MANOJO': 'MNJ', 'MANOJOS': 'MNJ',
+        'DOCENA': 'DOC', 'DOCENAS': 'DOC',
+        'GALON': 'GAL', 'GALONES': 'GAL',
+        'MEDIDA': 'MED',
+        'PORCION': 'POR', 'PORCIONES': 'POR'
+    };
+
+    if (mapaAbreviaturas[u]) return mapaAbreviaturas[u];
+
+    // Si no esta en el mapa y sigue largo: usar solo la primera palabra
+    if (u.length > 6) {
+        u = u.split(/\s+/)[0];
+        if (u.length > 6) u = u.substring(0, 6);
+    }
+    return u;
+}
+
+// ==============================================================================
 // 9. TICKETS - VERSION 2 LINEAS POR PRODUCTO + BLOQUES DE DEUDA/PAGOS/PENDIENTE
 // ==============================================================================
 function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
@@ -913,8 +955,14 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
     carritoFacturado.forEach(function(item, idx) {
         const catItem = catalogo.find(function(c) { return c.id === item.presentacion_id; });
         let nombreProd = catItem ? catItem.producto.nombre : item.nombre;
-        let unidad = catItem ? String(catItem.nombre_presentacion || '').toUpperCase() : '';
-        if (unidad.length > 10) unidad = unidad.substring(0, 10);
+        // >>> UNIDAD: prioriza la sigla que viene del server (unidad_sigla) <<<
+        let unidad = '';
+        if (catItem) {
+            unidad = String(catItem.unidad_sigla || '').toUpperCase().trim();
+        }
+        if (!unidad) {
+            unidad = catItem ? abreviarUnidad(catItem.nombre_presentacion) : '';
+        }
         if (nombreProd.length > 24) nombreProd = nombreProd.substring(0, 23) + '…';
 
         const cantTxt = parseFloat(item.cantidad).toFixed(2) + (unidad ? ' ' + unidad : '');

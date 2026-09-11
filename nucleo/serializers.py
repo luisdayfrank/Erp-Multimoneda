@@ -93,6 +93,7 @@ class PresentacionProductoSerializer(serializers.ModelSerializer):
     nombre_presentacion = serializers.SerializerMethodField()
     costo = serializers.DecimalField(source='costo_presentacion', max_digits=15, decimal_places=4, read_only=True)
     margen = serializers.DecimalField(source='margen_ganancia_porcentaje', max_digits=15, decimal_places=2, read_only=True)
+    unidad_sigla = serializers.CharField(source='unidad_medida.sigla', read_only=True)
 
     class Meta:
         model = PresentacionProducto
@@ -100,6 +101,7 @@ class PresentacionProductoSerializer(serializers.ModelSerializer):
             'id', 
             'producto', 
             'unidad_medida', 
+            'unidad_sigla',
             'factor_conversion', 
             'precio_venta_principal', 
             'nombre_presentacion',

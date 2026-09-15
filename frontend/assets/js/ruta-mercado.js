@@ -991,23 +991,33 @@ async function verRuta(id) {
         const btnReabrir = document.getElementById('btn-reabrir-ruta');
         btnReabrir.style.display = r.estado === 'CERRADA' ? 'inline-block' : 'none';
 
-        // ── TASA para convertir todo a moneda principal ──
+        // ── Tasa y helpers de conversión ──
         const tasa = parseFloat(r.tasa_cambio) || 0;
         const aPrincipal = (montoBS) => tasa > 0 ? parseFloat(montoBS || 0) / tasa : 0;
 
-        // Detectar la moneda original de cada método de pago
+        // Detectar la moneda de referencia de cada método de pago
         const metodoDePago = (p) => metodosPagoCache.find(m =>
             m.id === (p.metodo_id || (p.metodo && p.metodo.id) || p.metodo) ||
             (p.metodo_nombre && m.nombre === p.metodo_nombre)
         );
 
-        // ── Totales en principal ──
+        // ══════════════════════════════════════════
+        // CÁLCULO DEL RECAUDADO: Pagos + Créditos + Gastos − Cobranzas
+        // ══════════════════════════════════════════
+        let pagosUSD = 0;
+        (r.pagos || []).forEach(p => {
+            pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(p.monto_bs);
+        });
+        const creditosUSD = (r.creditos || []).reduce((s, c) => s + aPrincipal(c.monto_bs), 0);
+        const gastosUSD = (r.gastos || []).reduce((s, g) => s + aPrincipal(g.monto_bs), 0);
+        const cobranzasUSD = aPrincipal(r.total_cobranzas_bs);
+        const cobranzasBS = parseFloat(r.total_cobranzas_bs || 0);
+
+        const recaudadoUSD = pagosUSD + creditosUSD + gastosUSD - cobranzasUSD;
         const ventaBS = parseFloat(r.total_venta_bs || 0);
         const ventaUSD = parseFloat(r.total_venta_usd || 0) || aPrincipal(ventaBS);
-        const recaudadoBS = parseFloat(r.recaudado_real_bs || 0);
-        const recaudadoUSD = aPrincipal(recaudadoBS);
-        const difBS = parseFloat(r.diferencia_bs || 0);
-        const difUSD = aPrincipal(difBS);
+        const difUSD = recaudadoUSD - ventaUSD;
+        const difBS = difUSD * tasa;
 
         let html = `
             <div class="row mb-3">
@@ -1018,7 +1028,7 @@ async function verRuta(id) {
             </div>
             <h6 class="fw-bold">Productos</h6>
             <table class="table table-sm table-bordered">
-                <thead class="table-light"><tr><th>Producto</th><th>Salida</th><th>Entrada</th><th>Vendido</th><th>Precio ${monedaSecundaria}</th><th>Total ${monedaSecundaria}</th><th>Total ${monedaPrincipal}</th></tr></thead>
+                <thead class="table-light"><tr><th>Producto</th><th>Salida</th><th>Entrada</th><th>Vendido</th><th>Precio ${monedaSecundaria}</th><th>Total ${monedaPrincipal}</th></tr></thead>
                 <tbody>
                     ${(r.detalles || []).map(d => `
                         <tr>
@@ -1027,45 +1037,48 @@ async function verRuta(id) {
                             <td>${d.cantidad_entrada}</td>
                             <td class="fw-bold text-primary">${d.cantidad_vendida}</td>
                             <td>${d.precio_venta_bs}</td>
-                            <td>${parseFloat(d.subtotal_bs || 0).toFixed(2)}</td>
                             <td class="fw-bold text-success">${parseFloat(d.subtotal_usd || 0).toFixed(2)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
+
             <div class="row">
+                <!-- PAGOS -->
                 <div class="col-md-4">
                     <h6 class="fw-bold text-success">Pagos</h6>
                     <ul class="list-group list-group-flush">
                         ${(r.pagos || []).map(p => {
                             const m = metodoDePago(p);
+                            const esPrincipal = (p.metodo_moneda === 'PRINCIPAL') || (m && m.moneda_referencia === 'PRINCIPAL');
                             const montoBS = parseFloat(p.monto_bs || 0);
-                            // Monto original según moneda del método + equivalente en principal
-                            const esPrincipal = m && m.moneda_referencia === 'PRINCIPAL';
-                            const montoOriginal = esPrincipal ? aPrincipal(montoBS) : montoBS;
-                            const monedaOriginal = esPrincipal ? monedaPrincipal : monedaSecundaria;
-                            //const equivUSD = aPrincipal(montoBS);
-                            // En el map de pagos, reemplaza el cálculo por:
                             const equivUSD = parseFloat(p.monto_usd_equivalente) || aPrincipal(montoBS);
+                            // Si el método ya es en principal: mostrar solo $ X (sin redundancia)
+                            // Si es secundaria: mostrar BS X ($ Y)
+                            const montoHtml = esPrincipal
+                                ? `${monedaPrincipal} ${equivUSD.toFixed(2)}`
+                                : `${monedaSecundaria} ${montoBS.toFixed(2)} <small class="text-muted">($ ${equivUSD.toFixed(2)})</small>`;
                             return `<li class="list-group-item py-1 d-flex justify-content-between">
                                 <span>${p.metodo_nombre}</span>
-                                <span>${monedaOriginal} ${montoOriginal.toFixed(2)} <small class="text-muted">($ ${equivUSD.toFixed(2)})</small></span>
+                                <span>${montoHtml}</span>
                             </li>`;
                         }).join('') || '<li class="list-group-item py-1 text-muted">Sin pagos</li>'}
                     </ul>
                 </div>
+                <!-- CRÉDITOS (registrados en moneda principal) -->
                 <div class="col-md-4">
                     <h6 class="fw-bold text-warning">Créditos</h6>
                     <ul class="list-group list-group-flush">
                         ${(r.creditos || []).map(c => {
-                            const montoBS = parseFloat(c.monto_bs || 0);
+                            const montoUSD = aPrincipal(c.monto_bs);
                             return `<li class="list-group-item py-1 d-flex justify-content-between">
                                 <span>${c.cliente_nombre}</span>
-                                <span>${monedaSecundaria} ${montoBS.toFixed(2)} <small class="text-muted">($ ${aPrincipal(montoBS).toFixed(2)})</small></span>
+                                <span>${monedaPrincipal} ${montoUSD.toFixed(2)}</span>
                             </li>`;
                         }).join('') || '<li class="list-group-item py-1 text-muted">Sin créditos</li>'}
                     </ul>
                 </div>
+                <!-- GASTOS -->
                 <div class="col-md-4">
                     <h6 class="fw-bold text-danger">Gastos</h6>
                     <ul class="list-group list-group-flush">
@@ -1079,6 +1092,20 @@ async function verRuta(id) {
                     </ul>
                 </div>
             </div>
+
+            <!-- COBRANZAS: debajo de Gastos, sin crear una 4ta columna -->
+            <div class="row">
+                <div class="col-md-4 offset-md-8">
+                    <h6 class="fw-bold text-info mt-2">Cobranzas (Deudas Anteriores)</h6>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item py-1 d-flex justify-content-between">
+                            <span>Pagos recibidos de deudas viejas</span>
+                            <span>${monedaPrincipal} ${cobranzasUSD.toFixed(2)} <small class="text-muted">(${monedaSecundaria} ${cobranzasBS.toFixed(2)})</small></span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
             <hr>
             <div class="row text-center fw-bold">
                 <div class="col">
@@ -1087,9 +1114,9 @@ async function verRuta(id) {
                 </div>
                 <div class="col">
                     Recaudado: <span class="text-dark">$ ${recaudadoUSD.toFixed(2)}</span>
-                    <br><small class="text-muted">${monedaSecundaria} ${recaudadoBS.toFixed(2)}</small>
+                    <br><small class="text-muted">Pagos + Créditos + Gastos − Cobranzas</small>
                 </div>
-                <div class="col ${difBS < -0.01 ? 'text-danger' : 'text-success'}">
+                <div class="col ${difUSD < -0.01 ? 'text-danger' : 'text-success'}">
                     Dif: $ ${difUSD.toFixed(2)}
                     <br><small class="text-muted">${monedaSecundaria} ${difBS.toFixed(2)}</small>
                 </div>

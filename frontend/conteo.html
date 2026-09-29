@@ -53,23 +53,63 @@
             max-width: 48mm;
             font-family: 'Courier New', Courier, monospace;
             font-size: 9px;
-            line-height: 1.3;
+            line-height: 1.2;
             color: #000;
             background: #fff;
-            padding: 2mm;
+            padding: 0.5mm 0.3mm;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            font-weight: 400;
+            letter-spacing: -0.1px;
         }
-        .ticket-informe * { margin: 0; padding: 0; box-sizing: border-box; }
-        .ticket-informe .encabezado { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 2mm; margin-bottom: 2mm; }
-        .ticket-informe .encabezado h3 { font-size: 12px; font-weight: 700; }
-        .ticket-informe .fila { display: flex; justify-content: space-between; margin-bottom: 1mm; }
-        .ticket-informe .seccion { border-top: 1px dashed #000; padding-top: 1.5mm; margin-top: 1.5mm; }
-        .ticket-informe .total-final { font-size: 11px; font-weight: 700; border-top: 1px solid #000; padding-top: 1mm; margin-top: 1mm; }
+        .ticket-informe * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box;
+            font-weight: 400;
+        }
+        .ticket-informe .encabezado { 
+            text-align: center; 
+            border-bottom: 1px dashed #000; 
+            padding-bottom: 1.5mm; 
+            margin-bottom: 1.5mm; 
+        }
+        .ticket-informe .encabezado h3 { 
+            font-size: 12px; 
+            font-weight: 700; 
+            margin-bottom: 0.5mm;
+        }
+        .ticket-informe .encabezado p {
+            font-size: 9px;
+            margin-bottom: 0.3mm;
+        }
+        .ticket-informe .fila { 
+            display: flex; 
+            justify-content: space-between; 
+            margin-bottom: 0.3mm;
+            font-size: 9px;
+        }
+        .ticket-informe .seccion { 
+            border-top: 1px dashed #000; 
+            padding-top: 1mm; 
+            margin-top: 1mm; 
+        }
+        .ticket-informe .total-final { 
+            font-size: 11px; 
+            font-weight: 700; 
+            border-top: 1px solid #000; 
+            padding-top: 0.5mm; 
+            margin-top: 0.5mm; 
+        }
 
         /* ============================================
            IMPRESIÓN DUAL: TICKET 48mm / HOJA COMPLETA
            ============================================ */
         @media print {
-            .inv-container, .navbar, .modal, .modal-backdrop { display: none !important; }
+            .inv-container, .navbar, .modal, .modal-backdrop { 
+                display: none !important; 
+            }
             body {
                 margin: 0 !important;
                 padding: 0 !important;
@@ -78,12 +118,35 @@
                 overflow: visible !important;
             }
         
-            /* TICKET 48mm */
+            /* TICKET 48mm - Forzar densidad térmica */
             .ticket-informe.activo {
                 display: block !important;
-                position: absolute; left: 0; top: 0;
-                width: 48mm; margin: 0; padding: 0;
-                page: ticket;
+                position: absolute; 
+                left: 0; 
+                top: 0;
+                width: 48mm; 
+                margin: 0; 
+                padding: 0 !important;
+                font-size: 9px !important;
+                line-height: 1.2 !important;
+                font-weight: 400 !important;
+                font-family: 'Courier New', Courier, monospace !important;
+                color: #000 !important;
+                background: #fff !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .ticket-informe.activo * {
+                font-size: inherit !important;
+                visibility: visible !important;
+            }
+            .ticket-informe.activo .encabezado {
+                padding-bottom: 1.5mm !important;
+                margin-bottom: 1.5mm !important;
+            }
+            .ticket-informe.activo .fila {
+                margin-bottom: 0.3mm !important;
+                font-size: 9px !important;
             }
         
             /* HOJA COMPLETA (carta/A4) */
@@ -471,6 +534,7 @@
         <p>#<span id="ticket-inf-id">--</span></p>
         <p id="ticket-inf-fecha">--</p>
         <p id="ticket-inf-almacen">--</p>
+        <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
     </div>
 <!-- Informe Completo (Impresión hoja carta/A4) -->
 <div id="informe-completo-impresion" style="display: none;"></div>
@@ -481,11 +545,11 @@
         <div class="fila"><span>Sobrantes:</span><span id="ticket-inf-sobrantes">0</span></div>
     </div>
     <div class="seccion">
-        <p style="font-weight: bold; margin-bottom: 1mm;">FALTANTES:</p>
+        <p style="font-weight: bold; margin-bottom: 0.5mm; font-size: 9px;">FALTANTES:</p>
         <div id="ticket-inf-lista-faltantes"></div>
     </div>
     <div class="seccion">
-        <p style="font-weight: bold; margin-bottom: 1mm;">SOBRANTES:</p>
+        <p style="font-weight: bold; margin-bottom: 0.5mm; font-size: 9px;">SOBRANTES:</p>
         <div id="ticket-inf-lista-sobrantes"></div>
     </div>
     <div class="seccion total-final">

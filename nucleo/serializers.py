@@ -1,8 +1,8 @@
 from decimal import Decimal
 from rest_framework import serializers
 from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, SesionCaja,
-    PagoCuentaCobrar,MetodoPago, PagoVenta, Cliente, Proveedor, PagoCuentaPagar, ConfiguracionGlobal,
-    ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario, SesionCaja, ConceptoEgreso,
+    PagoCuentaCobrar, MetodoPago, PagoVenta, Cliente, Proveedor, PagoCuentaPagar, ConfiguracionGlobal,
+    ConceptoEgreso, InventarioAlmacen, EgresoCaja, EgresoInventario, DetalleEgresoInventario, SesionCaja, ConceptoEgreso,
     Compra, DetalleCompra, ConfiguracionGlobal, ConceptoEgreso, EgresoCaja, EgresoInventario, DetalleEgresoInventario,
     RutaMercado,
     RutaMercadoDetalle,
@@ -88,26 +88,43 @@ class ProductoPosSerializer(serializers.ModelSerializer):
         model = Producto
         fields = ['id', 'codigo_base', 'nombre', 'impuesto_porcentaje']
 
+# Reemplazar la clase PresentacionProductoSerializer completa
 class PresentacionProductoSerializer(serializers.ModelSerializer):
     producto = ProductoPosSerializer(read_only=True)
     nombre_presentacion = serializers.SerializerMethodField()
     costo = serializers.DecimalField(source='costo_presentacion', max_digits=15, decimal_places=4, read_only=True)
     margen = serializers.DecimalField(source='margen_ganancia_porcentaje', max_digits=15, decimal_places=2, read_only=True)
     unidad_sigla = serializers.CharField(source='unidad_medida.sigla', read_only=True)
+    stock_disponible = serializers.SerializerMethodField()
 
     class Meta:
         model = PresentacionProducto
         fields = [
-            'id', 
-            'producto', 
-            'unidad_medida', 
-            'unidad_sigla',
-            'factor_conversion', 
-            'precio_venta_principal', 
-            'nombre_presentacion',
-            'costo',
-            'margen'
+            'id', 'producto', 'unidad_medida', 'unidad_sigla',
+            'factor_conversion', 'precio_venta_principal', 
+            'nombre_presentacion', 'costo', 'margen',
+            'stock_disponible'
         ]
+
+    def get_stock_disponible(self, obj):
+        from django.db.models import Sum
+        from decimal import Decimal
+        
+        total_base = InventarioAlmacen.objects.filter(
+            producto=obj.producto,
+            almacen__activo=True
+        ).aggregate(
+            total=Sum('stock_actual_unidades_base')
+        )['total'] or Decimal('0.0000')
+        
+        try:
+            factor = Decimal(str(obj.factor_conversion))
+            if factor > 0:
+                return float(total_base / factor)
+            else:
+                return 0.0
+        except (ValueError, TypeError, ZeroDivisionError):
+            return 0.0
 
     def get_nombre_presentacion(self, obj):
         factor = int(obj.factor_conversion) if obj.factor_conversion % 1 == 0 else float(obj.factor_conversion)

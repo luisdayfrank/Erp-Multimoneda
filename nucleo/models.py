@@ -345,15 +345,14 @@ class Venta(TransaccionBase):
     def __str__(self):
         return f"Venta #{self.id} - {self.cliente.nombre} - {self.total_principal}"
 
+    # REEMPLAZAR el método procesar_venta completo dentro de class Venta
     def procesar_venta(self):
         """
-        Procesa la venta: descuenta inventario, aplica saldo a favor,
-        valida limite de credito contra deuda REAL, maneja sobrantes
-        de abono como saldo a favor, y genera CxC si aplica.
-        Devuelve un dict con informacion del procesamiento.
+        Procesa la venta con validaciones previas y manejo de errores robusto.
         """
         from django.db.models import Sum
-
+        from decimal import Decimal
+        
         resultado = {
             'saldo_favor_usado': Decimal('0.00'),
             'sobrante_abono': Decimal('0.00'),
@@ -361,43 +360,89 @@ class Venta(TransaccionBase):
             'estado_cxc': None,
         }
 
+        # ========== VALIDACIONES PREVIAS ==========
+        
+        if self.estado != 'BORRADOR':
+            raise ValueError("Solo se pueden procesar ventas en estado BORRADOR.")
+
+        if not self.detalles.exists():
+            raise ValueError("La venta no tiene productos. Agrega al menos un detalle.")
+
+        config = ConfiguracionGlobal.objects.first()
+        permitir_negativo = config.permitir_stock_negativo if config else False
+
+        if not permitir_negativo:
+            for detalle in self.detalles.all():
+                cantidad_base = detalle.cantidad_presentacion * detalle.presentacion.factor_conversion
+                inventario = InventarioAlmacen.objects.filter(
+                    producto=detalle.presentacion.producto,
+                    almacen=self.almacen
+                ).first()
+                
+                if not inventario or inventario.stock_actual_unidades_base < cantidad_base:
+                    disponible = inventario.stock_actual_unidades_base if inventario else Decimal('0')
+                    raise ValueError(
+                        f"Stock insuficiente para '{detalle.presentacion.producto.nombre}'. "
+                        f"Disponible: {disponible}, Requerido: {cantidad_base}"
+                    )
+
+        if self.tipo == 'CONTADO':
+            total_pagado = sum(
+                pago.monto_equivalente_principal 
+                for pago in self.pagos.all()
+            )
+            if total_pagado < self.total_principal:
+                raise ValueError(
+                    f"Venta de contado incompleta. Total: ${self.total_principal:.2f}, "
+                    f"Pagado: ${total_pagado:.2f}"
+                )
+
+        if self.tipo == 'CREDITO':
+            cliente = self.cliente
+            if cliente.limite_credito == Decimal('-1.00'):
+                raise ValueError(f"El cliente '{cliente.nombre}' tiene crédito restringido.")
+            
+            if cliente.limite_credito > 0:
+                deuda_actual = CuentaPorCobrar.objects.filter(
+                    cliente=cliente,
+                    estado__in=['PENDIENTE', 'VENCIDA']
+                ).exclude(venta=self).aggregate(
+                    total=Sum('saldo_pendiente')
+                )['total'] or Decimal('0.00')
+                
+                abono_inicial = sum(
+                    pago.monto_equivalente_principal 
+                    for pago in self.pagos.all()
+                )
+                nueva_deuda = max(Decimal('0.00'), self.total_principal - abono_inicial)
+                
+                if (deuda_actual + nueva_deuda) > cliente.limite_credito:
+                    disponible = cliente.limite_credito - deuda_actual
+                    raise ValueError(
+                        f"Límite de crédito excedido. Deuda actual: ${deuda_actual:.2f}, "
+                        f"Límite: ${cliente.limite_credito:.2f}. Disponible: ${disponible:.2f}"
+                    )
+
+        # ========== PROCESAMIENTO ==========
+        
         with transaction.atomic():
-            if self.estado != 'BORRADOR':
-                raise ValueError("Solo se pueden procesar ventas en estado BORRADOR.")
-
-            config = ConfiguracionGlobal.objects.first()
-            permitir_negativo = config.permitir_stock_negativo if config else False
-
-            # 1. Descontar del inventario
+            # 1. Descontar inventario
             for detalle in self.detalles.all():
                 cantidad_descontar_base = detalle.cantidad_presentacion * detalle.presentacion.factor_conversion
-
                 inventario, created = InventarioAlmacen.objects.get_or_create(
                     producto=detalle.presentacion.producto,
                     almacen=self.almacen,
                     defaults={'stock_actual_unidades_base': Decimal('0.00')}
                 )
-
-                if not permitir_negativo and inventario.stock_actual_unidades_base < cantidad_descontar_base:
-                    raise ValueError(
-                        f"Stock insuficiente para el producto '{detalle.presentacion.producto.nombre}'. "
-                        f"Disponible: {inventario.stock_actual_unidades_base}"
-                    )
-
                 inventario.stock_actual_unidades_base -= cantidad_descontar_base
                 inventario.save()
 
-            # 2. Calcular Abono Inicial de los pagos registrados en la caja
-            abono_inicial = sum(pago.monto_equivalente_principal for pago in self.pagos.all())
-
-            # 3. Validaciones y Generacion de Cuenta por Cobrar si es a CREDITO
+            # 2. Procesar pagos y CxC si es crédito
             if self.tipo == 'CREDITO':
                 cliente = self.cliente
-
-                # >>> PASO 0: Dinero fisico recibido en caja por esta venta <<<
                 dinero_fisico = sum(pago.monto_equivalente_principal for pago in self.pagos.all())
-
-                # >>> PASO 1: Pagar CxC VIEJAS con DINERO FISICO (FIFO por ID) <<<
+                
+                # PASO 1: Pagar CxC viejas con dinero físico (FIFO)
                 facturas_pendientes = CuentaPorCobrar.objects.filter(
                     cliente=cliente,
                     estado__in=['PENDIENTE', 'VENCIDA']
@@ -433,7 +478,7 @@ class Venta(TransaccionBase):
                             'origen': 'EFECTIVO'
                         })
 
-                # >>> PASO 1.5: Pagar CxC VIEJAS con SALDO A FAVOR del cliente (FIFO) <<<
+                # PASO 1.5: Pagar CxC viejas con saldo a favor
                 saldo_favor_usado = Decimal('0.00')
                 if cliente.saldo_a_favor > Decimal('0.00'):
                     viejas_con_saldo = CuentaPorCobrar.objects.filter(
@@ -472,7 +517,7 @@ class Venta(TransaccionBase):
                         })
                     cliente.save(update_fields=['saldo_a_favor'])
 
-                # >>> PASO 1.6: Si queda saldo a favor y NO hay viejas, aplicar a NUEVA <<<
+                # PASO 1.6: Aplicar saldo a favor a nueva factura
                 saldo_favor_a_nueva = Decimal('0.00')
                 if cliente.saldo_a_favor > Decimal('0.00'):
                     viejas_restantes = CuentaPorCobrar.objects.filter(
@@ -489,29 +534,10 @@ class Venta(TransaccionBase):
                 resultado['saldo_favor_usado'] = saldo_favor_usado + saldo_favor_a_nueva
                 resultado['saldo_favor_a_nueva'] = saldo_favor_a_nueva
 
-                # >>> PASO 2: Abono a nueva = dinero fisico restante + saldo a favor a nueva <<<
+                # PASO 2: Calcular abono a nueva CxC
                 abono_nueva_cxc = abono_restante + saldo_favor_a_nueva
 
-                # >>> PASO 3: Validar limite de credito contra deuda REAL (post-abonos) <<<
-                if cliente.limite_credito == Decimal('-1.00'):
-                    raise ValueError(f"El cliente '{cliente.nombre}' tiene restringido el credito.")
-
-                if cliente.limite_credito > Decimal('0.00'):
-                    deuda_actual = CuentaPorCobrar.objects.filter(
-                        cliente=cliente,
-                        estado__in=['PENDIENTE', 'VENCIDA']
-                    ).aggregate(total=Sum('saldo_pendiente'))['total'] or Decimal('0.00')
-
-                    nueva_deuda_neta = max(Decimal('0.00'), self.total_principal - abono_nueva_cxc)
-
-                    if (deuda_actual + nueva_deuda_neta) > cliente.limite_credito:
-                        disponible = cliente.limite_credito - deuda_actual
-                        raise ValueError(
-                            f"Limite de credito excedido. Deuda actual: ${deuda_actual:.2f}, "
-                            f"Limite: ${cliente.limite_credito:.2f}. Disponible: ${disponible:.2f}"
-                        )
-
-                # >>> PASO 4: Calcular saldo restante y sobrante de la NUEVA factura <<<
+                # PASO 3: Calcular saldo restante
                 saldo_restante = self.total_principal - abono_nueva_cxc
                 sobrante = Decimal('0.00')
 
@@ -529,8 +555,7 @@ class Venta(TransaccionBase):
                 resultado['estado_cxc'] = estado_cxc
                 resultado['abono_nueva_cxc'] = min(abono_nueva_cxc, self.total_principal)
 
-                # >>> PASO 4.5: Calcular deuda total real del cliente post-operacion <<<
-                # Nota: la nueva CxC aun no existe en DB, sumamos viejas pendientes + saldo de la nueva
+                # PASO 4: Calcular deuda total
                 deuda_viejas_pendientes = CuentaPorCobrar.objects.filter(
                     cliente=cliente,
                     estado__in=['PENDIENTE', 'VENCIDA']
@@ -538,7 +563,7 @@ class Venta(TransaccionBase):
                 deuda_total_cliente = deuda_viejas_pendientes + saldo_restante
                 resultado['deuda_total_cliente'] = deuda_total_cliente
 
-                # >>> PASO 5: Crear CxC de la nueva venta <<<
+                # PASO 5: Crear CxC
                 cxc = CuentaPorCobrar.objects.create(
                     venta=self,
                     cliente=cliente,
@@ -547,7 +572,7 @@ class Venta(TransaccionBase):
                     estado=estado_cxc
                 )
 
-                # >>> PASO 6: Registrar abono inicial en historial de la nueva CxC <<<
+                # PASO 6: Registrar abono inicial
                 monto_abono_registrado = min(abono_nueva_cxc, self.total_principal)
                 if monto_abono_registrado > 0 or saldo_favor_a_nueva > 0 or sobrante > 0:
                     ref_parts = []
@@ -564,13 +589,10 @@ class Venta(TransaccionBase):
                         monto_abono_principal=monto_abono_registrado,
                         tasa_cambio_pago=self.tasa_cambio_historica,
                         referencia=" | ".join(ref_parts)
-                    ) 
+                    )
 
-                # >>> PASO 7: CREAR RECIBO DE ABONO (Fase 3 - Opción A) <<<
-                # Construir lista de abonos aplicados para el recibo
+                # PASO 7: Crear recibo
                 abonos_para_recibo = []
-                
-                # Abonos a facturas viejas (desde Paso 1 y 1.5)
                 for ab in abonos_viejas:
                     try:
                         cxc_vieja = CuentaPorCobrar.objects.get(pk=ab['cxc_id'])
@@ -584,7 +606,6 @@ class Venta(TransaccionBase):
                     except CuentaPorCobrar.DoesNotExist:
                         pass
 
-                # Abono a la nueva factura (desde Paso 6)
                 if monto_abono_registrado > 0 or saldo_favor_a_nueva > 0:
                     abonos_para_recibo.append({
                         'cxc': cxc,
@@ -594,7 +615,6 @@ class Venta(TransaccionBase):
                         'origen_dinero': 'SALDO_FAVOR' if saldo_favor_a_nueva > 0 else 'EFECTIVO'
                     })
 
-                # Desglose de métodos de pago
                 desglose = []
                 for pago in self.pagos.all():
                     desglose.append({
@@ -605,7 +625,6 @@ class Venta(TransaccionBase):
                         'referencia': pago.referencia or ''
                     })
 
-                # Monto total del recibo = dinero físico + saldo a favor usado
                 monto_total_recibo = dinero_fisico + saldo_favor_usado + saldo_favor_a_nueva
 
                 if abonos_para_recibo:
@@ -622,7 +641,7 @@ class Venta(TransaccionBase):
                         referencia=f"Recibo desde Venta #{self.id}"
                     )
             
-            # 4. Cambiar estado
+            # 3. Cambiar estado
             self.estado = 'PROCESADA'
             self.save()
 

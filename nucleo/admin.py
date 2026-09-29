@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.db import transaction
 
 from .forms import DetalleCompraInlineForm
 from .models import (
@@ -230,7 +231,6 @@ class VentaAdmin(admin.ModelAdmin):
     inlines = [DetalleVentaInline, PagoVentaInline]
 
     def save_model(self, request, obj, form, change):
-        # Detectar transición a PROCESADA
         estado_anterior = None
         if obj.pk:
             try:
@@ -238,39 +238,62 @@ class VentaAdmin(admin.ModelAdmin):
             except Venta.DoesNotExist:
                 pass
 
-        # Flag para procesar después de que los inlines (detalles/pagos) se guarden
         self._procesar_despues = (obj.estado == 'PROCESADA' and estado_anterior != 'PROCESADA')
-
-        # Si va a procesarse, guardamos temporalmente como BORRADOR porque
-        # procesar_venta() valida que el estado sea BORRADOR
+        
+        if self._procesar_despues:
+            errores = self._validar_venta_basica(obj, request)
+            if errores:
+                from django.contrib import messages
+                for error in errores:
+                    messages.error(request, error)
+                self._procesar_despues = False
+                obj.estado = estado_anterior or 'BORRADOR'
+        
         if self._procesar_despues:
             obj.estado = 'BORRADOR'
 
         super().save_model(request, obj, form, change)
 
+    def _validar_venta_basica(self, venta, request):
+        errores = []
+        
+        if not venta.cliente:
+            errores.append("La venta debe tener un cliente asignado.")
+        
+        if not venta.almacen:
+            errores.append("La venta debe tener un almacén asignado.")
+        
+        if not venta.tasa_cambio_historica or venta.tasa_cambio_historica <= 0:
+            errores.append("La tasa de cambio debe ser mayor a cero.")
+        
+        return errores
+
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
-
+        
         venta = form.instance
-
-        # Recalcular totales desde los detalles (igual que CompraAdmin)
+        
+        if not venta.detalles.exists():
+            from django.contrib import messages
+            messages.error(request, "La venta debe tener al menos un producto.")
+            venta.estado = 'BORRADOR'
+            venta.save(update_fields=['estado'])
+            return
+        
         subtotal = Decimal("0.00")
         total_impuestos = Decimal("0.00")
         for detalle in venta.detalles.all():
             cantidad = detalle.cantidad_presentacion or Decimal("0.00")
             precio = detalle.precio_unitario_aplicado or Decimal("0.00")
             porcentaje = detalle.porcentaje_impuesto_aplicado or Decimal("0.00")
-
             detalle.subtotal = cantidad * precio
             detalle.save(update_fields=["subtotal"])
-
             subtotal += detalle.subtotal
             total_impuestos += detalle.subtotal * (porcentaje / Decimal("100.00"))
 
         venta.subtotal_principal = subtotal
         venta.total_impuestos_principal = total_impuestos
         venta.total_principal = subtotal + total_impuestos
-
         tasa = venta.tasa_cambio_historica or Decimal("0.00")
         venta.total_secundaria = venta.total_principal * tasa
         venta.save(update_fields=[
@@ -278,16 +301,74 @@ class VentaAdmin(admin.ModelAdmin):
             "total_principal", "total_secundaria",
         ])
 
-        # Procesar la venta: descuenta inventario, CxC, saldo a favor, etc.
         if getattr(self, '_procesar_despues', False):
+            errores = self._validar_venta_completa(venta, request)
+            if errores:
+                from django.contrib import messages
+                for error in errores:
+                    messages.error(request, error)
+                venta.estado = 'BORRADOR'
+                venta.save(update_fields=['estado'])
+                return
+            
             try:
-                venta.procesar_venta()
+                with transaction.atomic():
+                    venta.procesar_venta()
                 from django.contrib import messages
-                messages.success(request, f"Venta #{venta.id} procesada exitosamente. Inventario descontado.")
-            except ValueError as e:
+                messages.success(request, f"✅ Venta #{venta.id} procesada. Inventario descontado.")
+            except Exception as e:
+                venta.estado = 'BORRADOR'
+                venta.save(update_fields=['estado'])
                 from django.contrib import messages
-                messages.error(request, f"Error al procesar venta: {e}")
+                messages.error(request, f"❌ Error al procesar: {e}. La venta quedó como BORRADOR.")
 
+    def _validar_venta_completa(self, venta, request):
+        errores = []
+        
+        config = ConfiguracionGlobal.objects.first()
+        permitir_negativo = config.permitir_stock_negativo if config else False
+        
+        if not permitir_negativo:
+            for detalle in venta.detalles.all():
+                cantidad_base = detalle.cantidad_presentacion * detalle.presentacion.factor_conversion
+                inventario = InventarioAlmacen.objects.filter(
+                    producto=detalle.presentacion.producto,
+                    almacen=venta.almacen
+                ).first()
+                
+                if not inventario or inventario.stock_actual_unidades_base < cantidad_base:
+                    disponible = inventario.stock_actual_unidades_base if inventario else 0
+                    errores.append(
+                        f"Stock insuficiente para '{detalle.presentacion.producto.nombre}'. "
+                        f"Disponible: {disponible}, Requerido: {cantidad_base}"
+                    )
+        
+        if venta.tipo == 'CREDITO' and venta.cliente:
+            cliente = venta.cliente
+            if cliente.limite_credito == Decimal('-1.00'):
+                errores.append(f"El cliente '{cliente.nombre}' tiene crédito restringido.")
+            elif cliente.limite_credito > 0:
+                from django.db.models import Sum
+                deuda_actual = CuentaPorCobrar.objects.filter(
+                    cliente=cliente,
+                    estado__in=['PENDIENTE', 'VENCIDA']
+                ).exclude(venta=venta).aggregate(
+                    total=Sum('saldo_pendiente')
+                )['total'] or Decimal('0.00')
+                
+                abono_inicial = sum(
+                    pago.monto_equivalente_principal 
+                    for pago in venta.pagos.all()
+                )
+                nueva_deuda = max(Decimal('0.00'), venta.total_principal - abono_inicial)
+                
+                if (deuda_actual + nueva_deuda) > cliente.limite_credito:
+                    errores.append(
+                        f"Límite de crédito excedido. Deuda: ${deuda_actual}, "
+                        f"Límite: ${cliente.limite_credito}"
+                    )
+        
+        return errores
 
 @admin.register(Compra)
 class CompraAdmin(admin.ModelAdmin):

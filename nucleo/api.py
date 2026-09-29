@@ -953,6 +953,7 @@ class DetalleVentaFacturaAPIView(APIView):
         except Venta.DoesNotExist:
             return Response({"error": "Factura no encontrada"}, status=status.HTTP_404_NOT_FOUND)
 
+# REEMPLAZAR la clase TasaStatusAPIView completa
 class TasaStatusAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
@@ -971,7 +972,9 @@ class TasaStatusAPIView(APIView):
             "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
             "requiere_actualizacion": requiere,
             "moneda_principal": config.moneda_principal,
-            "moneda_secundaria": config.moneda_secundaria
+            "moneda_secundaria": config.moneda_secundaria,
+            "permitir_stock_negativo": config.permitir_stock_negativo,
+            "cajero_puede_cambiar_precio": config.cajero_puede_cambiar_precio,
         })
 
 class ActualizarTasaAPIView(APIView):

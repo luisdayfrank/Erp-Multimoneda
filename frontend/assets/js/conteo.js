@@ -614,11 +614,25 @@ function mostrarInformeModal(data) {
     new bootstrap.Modal(document.getElementById('modalInforme')).show();
 }
 
-function imprimirInforme() {
+function imprimirInforme(modo) {
     const ticket = document.getElementById('ticket-informe-impresion');
-    ticket.classList.add('activo');
+    const completo = document.getElementById('informe-completo-impresion');
+
+    if (modo === 'completo') {
+        // Clona el contenido del modal (tablas completas de faltantes/sobrantes)
+        completo.innerHTML = document.getElementById('modal-informe-body').innerHTML;
+        completo.classList.add('activo');
+        ticket.classList.remove('activo');
+    } else {
+        completo.classList.remove('activo');
+        ticket.classList.add('activo');
+    }
+
     setTimeout(function() {
         window.print();
-        setTimeout(function() { ticket.classList.remove('activo'); }, 500);
+        setTimeout(function() {
+            ticket.classList.remove('activo');
+            completo.classList.remove('activo');
+        }, 500);
     }, 100);
 }

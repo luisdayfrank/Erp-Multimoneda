@@ -238,7 +238,7 @@ function renderizarTablaDetalles() {
         row.className = clase;
         row.innerHTML = '' +
             '<td class="text-start"><small class="text-muted">' + (d.producto_codigo || '') + '</small><br><span class="fw-bold">' + (d.producto_nombre || '') + '</span></td>' +
-            '<td class="text-center">' + (d.unidad || 'und') + '</td>' +
+            '<td class="text-center">' + (d.unidad_medida || d.unidad || 'und') + '</td>' +
             '<td class="text-end">' + parseFloat(d.stock_teorico).toFixed(3) + '</td>' +
             '<td class="text-end">' + inputFisico + '</td>' +
             '<td class="text-end ' + difClass + ' fw-bold">' + difSigno + dif.toFixed(3) + '</td>' +
@@ -354,7 +354,7 @@ function renderizarProductoConteo() {
     document.getElementById('conteo-progreso-barra').style.width = ((indiceConteo + 1) / total * 100) + '%';
 
     document.getElementById('conteo-codigo').innerText = d.producto_codigo || 'N/A';
-    document.getElementById('conteo-unidad').innerText = d.unidad || 'und';
+    document.getElementById('conteo-unidad').innerText = d.unidad_medida || d.unidad || 'und';
     document.getElementById('conteo-nombre').innerText = d.producto_nombre || 'Producto';
     document.getElementById('conteo-teorico').innerText = parseFloat(d.stock_teorico).toFixed(3);
     document.getElementById('conteo-input-fisico').value = parseFloat(d.stock_fisico || 0).toFixed(3);

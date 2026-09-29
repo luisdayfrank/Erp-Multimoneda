@@ -1,0 +1,132 @@
+@media print {
+    .inv-container, .navbar, .modal, .modal-backdrop { display: none !important; }
+    body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background: white !important;
+        height: auto !important;
+        overflow: visible !important;
+    }
+
+    /* Por defecto, nada de los dos formatos es visible */
+    .ticket-informe, #informe-completo-impresion { display: none !important; }
+
+    /* Solo se muestra el que el body indique */
+    body.modo-ticket .ticket-informe {
+        display: block !important;
+        position: absolute; left: 0; top: 0;
+        width: 48mm; margin: 0; padding: 0;
+        page: ticket;
+    }
+    body.modo-completo #informe-completo-impresion {
+        display: block !important;
+        page: completo;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+        color: #000;
+        background: #fff;
+        padding: 5mm;
+    }
+    body.modo-completo #informe-completo-impresion table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    body.modo-completo #informe-completo-impresion th, body.modo-completo #informe-completo-impresion td { border: 1px solid #999; padding: 4px 6px; font-size: 11px; }
+    body.modo-completo #informe-completo-impresion th { background: #e9ecef; }
+    body.modo-completo #informe-completo-impresion h1 { font-size: 18px; margin: 0 0 2px; }
+    body.modo-completo #informe-completo-impresion h2 { font-size: 14px; margin: 14px 0 6px; border-bottom: 2px solid #333; padding-bottom: 3px; }
+    body.modo-completo #informe-completo-impresion .doc-header { border-bottom: 3px double #333; padding-bottom: 8px; margin-bottom: 12px; }
+    body.modo-completo #informe-completo-impresion .doc-meta { width: 100%; margin-bottom: 10px; }
+    body.modo-completo #informe-completo-impresion .doc-meta td { border: none; padding: 2px 8px 2px 0; font-size: 12px; }
+    body.modo-completo #informe-completo-impresion .resumen-box { display: flex; gap: 10px; margin-bottom: 12px; }
+    body.modo-completo #informe-completo-impresion .resumen-item { flex: 1; border: 1px solid #999; text-align: center; padding: 8px 4px; }
+    body.modo-completo #informe-completo-impresion .resumen-item .num { font-size: 20px; font-weight: bold; display: block; }
+    body.modo-completo #informe-completo-impresion .firma { margin-top: 40px; text-align: center; }
+    body.modo-completo #informe-completo-impresion .firma .linea { border-top: 1px solid #000; width: 220px; margin: 0 auto 4px; }
+}
+
+@page ticket { size: 48mm auto; margin: 0; }
+@page completo { size: auto; margin: 10mm; }
+
+
+
+FRAGMENTO 8 — JS: guardar los datos y construir el informe completo
+8a. En conteo.js, en la sección de variables globales (arriba del todo, junto a let tomaActiva = null;), agrega:
+JavaScript
+let informeActual = null;
+8b. En mostrarInformeModal(data), como primera línea del cuerpo de la función, agrega:
+JavaScript
+informeActual = data;
+8c. Reemplaza completamente la función imprimirInforme() (la del Fragmento 6) por estas dos funciones:
+
+function imprimirInforme(modo) {
+    if (modo === 'completo') {
+        construirInformeCompleto(informeActual);
+        document.body.classList.add('modo-completo');
+        document.body.classList.remove('modo-ticket');
+    } else {
+        document.body.classList.add('modo-ticket');
+        document.body.classList.remove('modo-completo');
+    }
+
+    setTimeout(function() {
+        window.print();
+        setTimeout(function() {
+            document.body.classList.remove('modo-ticket');
+            document.body.classList.remove('modo-completo');
+        }, 500);
+    }, 150);
+}
+
+function construirInformeCompleto(data) {
+    if (!data) return;
+    const r = data.resumen;
+    const fecha = new Date(data.fecha_cierre || data.fecha_creacion).toLocaleString('es-VE');
+
+    const filaTabla = function(items, signo) {
+        if (!items.length) return '<tr><td colspan="7" class="text-center">Ninguno</td></tr>';
+        return items.map(function(f) {
+            const dif = parseFloat(f.diferencia);
+            return '<tr>' +
+                '<td>' + (f.codigo || '') + '</td>' +
+                '<td>' + (f.nombre || '') + '</td>' +
+                '<td>' + (f.unidad || 'und') + '</td>' +
+                '<td class="text-end">' + parseFloat(f.stock_teorico).toFixed(3) + '</td>' +
+                '<td class="text-end">' + parseFloat(f.stock_fisico).toFixed(3) + '</td>' +
+                '<td class="text-end">' + (signo && dif > 0 ? '+' : '') + dif.toFixed(3) + '</td>' +
+                '<td class="text-end">$ ' + parseFloat(f.valor_diferencia_usd).toFixed(2) + '</td>' +
+            '</tr>';
+        }).join('');
+    };
+
+    const tabla = function(titulo, items, signo) {
+        return '<h2>' + titulo + ' (' + items.length + ')</h2>' +
+            '<table>' +
+                '<thead><tr>' +
+                    '<th>Código</th><th>Producto</th><th>Unidad</th>' +
+                    '<th class="text-end">Stock Teórico</th><th class="text-end">Stock Físico</th>' +
+                    '<th class="text-end">Diferencia</th><th class="text-end">Valor USD</th>' +
+                '</tr></thead>' +
+                '<tbody>' + filaTabla(items, signo) + '</tbody>' +
+            '</table>';
+    };
+
+    document.getElementById('informe-completo-impresion').innerHTML =
+        '<div class="doc-header">' +
+            '<h1>INFORME DE TOMA FÍSICA #' + data.toma_id + '</h1>' +
+            '<div><b>Almacén:</b> ' + data.almacen + ' &nbsp;|&nbsp; <b>Tipo:</b> ' + data.tipo + ' &nbsp;|&nbsp; <b>Estado:</b> ' + data.estado + '</div>' +
+            '<div><b>Fecha:</b> ' + fecha + '</div>' +
+        '</div>' +
+        '<table class="doc-meta"><tr>' +
+            '<td><b>Total líneas:</b> ' + r.total_lineas + '</td>' +
+            '<td><b>Cuadrados:</b> ' + r.cuadrados + '</td>' +
+            '<td><b>Faltantes:</b> ' + r.faltantes + '</td>' +
+            '<td><b>Sobrantes:</b> ' + r.sobrantes + '</td>' +
+        '</tr></table>' +
+        '<div class="resumen-box">' +
+            '<div class="resumen-item"><span class="num" style="color:#b02a37">$ ' + r.valor_faltantes_usd.toFixed(2) + '</span>Valor Faltantes</div>' +
+            '<div class="resumen-item"><span class="num" style="color:#146c43">$ ' + r.valor_sobrantes_usd.toFixed(2) + '</span>Valor Sobrantes</div>' +
+            '<div class="resumen-item"><span class="num">$ ' + r.valor_neto_usd.toFixed(2) + '</span>Diferencia Neta</div>' +
+        '</div>' +
+        tabla('PRODUCTOS FALTANTES', data.faltantes, false) +
+        tabla('PRODUCTOS SOBRANTES', data.sobrantes, true) +
+        tabla('PRODUCTOS CUADRADOS', data.cuadrados, true) +
+        '<div class="firma"><div class="linea"></div><div> Firma del Responsable</div></div>';
+}

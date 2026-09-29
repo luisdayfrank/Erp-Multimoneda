@@ -457,7 +457,8 @@
             <div class="modal-body" id="modal-informe-body"></div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-                <button class="btn btn-primary" onclick="imprimirInforme()"><i class="bi bi-printer me-1"></i> Imprimir</button>
+                <button class="btn btn-outline-dark" onclick="imprimirInforme('ticket')"><i class="bi bi-printer me-1"></i> Ticket 48mm</button>
+                <button class="btn btn-primary" onclick="imprimirInforme('completo')"><i class="bi bi-file-text me-1"></i> Hoja Completa</button>
             </div>
         </div>
     </div>
@@ -471,6 +472,8 @@
         <p id="ticket-inf-fecha">--</p>
         <p id="ticket-inf-almacen">--</p>
     </div>
+<!-- Informe Completo (Impresión hoja carta/A4) -->
+<div id="informe-completo-impresion" style="display: none;"></div>
     <div class="seccion">
         <div class="fila"><span>Total Líneas:</span><span id="ticket-inf-total">0</span></div>
         <div class="fila"><span>Cuadrados:</span><span id="ticket-inf-cuadrados">0</span></div>

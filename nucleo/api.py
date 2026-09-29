@@ -1900,9 +1900,8 @@ class InformeTomaAPIView(APIView):
             else:
                 cuadrados.append(item)
 
-        valor_faltantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia < 0)
-        valor_sobrantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia > 0)
-
+        valor_faltantes = sum(abs(d.subtotal_diferencia) for d in detalles if d.diferencia < 0)
+        valor_sobrantes = sum(abs(d.subtotal_diferencia) for d in detalles if d.diferencia > 0)
         return Response({
             "toma_id": toma.id,
             "almacen": toma.almacen.nombre,

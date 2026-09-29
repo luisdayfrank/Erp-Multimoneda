@@ -623,8 +623,8 @@ class TomaFisicaDetalleSerializer(serializers.ModelSerializer):
         cuadrados = sum(1 for d in detalles if d.diferencia == 0)
         pendientes = sum(1 for d in detalles if d.stock_fisico == Decimal('0.0000'))
 
-        valor_faltantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia < 0)
-        valor_sobrantes = sum(d.subtotal_diferencia for d in detalles if d.diferencia > 0)
+        valor_faltantes = sum(abs(d.subtotal_diferencia) for d in detalles if d.diferencia < 0)
+        valor_sobrantes = sum(abs(d.subtotal_diferencia) for d in detalles if d.diferencia > 0)
 
         return {
             'total_lineas': len(detalles),

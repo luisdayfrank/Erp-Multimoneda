@@ -104,6 +104,9 @@ async function continuarInicializacionPOS() {
         return;
     }
 
+    // >>> AGREGAR ESTA LINEA: cargar config de stock del backend <<<
+    await cargarConfiguracionStock();
+
     const clienteGenerico = clientesCache.find(c => String(c.documento).toLowerCase() === 'generico');
     if (clienteGenerico) {
         seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
@@ -271,16 +274,59 @@ async function guardarNuevoCliente() {
 // ==============================================================================
 // 5. CARRITO
 // ==============================================================================
+// Variable global para configuración (agregar al inicio del archivo, después de las otras variables globales)
+let permitirStockNegativo = false;
+
+// Función para cargar configuración (agregar después de cargarDatosIniciales)
+async function cargarConfiguracionStock() {
+    try {
+        const config = await apiFetch('/config/tasa-status/', 'GET');
+        permitirStockNegativo = config.permitir_stock_negativo || false;
+    } catch (e) {
+        console.warn("No se pudo cargar configuración de stock:", e);
+        permitirStockNegativo = false;
+    }
+}
+
+// REEMPLAZAR la función agregarAlCarrito completa
 function agregarAlCarrito(idPresentacion) {
-    if (!sessionCajaAbierta) { alert("Abre la caja primero."); return; }
+    if (!sessionCajaAbierta) { 
+        alert("Abre la caja primero."); 
+        return; 
+    }
 
     const itemCatalogo = catalogo.find(p => p.id === idPresentacion);
     if (!itemCatalogo) return;
 
+    const stockDisponible = parseFloat(itemCatalogo.stock_disponible) || 0;
     const itemEnCarrito = carrito.find(item => item.presentacion_id === idPresentacion);
+    const cantidadEnCarrito = itemEnCarrito ? itemEnCarrito.cantidad : 0;
+    const nuevaCantidad = cantidadEnCarrito + 1;
+    
+    if (!permitirStockNegativo && stockDisponible <= 0) {
+        alert(
+            `❌ SIN STOCK\n\n` +
+            `Producto: ${itemCatalogo.producto.nombre}\n` +
+            `Stock disponible: ${stockDisponible.toFixed(2)}\n\n` +
+            `Este producto no tiene stock disponible.`
+        );
+        return;
+    }
+    
+    if (!permitirStockNegativo && nuevaCantidad > stockDisponible) {
+        alert(
+            `⚠️ STOCK INSUFICIENTE\n\n` +
+            `Producto: ${itemCatalogo.producto.nombre}\n` +
+            `Disponible: ${stockDisponible.toFixed(2)} ${itemCatalogo.unidad_sigla || 'und'}\n` +
+            `En carrito: ${cantidadEnCarrito.toFixed(2)}\n` +
+            `Solicitado: ${nuevaCantidad.toFixed(2)}\n\n` +
+            `No puedes agregar más unidades.`
+        );
+        return;
+    }
 
     if (itemEnCarrito) {
-        itemEnCarrito.cantidad += 1;
+        itemEnCarrito.cantidad = nuevaCantidad;
         itemEnCarrito.subtotal = itemEnCarrito.cantidad * itemEnCarrito.precio_unitario;
     } else {
         const precio = parseFloat(itemCatalogo.precio_venta_principal);
@@ -291,14 +337,16 @@ function agregarAlCarrito(idPresentacion) {
             cantidad: 1,
             precio_unitario: precio,
             impuesto_porcentaje: impuesto,
-            subtotal: precio
+            subtotal: precio,
+            stock_disponible: stockDisponible,
+            unidad_sigla: itemCatalogo.unidad_sigla || 'und'
         });
     }
+    
     calcularTotales();
     renderizarCarritoHTML();
     guardarCarritoEnStorage();
 }
-
 function quitarDelCarrito(idPresentacion) {
     const index = carrito.findIndex(item => item.presentacion_id === idPresentacion);
     if (index === -1) return;
@@ -366,10 +414,47 @@ function actualizarPantallaTotales(totales) {
 // ==============================================================================
 // 7. COBRO Y FACTURACION
 // ==============================================================================
-function abrirModalCobro() {
-    if (carrito.length === 0) { alert("El carrito esta vacio"); return; }
+// REEMPLAZAR la función abrirModalCobro completa
+async function abrirModalCobro() {
+    if (carrito.length === 0) { 
+        alert("El carrito está vacío"); 
+        return; 
+    }
 
-    // >>> INFO CLIENTE + ALERTAS VISUALES EN MODAL DE COBRO <<<
+    // Refrescar stock antes de validar
+    await refrescarStockCarrito();
+    
+    // Validar stock de todo el carrito
+    if (!permitirStockNegativo) {
+        const erroresStock = [];
+        
+        carrito.forEach(function(item) {
+            const stockDisponible = parseFloat(item.stock_disponible) || 0;
+            
+            if (stockDisponible <= 0) {
+                erroresStock.push(
+                    `• ${item.nombre}: SIN STOCK (disponible: ${stockDisponible.toFixed(2)})`
+                );
+            } else if (item.cantidad > stockDisponible) {
+                erroresStock.push(
+                    `• ${item.nombre}: Disponible ${stockDisponible.toFixed(2)}, ` +
+                    `Solicitado ${item.cantidad.toFixed(2)}`
+                );
+            }
+        });
+        
+        if (erroresStock.length > 0) {
+            alert(
+                `⚠️ PROBLEMAS DE STOCK\n\n` +
+                `Los siguientes productos tienen problemas:\n\n` +
+                erroresStock.join('\n') +
+                `\n\nPor favor ajusta las cantidades antes de cobrar.`
+            );
+            return;
+        }
+    }
+
+    // Info cliente (resto de la función original)
     const cliente = clientesCache.find(c => c.id === clienteSeleccionadoId);
     const infoClienteDiv = document.getElementById('cobro-info-cliente');
     const infoClienteInner = infoClienteDiv.querySelector('.col-12');
@@ -385,21 +470,15 @@ function abrirModalCobro() {
         document.getElementById('cobro-cliente-limite').innerText = '$ ' + (limite > 0 ? limite.toFixed(2) : 'ILIMITADO');
         document.getElementById('cobro-cliente-saldo').innerText = '$ ' + saldo.toFixed(2);
 
-        // Resetear clases de borde/fondo
         infoClienteInner.className = 'col-12 bg-white p-2 rounded shadow-sm border-start border-4';
 
-        // Lógica de alertas visuales
         if (limite === -1) {
-            // Crédito bloqueado totalmente
             infoClienteInner.classList.add('border-danger', 'bg-danger', 'bg-opacity-10');
         } else if (limite > 0 && deuda >= limite) {
-            // Excedió el límite
             infoClienteInner.classList.add('border-danger', 'bg-danger', 'bg-opacity-10');
         } else if (limite > 0 && deuda >= (limite * 0.8)) {
-            // Está al 80% o más del límite (cerca de quedar sin cupo)
             infoClienteInner.classList.add('border-warning', 'bg-warning', 'bg-opacity-10');
         } else {
-            // Todo normal
             infoClienteInner.classList.add('border-primary');
         }
     } else {
@@ -421,8 +500,51 @@ function abrirModalCobro() {
     document.getElementById('btn-contado').checked = true;
     evaluarEstadoPago();
 
+    // Resetear bandera de facturación
+    facturandoEnCurso = false;
+
     const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
     modal.show();
+}
+
+// NUEVA FUNCIÓN: Agregar después de abrirModalCobro
+async function refrescarStockCarrito() {
+    try {
+        const respuestaCatalogo = await apiFetch('/pos/catalogo/', 'GET');
+        const catalogoActualizado = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
+        
+        carrito.forEach(function(item) {
+            const itemActualizado = catalogoActualizado.find(p => p.id === item.presentacion_id);
+            if (itemActualizado) {
+                item.stock_disponible = parseFloat(itemActualizado.stock_disponible) || 0;
+            }
+        });
+        
+        catalogo = catalogoActualizado;
+        
+    } catch (e) {
+        console.warn("No se pudo refrescar el stock:", e);
+    }
+}
+
+// NUEVA FUNCIÓN: Agregar después de abrirModalCobro
+async function refrescarStockCarrito() {
+    try {
+        const respuestaCatalogo = await apiFetch('/pos/catalogo/', 'GET');
+        const catalogoActualizado = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
+        
+        carrito.forEach(function(item) {
+            const itemActualizado = catalogoActualizado.find(p => p.id === item.presentacion_id);
+            if (itemActualizado) {
+                item.stock_disponible = parseFloat(itemActualizado.stock_disponible) || 0;
+            }
+        });
+        
+        catalogo = catalogoActualizado;
+        
+    } catch (e) {
+        console.warn("No se pudo refrescar el stock:", e);
+    }
 }
 
 function agregarLineaPago() {
@@ -598,36 +720,53 @@ function setBotonFacturando(btn, procesando) {
     }
 }
 
-// >>> MEJORADO: proteccion anti doble-clic / clics multiples durante facturacion <<<
+// REEMPLAZAR la función ejecutarFacturacionFinal completa
 async function ejecutarFacturacionFinal() {
     if (facturandoEnCurso) {
-        console.warn("Facturacion ya en curso. Ignorando clic duplicado.");
+        console.warn("Facturación ya en curso. Ignorando clic duplicado.");
         return;
     }
 
     const btn = document.getElementById('btn-procesar-factura');
+    const modalEl = document.getElementById('modalCobro');
+    
     facturandoEnCurso = true;
     setBotonFacturando(btn, true);
 
     try {
         const tipoVenta = document.querySelector('input[name="tipoVenta"]:checked').value;
         await procesarFactura(tipoVenta);
-
-        const modalEl = document.getElementById('modalCobro');
+        
         const modalInst = bootstrap.Modal.getInstance(modalEl);
         if (modalInst) modalInst.hide();
+        
+    } catch (error) {
+        console.error("Error en facturación:", error);
+        setBotonFacturando(btn, false);
+        
+        let mensajeDeError = "Error desconocido al procesar la venta.";
+        if (error.error) mensajeDeError = error.error;
+        else if (error.messageForUser) mensajeDeError = error.messageForUser;
+        else if (error.detail) mensajeDeError = error.detail;
+        
+        alert("No se pudo completar la venta:\n\n" + mensajeDeError);
+        
     } finally {
         facturandoEnCurso = false;
-        setBotonFacturando(btn, false);
     }
 }
 
+// REEMPLAZAR la función procesarFactura completa
 async function procesarFactura(tipoPago) {
-    if (carrito.length === 0) { alert("El carrito esta vacio"); return; }
+    if (carrito.length === 0) { 
+        alert("El carrito está vacío"); 
+        return; 
+    }
+    
     const totales = calcularTotales();
-
-    // >>> NUEVO: capturar deuda anterior ANTES de que el server actualice el cache <<<
-    const clientePreVenta = clientesCache.find(function(c) { return c.id === clienteSeleccionadoId; });
+    const clientePreVenta = clientesCache.find(function(c) { 
+        return c.id === clienteSeleccionadoId; 
+    });
     const deudaAnteriorCliente = clientePreVenta ? (parseFloat(clientePreVenta.deuda_total) || 0) : 0;
 
     const pagos = [];
@@ -678,51 +817,14 @@ async function procesarFactura(tipoPago) {
     try {
         const respuesta = await apiFetch('/pos/facturar/', 'POST', payload);
 
-        // >>> NUEVO: Mensaje detallado con abonos a facturas viejas <<<
-        let msg = "Venta Procesada! Factura #" + respuesta.venta_id;
-        if (respuesta.tipo === 'CREDITO') {
-            msg += "\n\n--- RESUMEN CREDITO ---";
-
-            if (respuesta.abonos_cxc_viejas && respuesta.abonos_cxc_viejas.length > 0) {
-                msg += "\n\nAbonos a facturas anteriores:";
-                respuesta.abonos_cxc_viejas.forEach(function(ab) {
-                    var origenTxt = (ab.origen === 'SALDO_A_FAVOR') ? ' (saldo a favor)' : '';
-                    msg += "\n  - Fact. #" + (ab.venta_id || 'Inicial') + ": $" + ab.monto_aplicado.toFixed(2) + origenTxt;
-                });
-            }
-
-            if (respuesta.abono_nueva_cxc > 0) {
-                msg += "\nAbono a factura nueva: $" + respuesta.abono_nueva_cxc.toFixed(2);
-            }
-
-            if (respuesta.saldo_favor_a_nueva > 0) {
-                msg += "\nSaldo a favor usado en nueva: $" + respuesta.saldo_favor_a_nueva.toFixed(2);
-            }
-
-            if (respuesta.saldo_restante_cxc > 0) {
-                msg += "\nSaldo pendiente nueva: $" + respuesta.saldo_restante_cxc.toFixed(2);
-            } else {
-                msg += "\nFactura nueva PAGADA";
-            }
-
-            if (respuesta.sobrante_abono > 0) {
-                msg += "\nSobrante a favor: $" + respuesta.sobrante_abono.toFixed(2);
-            }
-
-            if (respuesta.deuda_total_cliente > 0) {
-                msg += "\n\nDEUDA TOTAL DEL CLIENTE: $" + respuesta.deuda_total_cliente.toFixed(2);
-            } else {
-                msg += "\n\nCliente AL DIA (sin deudas pendientes)";
-            }
-        }
-
-        generarEImprimirTicket(
-            respuesta.venta_id,
-            totales,
-            carrito.slice(),
-            tipoPago,
-            pagos,
-            {
+        // Guardar datos del ticket antes de limpiar
+        const datosTicket = {
+            ventaId: respuesta.venta_id,
+            totales: totales,
+            carritoFacturado: carrito.slice(),
+            tipoPago: tipoPago,
+            pagos: pagos,
+            infoCredito: {
                 deuda_anterior: deudaAnteriorCliente,
                 saldo_favor_usado: respuesta.saldo_favor_usado || 0,
                 sobrante_abono: respuesta.sobrante_abono || 0,
@@ -733,45 +835,97 @@ async function procesarFactura(tipoPago) {
                 saldo_favor_a_nueva: respuesta.saldo_favor_a_nueva || 0,
                 deuda_total_cliente: respuesta.deuda_total_cliente || 0
             }
-        );
+        };
 
-        alert(msg);
-
-        // >>> CRÍTICO: Refrescar cache de clientes para que el POS muestre saldos actualizados <<<
-        await cargarDatosIniciales();
-
+        // Limpiar carrito inmediatamente
         carrito = [];
         calcularTotales();
         renderizarCarritoHTML();
         guardarCarritoEnStorage();
 
-        const clienteGenerico = clientesCache.find(function(c) {
-            return String(c.documento).toLowerCase() === 'generico';
-        });
-        if (clienteGenerico) {
-            seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
-        } else {
-            seleccionarCliente(CLIENTE_MOSTRADOR_ID, "Cliente Generico");
+        // Generar ticket (con try-catch independiente)
+        try {
+            generarEImprimirTicket(
+                datosTicket.ventaId,
+                datosTicket.totales,
+                datosTicket.carritoFacturado,
+                datosTicket.tipoPago,
+                datosTicket.pagos,
+                datosTicket.infoCredito
+            );
+        } catch (ticketError) {
+            console.error("Error al generar ticket:", ticketError);
         }
+
+        // Mostrar mensaje de éxito
+        let msg = "✅ Venta Procesada! Factura #" + respuesta.venta_id;
+        if (respuesta.tipo === 'CREDITO') {
+            msg += "\n\n--- RESUMEN CRÉDITO ---";
+            if (respuesta.abonos_cxc_viejas && respuesta.abonos_cxc_viejas.length > 0) {
+                msg += "\n\nAbonos a facturas anteriores:";
+                respuesta.abonos_cxc_viejas.forEach(function(ab) {
+                    var origenTxt = (ab.origen === 'SALDO_A_FAVOR') ? ' (saldo a favor)' : '';
+                    msg += "\n  - Fact. #" + (ab.venta_id || 'Inicial') + ": $" + ab.monto_aplicado.toFixed(2) + origenTxt;
+                });
+            }
+            if (respuesta.abono_nueva_cxc > 0) {
+                msg += "\nAbono a factura nueva: $" + respuesta.abono_nueva_cxc.toFixed(2);
+            }
+            if (respuesta.saldo_favor_a_nueva > 0) {
+                msg += "\nSaldo a favor usado en nueva: $" + respuesta.saldo_favor_a_nueva.toFixed(2);
+            }
+            if (respuesta.saldo_restante_cxc > 0) {
+                msg += "\nSaldo pendiente nueva: $" + respuesta.saldo_restante_cxc.toFixed(2);
+            } else {
+                msg += "\nFactura nueva PAGADA";
+            }
+            if (respuesta.sobrante_abono > 0) {
+                msg += "\nSobrante a favor: $" + respuesta.sobrante_abono.toFixed(2);
+            }
+            if (respuesta.deuda_total_cliente > 0) {
+                msg += "\n\nDEUDA TOTAL DEL CLIENTE: $" + respuesta.deuda_total_cliente.toFixed(2);
+            } else {
+                msg += "\n\nCliente AL DÍA (sin deudas pendientes)";
+            }
+        }
+        alert(msg);
+
+        // Refrescar datos (con try-catch independiente)
+        try {
+            await cargarDatosIniciales();
+        } catch (cacheError) {
+            console.warn("No se pudo refrescar caché de clientes:", cacheError);
+        }
+
+        // Volver a cliente genérico
+        try {
+            const clienteGenerico = clientesCache.find(function(c) {
+                return String(c.documento).toLowerCase() === 'generico';
+            });
+            if (clienteGenerico) {
+                seleccionarCliente(clienteGenerico.id, clienteGenerico.nombre);
+            } else {
+                seleccionarCliente(CLIENTE_MOSTRADOR_ID, "Cliente Genérico");
+            }
+        } catch (clienteError) {
+            console.warn("No se pudo resetear cliente:", clienteError);
+        }
+        
     } catch (error) {
         let mensajeDeError = "Error desconocido al procesar la venta.";
-
-        if (error.error) {
-            mensajeDeError = error.error; 
-        } else if (error.messageForUser) {
-            mensajeDeError = error.messageForUser;
-        } else if (error.detail) {
-            mensajeDeError = error.detail;
-        }
-
-        alert("No se pudo completar la venta:\n\n" + mensajeDeError);
-        console.error("Detalle tecnico del error:", error);
+        if (error.error) mensajeDeError = error.error;
+        else if (error.messageForUser) mensajeDeError = error.messageForUser;
+        else if (error.detail) mensajeDeError = error.detail;
+        
+        alert("❌ No se pudo completar la venta:\n\n" + mensajeDeError);
+        console.error("Detalle técnico del error:", error);
     }
 }
 
 // ==============================================================================
 // 8. VISUALES
 // ==============================================================================
+// REEMPLAZAR la función renderizarCatalogoHTML completa
 function renderizarCatalogoHTML(productosAMostrar) {
     if (productosAMostrar === undefined) productosAMostrar = catalogo;
     const contenedor = document.getElementById('gridProductos');
@@ -786,7 +940,10 @@ function renderizarCatalogoHTML(productosAMostrar) {
     productosAMostrar.forEach(function(presentacion) {
         const idProd = presentacion.producto.id;
         if (!productosAgrupados[idProd]) {
-            productosAgrupados[idProd] = { productoBase: presentacion.producto, presentaciones: [] };
+            productosAgrupados[idProd] = { 
+                productoBase: presentacion.producto, 
+                presentaciones: [] 
+            };
         }
         productosAgrupados[idProd].presentaciones.push(presentacion);
     });
@@ -798,15 +955,24 @@ function renderizarCatalogoHTML(productosAMostrar) {
         let optionsHTML = '';
         presentaciones.forEach(function(pres) {
             const precioBs = (pres.precio_venta_principal * tasaCambio).toFixed(2);
-            optionsHTML += '<option value="' + pres.id + '" data-precio="' + pres.precio_venta_principal + '" data-bs="' + precioBs + '">' + pres.nombre_presentacion + '</option>';
+            const stock = parseFloat(pres.stock_disponible) || 0;
+            const stockTexto = stock.toFixed(2);
+            
+            optionsHTML += '<option value="' + pres.id + '" data-precio="' + pres.precio_venta_principal + '" data-bs="' + precioBs + '" data-stock="' + stock + '">' + 
+                pres.nombre_presentacion + ' (Stock: ' + stockTexto + ')</option>';
         });
 
         const idSelect = 'select-pres-' + prod.id;
         const idPrecioUi = 'precio-ui-' + prod.id;
         const idPrecioBsUi = 'precio-bs-ui-' + prod.id;
+        const idStockUi = 'stock-ui-' + prod.id;
 
         const precioInicialUSD = parseFloat(presentaciones[0].precio_venta_principal).toFixed(2);
         const precioInicialBS = (parseFloat(presentaciones[0].precio_venta_principal) * tasaCambio).toFixed(2);
+        const stockInicial = parseFloat(presentaciones[0].stock_disponible) || 0;
+        
+        const stockClaseInicial = stockInicial <= 0 ? 'text-danger fw-bold' : stockInicial <= 5 ? 'text-warning' : 'text-success';
+        const stockIcono = stockInicial <= 0 ? 'bi-x-circle-fill' : stockInicial <= 5 ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill';
 
         const tarjeta = '' +
             '<div class="col-12 col-sm-6 col-lg-4 mb-3">' +
@@ -815,8 +981,12 @@ function renderizarCatalogoHTML(productosAMostrar) {
                         '<h6 class="card-title fw-bold text-truncate" title="' + prod.nombre + '">' + prod.nombre + '</h6>' +
                         '<div class="mt-auto">' +
                             '<h4 class="text-primary fw-bold mb-0" id="' + idPrecioUi + '">$ ' + precioInicialUSD + '</h4>' +
-                            '<small class="text-muted d-block mb-3" id="' + idPrecioBsUi + '">BS ' + precioInicialBS + '</small>' +
-                            '<select class="form-select form-select-sm mb-3 border-secondary" id="' + idSelect + '" onchange="actualizarPrecioTarjeta(\'' + idSelect + '\', \'' + idPrecioUi + '\', \'' + idPrecioBsUi + '\')">' +
+                            '<small class="text-muted d-block mb-2" id="' + idPrecioBsUi + '">BS ' + precioInicialBS + '</small>' +
+                            '<small class="d-block mb-2 ' + stockClaseInicial + '" id="' + idStockUi + '">' +
+                                '<i class="bi ' + stockIcono + '"></i> ' +
+                                'Stock: ' + stockInicial.toFixed(2) + ' ' + (presentaciones[0].unidad_sigla || 'und') +
+                            '</small>' +
+                            '<select class="form-select form-select-sm mb-3 border-secondary" id="' + idSelect + '" onchange="actualizarPrecioTarjeta(\'' + idSelect + '\', \'' + idPrecioUi + '\', \'' + idPrecioBsUi + '\', \'' + idStockUi + '\')">' +
                                 optionsHTML +
                             '</select>' +
                             '<button class="btn btn-success w-100 fw-bold shadow-sm" onclick="agregarDesdeTarjeta(\'' + idSelect + '\')">Agregar</button>' +
@@ -826,6 +996,42 @@ function renderizarCatalogoHTML(productosAMostrar) {
             '</div>';
         contenedor.innerHTML += tarjeta;
     });
+}
+
+// REEMPLAZAR la función actualizarPrecioTarjeta completa
+function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi, idStockUi) {
+    const select = document.getElementById(idSelect);
+    const opcion = select.options[select.selectedIndex];
+    
+    document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
+    document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
+    
+    if (idStockUi) {
+        const stock = parseFloat(opcion.getAttribute('data-stock')) || 0;
+        const stockEl = document.getElementById(idStockUi);
+        
+        stockEl.innerText = 'Stock: ' + stock.toFixed(2);
+        stockEl.className = 'd-block mb-2 ' + 
+            (stock <= 0 ? 'text-danger fw-bold' : stock <= 5 ? 'text-warning' : 'text-success');
+    }
+}
+
+// REEMPLAZAR la función actualizarPrecioTarjeta completa
+function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi, idStockUi) {
+    const select = document.getElementById(idSelect);
+    const opcion = select.options[select.selectedIndex];
+    
+    document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
+    document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
+    
+    if (idStockUi) {
+        const stock = parseFloat(opcion.getAttribute('data-stock')) || 0;
+        const stockEl = document.getElementById(idStockUi);
+        
+        stockEl.innerText = 'Stock: ' + stock.toFixed(2);
+        stockEl.className = 'd-block mb-2 ' + 
+            (stock <= 0 ? 'text-danger fw-bold' : stock <= 5 ? 'text-warning' : 'text-success');
+    }
 }
 
 function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi) {
@@ -867,22 +1073,60 @@ function renderizarCarritoHTML() {
     });
 }
 
+// REEMPLAZAR la función actualizarCantidadManual completa
 function actualizarCantidadManual(idPresentacion, valor) {
     let nuevaCantidad = parseFloat(valor);
+    
     if (isNaN(nuevaCantidad) || nuevaCantidad <= 0) {
-        alert("Por favor, ingresa una cantidad o peso valido mayor a cero.");
+        alert("Por favor, ingresa una cantidad válida mayor a cero.");
         renderizarCarritoHTML();
         return;
     }
 
-    const item = carrito.find(function(i) { return i.presentacion_id === idPresentacion; });
-    if (item) {
-        item.cantidad = nuevaCantidad;
-        item.subtotal = item.cantidad * item.precio_unitario;
-        calcularTotales();
+    const item = carrito.find(function(i) { 
+        return i.presentacion_id === idPresentacion; 
+    });
+    
+    if (!item) {
         renderizarCarritoHTML();
-        guardarCarritoEnStorage();
+        return;
     }
+    
+    const stockDisponible = parseFloat(item.stock_disponible) || 0;
+    
+    if (!permitirStockNegativo && stockDisponible <= 0) {
+        alert(
+            `❌ SIN STOCK\n\n` +
+            `Producto: ${item.nombre}\n` +
+            `No hay stock disponible para este producto.`
+        );
+        renderizarCarritoHTML();
+        return;
+    }
+    
+    if (!permitirStockNegativo && nuevaCantidad > stockDisponible) {
+        const confirmar = confirm(
+            `⚠️ STOCK INSUFICIENTE\n\n` +
+            `Producto: ${item.nombre}\n` +
+            `Disponible: ${stockDisponible.toFixed(2)} ${item.unidad_sigla || 'und'}\n` +
+            `Solicitado: ${nuevaCantidad.toFixed(2)}\n\n` +
+            `¿Deseas ajustar a la cantidad disponible (${stockDisponible.toFixed(2)})?`
+        );
+        
+        if (!confirmar) {
+            renderizarCarritoHTML();
+            return;
+        }
+        
+        nuevaCantidad = stockDisponible;
+    }
+    
+    item.cantidad = nuevaCantidad;
+    item.subtotal = item.cantidad * item.precio_unitario;
+    
+    calcularTotales();
+    renderizarCarritoHTML();
+    guardarCarritoEnStorage();
 }
 
 // ==============================================================================

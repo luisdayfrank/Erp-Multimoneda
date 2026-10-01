@@ -503,6 +503,16 @@ async function abrirModalCobro() {
     // Resetear bandera de facturación
     facturandoEnCurso = false;
 
+    // >>> FIX: restaurar el botón por si quedó en "PROCESANDO..." de una
+    //     sesión anterior (el modal persiste en el DOM) <<<
+    const btnFacturarReset = document.getElementById('btn-procesar-factura');
+    if (btnFacturarReset) {
+        if (btnFacturarReset.dataset.labelOriginal) {
+            btnFacturarReset.innerHTML = btnFacturarReset.dataset.labelOriginal;
+        }
+        btnFacturarReset.disabled = true; // evaluarEstadoPago() lo reactivará si corresponde
+    }
+
     const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
     modal.show();
 }
@@ -720,7 +730,6 @@ function setBotonFacturando(btn, procesando) {
     }
 }
 
-// REEMPLAZAR la función ejecutarFacturacionFinal completa
 async function ejecutarFacturacionFinal() {
     if (facturandoEnCurso) {
         console.warn("Facturación ya en curso. Ignorando clic duplicado.");
@@ -729,30 +738,31 @@ async function ejecutarFacturacionFinal() {
 
     const btn = document.getElementById('btn-procesar-factura');
     const modalEl = document.getElementById('modalCobro');
-    
+
     facturandoEnCurso = true;
     setBotonFacturando(btn, true);
 
     try {
         const tipoVenta = document.querySelector('input[name="tipoVenta"]:checked').value;
         await procesarFactura(tipoVenta);
-        
+
         const modalInst = bootstrap.Modal.getInstance(modalEl);
         if (modalInst) modalInst.hide();
-        
+
     } catch (error) {
         console.error("Error en facturación:", error);
-        setBotonFacturando(btn, false);
-        
+
         let mensajeDeError = "Error desconocido al procesar la venta.";
         if (error.error) mensajeDeError = error.error;
         else if (error.messageForUser) mensajeDeError = error.messageForUser;
         else if (error.detail) mensajeDeError = error.detail;
-        
+
         alert("No se pudo completar la venta:\n\n" + mensajeDeError);
-        
+
     } finally {
+        // >>> FIX: restaurar el botón SIEMPRE, en éxito o en fallo <<<
         facturandoEnCurso = false;
+        setBotonFacturando(btn, false);
     }
 }
 
@@ -910,15 +920,10 @@ async function procesarFactura(tipoPago) {
         } catch (clienteError) {
             console.warn("No se pudo resetear cliente:", clienteError);
         }
-        
+
     } catch (error) {
-        let mensajeDeError = "Error desconocido al procesar la venta.";
-        if (error.error) mensajeDeError = error.error;
-        else if (error.messageForUser) mensajeDeError = error.messageForUser;
-        else if (error.detail) mensajeDeError = error.detail;
-        
-        alert("❌ No se pudo completar la venta:\n\n" + mensajeDeError);
         console.error("Detalle técnico del error:", error);
+        throw error;
     }
 }
 

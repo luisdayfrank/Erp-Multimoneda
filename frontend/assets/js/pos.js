@@ -537,26 +537,38 @@ async function refrescarStockCarrito() {
     }
 }
 
-// NUEVA FUNCIÓN: Agregar después de abrirModalCobro
-async function refrescarStockCarrito() {
+// NUEVA FUNCIÓN: refresca el catálogo del backend y repinta el grid
+// respetando el texto que haya en el buscador
+async function refrescarCatalogo() {
     try {
         const respuestaCatalogo = await apiFetch('/pos/catalogo/', 'GET');
-        const catalogoActualizado = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
-        
+        catalogo = Array.isArray(respuestaCatalogo) ? respuestaCatalogo : (respuestaCatalogo.results || []);
+
+        // Actualizar también el stock de los items que sigan en el carrito
         carrito.forEach(function(item) {
-            const itemActualizado = catalogoActualizado.find(p => p.id === item.presentacion_id);
-            if (itemActualizado) {
-                item.stock_disponible = parseFloat(itemActualizado.stock_disponible) || 0;
+            const actualizado = catalogo.find(function(c) { return c.id === item.presentacion_id; });
+            if (actualizado) {
+                item.stock_disponible = parseFloat(actualizado.stock_disponible) || 0;
             }
         });
-        
-        catalogo = catalogoActualizado;
-        
+
+        // Repintar respetando el filtro activo del buscador
+        const texto = document.getElementById('buscador-productos').value.toLowerCase().trim();
+        if (texto === '') {
+            renderizarCatalogoHTML();
+        } else {
+            const filtrados = catalogo.filter(function(item) {
+                const nombreProd = item.producto.nombre ? item.producto.nombre.toLowerCase() : '';
+                const codigoProd = item.producto.codigo_base ? item.producto.codigo_base.toLowerCase() : '';
+                const nombrePres = item.nombre_presentacion ? item.nombre_presentacion.toLowerCase() : '';
+                return nombreProd.includes(texto) || codigoProd.includes(texto) || nombrePres.includes(texto);
+            });
+            renderizarCatalogoHTML(filtrados);
+        }
     } catch (e) {
-        console.warn("No se pudo refrescar el stock:", e);
+        console.warn("No se pudo refrescar el catálogo tras la venta:", e);
     }
 }
-
 function agregarLineaPago() {
     const cont = document.getElementById('contenedor-pagos');
     const idx = Date.now() + Math.random().toString(36).substr(2, 5);
@@ -826,6 +838,9 @@ async function procesarFactura(tipoPago) {
 
     try {
         const respuesta = await apiFetch('/pos/facturar/', 'POST', payload);
+
+        // >>> NUEVO: refrescar stock en pantalla sin recargar la página <<<
+        await refrescarCatalogo();
 
         // Guardar datos del ticket antes de limpiar
         const datosTicket = {
@@ -1703,6 +1718,10 @@ async function procesarEgresoInventario() {
         }
 
         await apiFetch('/egresos/inventario/', 'POST', payload);
+
+        // >>> NUEVO: refrescar stock en pantalla sin recargar la página <<<
+        await refrescarCatalogo();
+
         alert("Stock descontado exitosamente por salida de inventario.");
 
         carritoEgresoInv = [];

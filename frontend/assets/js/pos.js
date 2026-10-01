@@ -288,7 +288,6 @@ async function cargarConfiguracionStock() {
     }
 }
 
-// REEMPLAZAR la función agregarAlCarrito completa
 function agregarAlCarrito(idPresentacion) {
     if (!sessionCajaAbierta) { 
         alert("Abre la caja primero."); 
@@ -298,10 +297,16 @@ function agregarAlCarrito(idPresentacion) {
     const itemCatalogo = catalogo.find(p => p.id === idPresentacion);
     if (!itemCatalogo) return;
 
-    const stockDisponible = parseFloat(itemCatalogo.stock_disponible) || 0;
     const itemEnCarrito = carrito.find(item => item.presentacion_id === idPresentacion);
     const cantidadEnCarrito = itemEnCarrito ? itemEnCarrito.cantidad : 0;
     const nuevaCantidad = cantidadEnCarrito + 1;
+
+    // >>> FIX: priorizar el stock guardado en el item del carrito, que se
+    //     sincroniza con cada refrescarCatalogo / refrescarStockCarrito,
+    //     sobre el del catálogo (que puede quedar desactualizado) <<<
+    const stockDisponible = (itemEnCarrito && typeof itemEnCarrito.stock_disponible !== 'undefined')
+        ? (parseFloat(itemEnCarrito.stock_disponible) || 0)
+        : (parseFloat(itemCatalogo.stock_disponible) || 0);
     
     if (!permitirStockNegativo && stockDisponible <= 0) {
         alert(
@@ -317,7 +322,7 @@ function agregarAlCarrito(idPresentacion) {
         alert(
             `⚠️ STOCK INSUFICIENTE\n\n` +
             `Producto: ${itemCatalogo.producto.nombre}\n` +
-            `Disponible: ${stockDisponible.toFixed(2)} ${itemCatalogo.unidad_sigla || 'und'}\n` +
+            `Disponible: ${stockDisponible.toFixed(2)} ${itemEnCarrito ? (itemEnCarrito.unidad_sigla || 'und') : (itemCatalogo.unidad_sigla || 'und')}\n` +
             `En carrito: ${cantidadEnCarrito.toFixed(2)}\n` +
             `Solicitado: ${nuevaCantidad.toFixed(2)}\n\n` +
             `No puedes agregar más unidades.`
@@ -1018,47 +1023,28 @@ function renderizarCatalogoHTML(productosAMostrar) {
     });
 }
 
-// REEMPLAZAR la función actualizarPrecioTarjeta completa
+// VERSIÓN ÚNICA Y DEFINITIVA de actualizarPrecioTarjeta
 function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi, idStockUi) {
     const select = document.getElementById(idSelect);
     const opcion = select.options[select.selectedIndex];
-    
+
     document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
     document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
-    
+
     if (idStockUi) {
         const stock = parseFloat(opcion.getAttribute('data-stock')) || 0;
         const stockEl = document.getElementById(idStockUi);
-        
-        stockEl.innerText = 'Stock: ' + stock.toFixed(2);
-        stockEl.className = 'd-block mb-2 ' + 
+
+        // Recuperar la unidad de medida del catálogo para no perderla al cambiar
+        const presId = parseInt(select.value);
+        const catItem = catalogo.find(function(c) { return c.id === presId; });
+        const unidad = (catItem && catItem.unidad_sigla) ? catItem.unidad_sigla : 'und';
+
+        const icono = stock <= 0 ? 'bi-x-circle-fill' : stock <= 5 ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill';
+        stockEl.innerHTML = '<i class="bi ' + icono + '"></i> Stock: ' + stock.toFixed(2) + ' ' + unidad;
+        stockEl.className = 'd-block mb-2 ' +
             (stock <= 0 ? 'text-danger fw-bold' : stock <= 5 ? 'text-warning' : 'text-success');
     }
-}
-
-// REEMPLAZAR la función actualizarPrecioTarjeta completa
-function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi, idStockUi) {
-    const select = document.getElementById(idSelect);
-    const opcion = select.options[select.selectedIndex];
-    
-    document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
-    document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
-    
-    if (idStockUi) {
-        const stock = parseFloat(opcion.getAttribute('data-stock')) || 0;
-        const stockEl = document.getElementById(idStockUi);
-        
-        stockEl.innerText = 'Stock: ' + stock.toFixed(2);
-        stockEl.className = 'd-block mb-2 ' + 
-            (stock <= 0 ? 'text-danger fw-bold' : stock <= 5 ? 'text-warning' : 'text-success');
-    }
-}
-
-function actualizarPrecioTarjeta(idSelect, idPrecioUi, idPrecioBsUi) {
-    const select = document.getElementById(idSelect);
-    const opcion = select.options[select.selectedIndex];
-    document.getElementById(idPrecioUi).innerText = '$ ' + parseFloat(opcion.getAttribute('data-precio')).toFixed(2);
-    document.getElementById(idPrecioBsUi).innerText = 'BS ' + parseFloat(opcion.getAttribute('data-bs')).toFixed(2);
 }
 
 function agregarDesdeTarjeta(idSelect) {

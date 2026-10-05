@@ -1182,7 +1182,7 @@ function abreviarUnidad(nombrePresentacion) {
 // ==============================================================================
 // >>> NUEVO: funcion central que SOLO pinta el ticket (sin imprimir) <<<
 // La usan tanto la facturacion en vivo como la reimpresion desde el historial
-function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito, nombreCliente) {
+function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito, nombreCliente, sinCredito) {
     infoCredito = infoCredito || {};
     const ticket = document.getElementById('ticket-impresion');
 
@@ -1255,7 +1255,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
     const deudasSection = document.getElementById('ticket-deudas-section');
     const deudasLista = document.getElementById('ticket-deudas-lista');
 
-    if (tipoVenta === 'CREDITO') {
+    if (tipoVenta === 'CREDITO' && !sinCredito) {
         deudasSection.style.display = 'block';
         deudasLista.innerHTML = '';
         deudasLista.innerHTML += '<div class="ticket-fila"><span>Deuda anterior:</span><span>$ ' + deudaAnterior.toFixed(2) + '</span></div>';
@@ -1342,7 +1342,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
     const deudaTotalCliente = parseFloat(infoCredito.deuda_total_cliente) || 0;
     const sobrante = parseFloat(infoCredito.sobrante_abono) || 0;
 
-    if (tipoVenta === 'CREDITO' || deudaTotalCliente > 0.01) {
+    if (!sinCredito && (tipoVenta === 'CREDITO' || deudaTotalCliente > 0.01)) {
         pendienteSection.style.display = 'block';
 
         if (deudaTotalCliente > 0.01) {
@@ -1370,13 +1370,9 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
 
 // Igual que antes, pero delega el pintado en pintarTicket()
 function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
-    pintarTicket(data.id, totales, carritoFacturado, data.tipo, pagos, infoCredito, data.cliente || 'Cliente Mostrador');
-
-        // >>> NUEVO: reimpresion simplificada — solo datos de la venta.
-        //     Se ocultan los bloques de deuda y pendiente (el estado actual
-        //     del cliente puede haber cambiado desde que se hizo la venta) <<<
-    document.getElementById('ticket-deudas-section').style.display = 'none';
-    document.getElementById('ticket-pendiente-section').style.display = 'none';
+    // >>> El 'true' final activa el modo simple: solo datos de la venta,
+    //     sin bloque de DEUDAS ni de PENDIENTE / AL DÍA <<<
+    pintarTicket(data.id, totales, carritoFacturado, data.tipo, pagos, infoCredito, data.cliente || 'Cliente Mostrador', true);
 
     const ticket = document.getElementById('ticket-impresion');
     ticket.classList.add('activo');

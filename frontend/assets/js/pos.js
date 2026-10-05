@@ -1180,9 +1180,7 @@ function abreviarUnidad(nombrePresentacion) {
 // ==============================================================================
 // 9. TICKETS - VERSION 2 LINEAS POR PRODUCTO + BLOQUES DE DEUDA/PAGOS/PENDIENTE
 // ==============================================================================
-// >>> NUEVO: funcion central que SOLO pinta el ticket (sin imprimir) <<<
-// La usan tanto la facturacion en vivo como la reimpresion desde el historial
-function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito, nombreCliente, sinCredito) {
+function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
     infoCredito = infoCredito || {};
     const ticket = document.getElementById('ticket-impresion');
 
@@ -1194,32 +1192,31 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
     document.getElementById('ticket-cajero').innerText = document.getElementById('nombreCajero').innerText;
-    // >>> FIX: nombre del cliente pasado por parametro (en reimpresion no es
-    //     el cliente seleccionado actual) <<<
-    document.getElementById('ticket-cliente').innerText = nombreCliente || 'Cliente Mostrador';
+    document.getElementById('ticket-cliente').innerText = clienteSeleccionadoNombre;
     document.getElementById('ticket-tipo-venta').innerText = tipoVenta;
 
     const totalUSD = parseFloat(totales.total_usd);
 
     // >>> PRODUCTOS: 2 lineas por producto <<<
+    // Linea 1: "1.50 KILO X 5.50$/KILO"
+    // Linea 2: "QUESO DURO            8.25$"
     const tbody = document.getElementById('ticket-items');
     tbody.innerHTML = '';
     carritoFacturado.forEach(function(item, idx) {
         const catItem = catalogo.find(function(c) { return c.id === item.presentacion_id; });
         let nombreProd = catItem ? catItem.producto.nombre : item.nombre;
-        // >>> FIX: fallback al nombre guardado en el item (reimpresion) <<<
-        if (!nombreProd && item.nombre) nombreProd = String(item.nombre).split(' (')[0];
+        // >>> UNIDAD: prioriza la sigla que viene del server (unidad_sigla) <<<
         let unidad = '';
         if (catItem) {
             unidad = String(catItem.unidad_sigla || '').toUpperCase().trim();
         }
-        if (!unidad && catItem) {
-            unidad = abreviarUnidad(catItem.nombre_presentacion);
+        if (!unidad) {
+            unidad = catItem ? abreviarUnidad(catItem.nombre_presentacion) : '';
         }
         if (nombreProd.length > 24) nombreProd = nombreProd.substring(0, 23) + '…';
 
         const cantTxt = parseFloat(item.cantidad).toFixed(2) + (unidad ? ' ' + unidad : '');
-        const precioTxt = '$' + parseFloat(item.precio_unitario).toFixed(2) + (unidad ? '/' + unidad : '');
+        const precioTxt = '$' + item.precio_unitario.toFixed(2) + (unidad ? '/' + unidad : '');
 
         const row1 = document.createElement('tr');
         if (idx > 0) row1.className = 'sep';
@@ -1228,11 +1225,11 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
 
         const row2 = document.createElement('tr');
         row2.innerHTML = '<td colspan="2" style="word-break: break-word;">' + nombreProd + '</td>' +
-                         '<td class="der" style="font-weight: 700;">$' + parseFloat(item.subtotal).toFixed(2) + '</td>';
+                         '<td class="der" style="font-weight: 700;">$' + item.subtotal.toFixed(2) + '</td>';
         tbody.appendChild(row2);
     });
 
-    // Totales
+    // Totales (igual que antes)
     document.getElementById('ticket-subtotal').innerText = totales.subtotal;
     document.getElementById('ticket-iva').innerText = totales.impuestos;
     document.getElementById('ticket-total-usd').innerText = totales.total_usd;
@@ -1244,6 +1241,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
     const saldoFavorNueva = parseFloat(infoCredito.saldo_favor_a_nueva) || 0;
     const deudaAnterior = parseFloat(infoCredito.deuda_anterior) || 0;
 
+    // Suma de pagos en USD (para vuelto y pendiente)
     let sumaPagosUSD = 0;
     if (pagos && pagos.length > 0) {
         pagos.forEach(function(pago) {
@@ -1251,11 +1249,11 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         });
     }
 
-    // >>> BLOQUE DEUDAS (solo CREDITO) <<<
+    // >>> NUEVO: BLOQUE DEUDAS (solo ventas a CREDITO) <<<
     const deudasSection = document.getElementById('ticket-deudas-section');
     const deudasLista = document.getElementById('ticket-deudas-lista');
 
-    if (tipoVenta === 'CREDITO' && !sinCredito) {
+    if (tipoVenta === 'CREDITO') {
         deudasSection.style.display = 'block';
         deudasLista.innerHTML = '';
         deudasLista.innerHTML += '<div class="ticket-fila"><span>Deuda anterior:</span><span>$ ' + deudaAnterior.toFixed(2) + '</span></div>';
@@ -1265,7 +1263,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         deudasSection.style.display = 'none';
     }
 
-    // >>> BLOQUE PAGOS Y ABONOS <<<
+    // >>> MEJORADO: BLOQUE PAGOS Y ABONOS (con doble moneda) <<<
     const pagosSection = document.getElementById('ticket-pagos-section');
     const pagosLista = document.getElementById('ticket-pagos-lista');
 
@@ -1275,17 +1273,12 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         pagosSection.style.display = 'block';
         pagosLista.innerHTML = '';
 
+        // Metodos de pago: nombre en una linea, monto en la siguiente
+        // SECUNDARIA: "200.00 BS (40.00$)" | PRINCIPAL: "40.00$"
         if (pagos && pagos.length > 0) {
             pagos.forEach(function(pago) {
-                // >>> FIX: si no hay metodo_id (reimpresion), usa metodo_nombre <<<
-                let metodo = null;
-                if (pago.metodo_id) {
-                    metodo = metodosPagoCache.find(function(m) { return m.id === pago.metodo_id; });
-                }
-                if (!metodo && pago.metodo_nombre) {
-                    metodo = { nombre: pago.metodo_nombre, moneda_referencia: 'PRINCIPAL' };
-                }
-                const nombreMetodo = (metodo ? metodo.nombre : 'METODO').toUpperCase();
+                const metodo = metodosPagoCache.find(function(m) { return m.id === pago.metodo_id; });
+                const nombreMetodo = metodo ? metodo.nombre.toUpperCase() : 'METODO';
                 const esSecundaria = metodo && metodo.moneda_referencia === 'SECUNDARIA';
 
                 let montoTxt;
@@ -1302,6 +1295,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
             });
         }
 
+        // Abonos aplicados (distribucion del backend, informativos)
         abonosViejos.forEach(function(ab) {
             const monto = parseFloat(ab.monto_aplicado) || 0;
             const nota = ab.origen === 'SALDO_A_FAVOR' ? ' (saldo a favor)' : '';
@@ -1321,7 +1315,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         pagosSection.style.display = 'none';
     }
 
-    // >>> VUELTO <<<
+    // >>> VUELTO (igual logica que antes) <<<
     const vueltoSection = document.getElementById('ticket-vuelto-section');
     const vuelto = sumaPagosUSD - totalUSD;
 
@@ -1332,7 +1326,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
         vueltoSection.style.display = 'none';
     }
 
-    // >>> PENDIENTE TOTAL <<<
+    // >>> NUEVO: PENDIENTE TOTAL destacado (numero autoritativo del server) <<<
     const pendienteSection = document.getElementById('ticket-pendiente-section');
     const pendienteLinea = document.getElementById('ticket-pendiente-linea');
     const pendienteTitulo = document.getElementById('ticket-pendiente-titulo');
@@ -1342,7 +1336,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
     const deudaTotalCliente = parseFloat(infoCredito.deuda_total_cliente) || 0;
     const sobrante = parseFloat(infoCredito.sobrante_abono) || 0;
 
-    if (!sinCredito && (tipoVenta === 'CREDITO' || deudaTotalCliente > 0.01)) {
+    if (tipoVenta === 'CREDITO' || deudaTotalCliente > 0.01) {
         pendienteSection.style.display = 'block';
 
         if (deudaTotalCliente > 0.01) {
@@ -1366,15 +1360,7 @@ function pintarTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, info
     } else {
         pendienteSection.style.display = 'none';
     }
-}
 
-// Igual que antes, pero delega el pintado en pintarTicket()
-function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
-    // >>> El 'true' final activa el modo simple: solo datos de la venta,
-    //     sin bloque de DEUDAS ni de PENDIENTE / AL DÍA <<<
-    pintarTicket(data.id, totales, carritoFacturado, data.tipo, pagos, infoCredito, data.cliente || 'Cliente Mostrador', true);
-
-    const ticket = document.getElementById('ticket-impresion');
     ticket.classList.add('activo');
 
     setTimeout(function() {
@@ -1385,81 +1371,6 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
     }, 100);
 }
 
-// >>> NUEVO: reimprimir una factura desde el historial del turno <<<
-async function reimprimirFactura(id) {
-    try {
-        const data = await apiFetch('/ventas/' + id + '/detalle/', 'GET');
-
-        // Cerrar el modal de detalle: si queda abierto, Bootstrap lo oculta con
-        // display:none tras el fade, pero el foco/backdrop puede interferir con el dialogo de impresion
-        const modalDetalle = bootstrap.Modal.getInstance(document.getElementById('modalDetalleFactura'));
-        if (modalDetalle) modalDetalle.hide();
-
-        // 1) Totales en el formato que espera pintarTicket
-        const totales = {
-            subtotal: parseFloat(data.subtotal_principal).toFixed(2),
-            impuestos: parseFloat(data.total_impuestos_principal).toFixed(2),
-            total_usd: parseFloat(data.total_principal).toFixed(2),
-            total_bs: parseFloat(data.total_secundaria).toFixed(2)
-        };
-
-        // 2) Productos -> formato de item del carrito
-        const carritoFacturado = (data.productos || []).map(function(p) {
-            return {
-                presentacion_id: p.presentacion_id || 0, // si el detalle no lo trae, pintarTicket usa p.nombre
-                nombre: p.producto,
-                cantidad: parseFloat(p.cantidad),
-                precio_unitario: parseFloat(p.precio_unitario),
-                subtotal: parseFloat(p.subtotal)
-            };
-        });
-
-        // 3) Pagos -> formato que espera pintarTicket (monetario en USD;
-        //    en reimpresion no se recupera el monto original en BS)
-        const pagos = (data.pagos || []).map(function(p) {
-            const montoUSD = parseFloat(p.monto_usd) || 0;
-            return {
-                metodo_id: null,
-                metodo_nombre: p.metodo || 'PAGO',
-                monto_pagado: montoUSD.toFixed(2),
-                monto_equivalente_principal: montoUSD.toFixed(2)
-            };
-        });
-
-        // 4) Info credito: si el backend no la devuelve, quedan en 0 y el
-        //    ticket mostrara "PAGADA / AL DIA" (no inventa deudas)
-        const infoCredito = {
-            deuda_anterior: parseFloat(data.deuda_anterior) || 0,
-            abonos_cxc_viejas: data.abonos_cxc_viejas || [],
-            abono_nueva_cxc: parseFloat(data.abono_nueva_cxc) || 0,
-            saldo_favor_a_nueva: parseFloat(data.saldo_favor_a_nueva) || 0,
-            saldo_restante_cxc: parseFloat(data.saldo_restante_cxc) || 0,
-            sobrante_abono: parseFloat(data.sobrante_abono) || 0,
-            deuda_total_cliente: parseFloat(data.deuda_total_cliente) || 0
-        };
-
-        // 5) Tasa historica de la factura (para que TOTAL BS y linea "Tasa:" coincidan con la venta original)
-        if (data.tasa_cambio && parseFloat(data.tasa_cambio) > 0) {
-            tasaCambio = parseFloat(data.tasa_cambio);
-        }
-
-        pintarTicket(data.id, totales, carritoFacturado, data.tipo, pagos, infoCredito, data.cliente || 'Cliente Mostrador');
-
-        const ticket = document.getElementById('ticket-impresion');
-        ticket.classList.add('activo');
-
-        setTimeout(function() {
-            window.print();
-            setTimeout(function() {
-                ticket.classList.remove('activo');
-            }, 500);
-        }, 100);
-
-    } catch (e) {
-        alert('No se pudo reimprimir la factura: ' + (e.detail || e.error || 'Error desconocido'));
-        console.error(e);
-    }
-}
 function imprimirCorteZ(datosCaja) {
     const ticketZ = document.getElementById('ticket-z-impresion');
 

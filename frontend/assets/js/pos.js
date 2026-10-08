@@ -592,8 +592,11 @@ function agregarLineaPago() {
                 optionsHTML +
             '</select>' +
         '</div>' +
-        '<div class="col-5">' +
-            '<input type="number" class="form-control form-control-sm monto-pago-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoPago()">' +
+        '<div class="col-4">' +
+            '<input type="number" class="form-control form-control-sm monto-pago-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoPago(); actualizarEquivalenteFila(this.closest(\'.linea-pago-fila\'));">' +
+        '</div>' +
+        '<div class="col-1 text-center" style="min-width: 90px;">' +
+            '<small class="text-muted equiv-pago-display" style="display: none; font-size: 0.75em; white-space: nowrap;"></small>' +
         '</div>' +
         '<div class="col-2">' +
             '<button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest(\'.linea-pago-fila\').remove(); evaluarEstadoPago();">X</button>' +
@@ -666,6 +669,35 @@ function alCambiarMetodoPago(selectElement) {
 
     selectElement.setAttribute('data-prev-moneda', nuevaMoneda);
     evaluarEstadoPago();
+    actualizarEquivalenteFila(fila);
+}
+
+function actualizarEquivalenteFila(fila) {
+    if (!fila) return;
+    const select = fila.querySelector('.metodo-pago-select');
+    const inputMonto = fila.querySelector('.monto-pago-input');
+    const display = fila.querySelector('.equiv-pago-display');
+    if (!select || !inputMonto || !display) return;
+
+    const opcion = select.options[select.selectedIndex];
+    const moneda = opcion ? (opcion.getAttribute('data-moneda') || 'PRINCIPAL') : 'PRINCIPAL';
+    const monto = parseFloat(inputMonto.value) || 0;
+
+    if (monto <= 0 || tasaCambio <= 0) {
+        display.style.display = 'none';
+        return;
+    }
+
+    if (moneda === 'SECUNDARIA') {
+        const usd = monto / tasaCambio;
+        display.textContent = '≈ $ ' + usd.toFixed(2);
+        display.style.display = 'inline';
+    } else {
+        // A1: equivalencia inversa USD → BS
+        const bs = monto * tasaCambio;
+        display.textContent = '≈ BS ' + bs.toFixed(2);
+        display.style.display = 'inline';
+    }
 }
 
 function evaluarEstadoPago() {
@@ -697,22 +729,65 @@ function evaluarEstadoPago() {
 
     const restante = totalUSD - sumaUSD;
     const restanteEl = document.getElementById('cobro-restante-usd');
+    const restanteBsEl = document.getElementById('cobro-restante-bs');
     const btnFacturar = document.getElementById('btn-procesar-factura');
 
     window._datosPago = { pagos: pagosDetalle, totalPagadoUSD: sumaUSD, restante: restante, tipoVenta: tipoVenta };
 
+    // --- Equivalencia BS del restante (siempre visible si hay tasa) ---
+    if (restanteBsEl) {
+        if (tasaCambio > 0 && Math.abs(restante) > 0.01) {
+            const restanteBS = Math.abs(restante) * tasaCambio;
+            restanteBsEl.textContent = '≈ BS ' + restanteBS.toFixed(2);
+            restanteBsEl.style.display = 'block';
+        } else {
+            restanteBsEl.style.display = 'none';
+        }
+    }
+
     if (tipoVenta === 'CREDITO') {
+        // --- C1: restante contextualizado con deuda y saldo a favor ---
+        const cliente = clientesCache.find(c => c.id === clienteSeleccionadoId);
+        const deudaCliente = cliente ? (parseFloat(cliente.deuda_total) || 0) : 0;
+        const saldoFavor = cliente ? (parseFloat(cliente.saldo_a_favor) || 0) : 0;
+        const compromisoTotal = restante + deudaCliente - saldoFavor;
+
         if (restante < -0.01) {
-            // Sobrante: el backend lo guardará como saldo a favor
-            restanteEl.innerText = 'SOBRANTE: $ ' + Math.abs(restante).toFixed(2) + ' (a favor)';
+            restanteEl.innerText = 'SOBRANTE: $ ' + Math.abs(restante).toFixed(2);
             restanteEl.className = 'text-success fw-bold mb-0';
             btnFacturar.disabled = false;
         } else {
-            restanteEl.innerText = '$ ' + restante.toFixed(2) + ' (PENDIENTE)';
+            restanteEl.innerText = '$ ' + restante.toFixed(2);
             restanteEl.className = 'text-info fw-bold mb-0';
             btnFacturar.disabled = false;
         }
+
+        // Texto contextual del paréntesis
+        if (compromisoTotal > 0.01) {
+            if (deudaCliente > 0.01) {
+                restanteEl.innerText += ' (PENDIENTE TOTAL: $' + compromisoTotal.toFixed(2) + ' incl. deuda)';
+            } else {
+                restanteEl.innerText += ' (PENDIENTE: $' + compromisoTotal.toFixed(2) + ')';
+            }
+            restanteEl.className = 'text-warning fw-bold mb-0';
+        } else {
+            if (saldoFavor > 0.01 && restante > 0.01) {
+                restanteEl.innerText += ' (AL DÍA — cubierto por saldo a favor)';
+            } else {
+                restanteEl.innerText += ' (AL DÍA)';
+            }
+            restanteEl.className = 'text-success fw-bold mb-0';
+        }
+
+        // --- C2: aviso si excede límite de crédito ---
+        const limite = cliente ? (parseFloat(cliente.limite_credito) || 0) : 0;
+        if (limite > 0 && compromisoTotal > limite) {
+            restanteEl.innerText += ' ⚠ EXCEDE LÍMITE';
+            restanteEl.className = 'text-danger fw-bold mb-0';
+        }
+
     } else {
+        // CONTADO
         if (restante > 0.01) {
             restanteEl.innerText = '$ ' + restante.toFixed(2);
             restanteEl.className = 'text-warning fw-bold mb-0';
@@ -728,7 +803,7 @@ function evaluarEstadoPago() {
         }
     }
 
-    // >>> NUEVO: nunca reactivar el boton mientras una facturacion este en curso <<<
+    // Nunca reactivar el botón mientras una facturación esté en curso
     if (facturandoEnCurso || (tipoVenta === 'CONTADO' && totalUSD > 0 && sumaUSD <= 0)) {
         btnFacturar.disabled = true;
     }

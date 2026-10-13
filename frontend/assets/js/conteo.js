@@ -10,6 +10,7 @@ let productosCache = [];
 let almacenesCache = [];
 let indiceConteo = 0;
 let conteoModificado = false;
+let informeActual = null; // Último informe cargado (para impresión en hoja completa)
 
 // ==============================================================================
 // 2. INICIALIZACIÓN
@@ -151,14 +152,22 @@ function volverALista() {
         detallesToma = [];
         renderizarListaTomas();
         document.getElementById('panel-detalle').style.display = 'none';
-        document.getElementById('panel-vacio').style.display = 'flex';
+        const panelVacio = document.getElementById('panel-vacio');
+        panelVacio.style.display = '';
+        panelVacio.classList.add('d-flex');
     }, window.innerWidth < 768 ? 300 : 0);
 }
 
 function renderizarDetalleToma() {
     if (!tomaActiva) return;
 
-    document.getElementById('panel-vacio').style.display = 'none';
+    // FIX: #panel-vacio usa la clase Bootstrap .d-flex (display:flex !important),
+    // por eso style.display='none' solo era IGNORADO por el navegador y el mensaje
+    // "Selecciona una toma..." quedaba visible encima del detalle. Hay que quitar
+    // la clase antes de ocultarlo.
+    const panelVacio = document.getElementById('panel-vacio');
+    panelVacio.classList.remove('d-flex');
+    panelVacio.style.display = 'none';
     document.getElementById('panel-detalle').style.display = 'block';
 
     document.getElementById('det-toma-id').innerText = tomaActiva.id;
@@ -551,6 +560,7 @@ async function verInforme() {
 }
 
 function mostrarInformeModal(data) {
+    informeActual = data;
     const body = document.getElementById('modal-informe-body');
     const r = data.resumen;
 
@@ -614,13 +624,145 @@ function mostrarInformeModal(data) {
     new bootstrap.Modal(document.getElementById('modalInforme')).show();
 }
 
+// ==============================================================================
+// 10.1 CONSTRUCCIÓN DEL INFORME COMPLETO (hoja carta/A4)
+// ==============================================================================
+function construirInformeCompleto(data) {
+    const r = (data && data.resumen) || {};
+    const fmt = function(v, dec) { return parseFloat(v || 0).toFixed(dec === undefined ? 2 : dec); };
+    const fechaStr = function(f) { return f ? new Date(f).toLocaleString('es-VE') : '--'; };
+    const nombreUsuario = (data && data.usuario) || (tomaActiva && tomaActiva.usuario_nombre) || 'N/A';
+    const caja = function(valor, etiqueta, clase) {
+        return '<div class="inf-box' + (clase ? ' ' + clase : '') + '">' +
+               '<div class="v">' + (valor || 0) + '</div>' +
+               '<div class="l">' + etiqueta + '</div></div>';
+    };
+
+    let html = '<div class="inf-hoja">';
+
+    // Encabezado del documento
+    html += '<div class="inf-header">' +
+        '<div class="inf-titulo">Informe de Toma Física de Inventario</div>' +
+        '<div class="inf-subtitulo">Generado: ' + new Date().toLocaleString('es-VE') + '</div>' +
+        '<div class="inf-meta">' +
+            '<div><b>Toma N°:</b> #' + ((data && data.toma_id) || (tomaActiva && tomaActiva.id) || '--') + '</div>' +
+            '<div><b>Almacén:</b> ' + ((data && data.almacen) || (tomaActiva && tomaActiva.almacen_nombre) || 'N/A') + '</div>' +
+            '<div><b>Responsable:</b> ' + nombreUsuario + '</div>' +
+            '<div><b>Tipo:</b> ' + ((tomaActiva && (tomaActiva.tipo_display || tomaActiva.tipo)) || '--') + '</div>' +
+            '<div><b>Estado:</b> ' + ((tomaActiva && (tomaActiva.estado_display || tomaActiva.estado)) || '--') + '</div>' +
+            '<div><b>Fecha creación:</b> ' + fechaStr(data && data.fecha_creacion) + '</div>' +
+            '<div><b>Fecha cierre:</b> ' + fechaStr(data && data.fecha_cierre) + '</div>' +
+        '</div>' +
+    '</div>';
+
+    // Resumen de la toma
+    html += '<div class="inf-resumen">' +
+        caja(r.total_lineas, 'Total Líneas') +
+        caja(r.cuadrados, 'Cuadrados') +
+        caja(r.faltantes, 'Faltantes', 'inf-box-danger') +
+        caja(r.sobrantes, 'Sobrantes', 'inf-box-success') +
+    '</div>';
+
+    // Valores económicos
+    const valorFalt = parseFloat(r.valor_faltantes_usd || 0);
+    const valorSobr = parseFloat(r.valor_sobrantes_usd || 0);
+    const neto = (r.valor_neto_usd !== undefined && r.valor_neto_usd !== null)
+        ? parseFloat(r.valor_neto_usd || 0)
+        : valorSobr - valorFalt;
+
+    html += '<div class="inf-totales">' +
+        '<div class="inf-total"><div class="l">Valor Faltantes</div><div class="v">$ ' + fmt(valorFalt) + '</div></div>' +
+        '<div class="inf-total"><div class="l">Valor Sobrantes</div><div class="v">$ ' + fmt(valorSobr) + '</div></div>' +
+        '<div class="inf-total"><div class="l">Diferencia Neta</div>' +
+            '<div class="v ' + (neto >= 0 ? 'num-success' : 'num-danger') + '">' +
+            (neto < 0 ? '-$ ' : '$ ') + fmt(Math.abs(neto)) + '</div></div>' +
+    '</div>';
+
+    // Tablas de faltantes / sobrantes (con subtotal por sección)
+    const tablaSeccion = function(titulo, arr, esSobrante) {
+        if (!arr || !arr.length) {
+            return '<h5>' + titulo + '</h5><p class="inf-vacio">Sin registros.</p>';
+        }
+        let t = '<h5>' + titulo + ' (' + arr.length + ')</h5>' +
+            '<table><thead><tr>' +
+            '<th>Código</th><th>Producto</th><th class="text-center">U.M.</th>' +
+            '<th class="text-end">Teórico</th><th class="text-end">Físico</th>' +
+            '<th class="text-end">Diferencia</th><th class="text-end">Valor USD</th>' +
+            '</tr></thead><tbody>';
+        let acumulado = 0;
+        arr.forEach(function(x) {
+            const dif = parseFloat(x.diferencia || 0);
+            acumulado += parseFloat(x.valor_diferencia_usd || 0);
+            t += '<tr>' +
+                '<td>' + (x.codigo || x.producto_codigo || '') + '</td>' +
+                '<td>' + (x.nombre || x.producto_nombre || '') + '</td>' +
+                '<td class="text-center">' + (x.unidad_medida || x.unidad || 'und') + '</td>' +
+                '<td class="text-end">' + fmt(x.stock_teorico, 3) + '</td>' +
+                '<td class="text-end">' + fmt(x.stock_fisico, 3) + '</td>' +
+                '<td class="text-end ' + (esSobrante ? 'num-success' : 'num-danger') + '">' +
+                    (esSobrante && dif > 0 ? '+' : '') + fmt(dif, 3) + '</td>' +
+                '<td class="text-end">$ ' + fmt(x.valor_diferencia_usd) + '</td>' +
+            '</tr>';
+        });
+        t += '<tr class="inf-total-row"><td colspan="6" class="text-end">Subtotal ' + titulo.toLowerCase() + '</td>' +
+             '<td class="text-end">$ ' + fmt(acumulado) + '</td></tr>';
+        t += '</tbody></table>';
+        return t;
+    };
+
+    html += tablaSeccion('Productos Faltantes', data && data.faltantes, false);
+    html += tablaSeccion('Productos Sobrantes', data && data.sobrantes, true);
+
+    // Detalle completo del conteo (todas las líneas de la toma)
+    if (detallesToma && detallesToma.length) {
+        html += '<h5>Detalle Completo del Conteo (' + detallesToma.length + ' líneas)</h5>' +
+            '<table><thead><tr>' +
+            '<th>Código</th><th>Producto</th><th class="text-center">U.M.</th>' +
+            '<th class="text-end">Teórico</th><th class="text-end">Físico</th>' +
+            '<th class="text-end">Diferencia</th><th class="text-end">Valor USD</th>' +
+            '<th>Observación</th>' +
+            '</tr></thead><tbody>';
+        detallesToma.forEach(function(d) {
+            const dif = parseFloat(d.diferencia || 0);
+            const claseDif = dif < 0 ? 'num-danger' : dif > 0 ? 'num-success' : '';
+            html += '<tr>' +
+                '<td>' + (d.producto_codigo || '') + '</td>' +
+                '<td>' + (d.producto_nombre || '') + '</td>' +
+                '<td class="text-center">' + (d.unidad_medida || d.unidad || 'und') + '</td>' +
+                '<td class="text-end">' + fmt(d.stock_teorico, 3) + '</td>' +
+                '<td class="text-end">' + fmt(d.stock_fisico, 3) + '</td>' +
+                '<td class="text-end ' + claseDif + '">' + (dif > 0 ? '+' : '') + fmt(dif, 3) + '</td>' +
+                '<td class="text-end">$ ' + fmt(d.subtotal_diferencia) + '</td>' +
+                '<td>' + (d.observacion_linea || '') + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+    }
+
+    // Firmas
+    html += '<div class="inf-firmas">' +
+        '<div class="inf-firma"><div class="linea">Elaborado por: ' + nombreUsuario + '</div></div>' +
+        '<div class="inf-firma"><div class="linea">Firma Responsable</div></div>' +
+        '<div class="inf-firma"><div class="linea">V°B° Supervisión</div></div>' +
+    '</div>';
+
+    html += '</div>';
+    return html;
+}
+
 function imprimirInforme(modo) {
     const ticket = document.getElementById('ticket-informe-impresion');
     const completo = document.getElementById('informe-completo-impresion');
 
     if (modo === 'completo') {
-        // Clona el contenido del modal (tablas completas de faltantes/sobrantes)
-        completo.innerHTML = document.getElementById('modal-informe-body').innerHTML;
+        // FIX: #informe-completo-impresion estaba anidado DENTRO de #ticket-informe-impresion
+        // (que tiene display:none salvo que esté "activo"), así que un hijo no podía
+        // mostrarse nunca => la hoja salía en blanco. Ahora el div es hermano del ticket
+        // y se genera un informe completo y detallado (encabezado, resumen, valores,
+        // faltantes, sobrantes, detalle completo y firmas).
+        completo.innerHTML = (typeof informeActual !== 'undefined' && informeActual)
+            ? construirInformeCompleto(informeActual)
+            : document.getElementById('modal-informe-body').innerHTML;
         completo.classList.add('activo');
         ticket.classList.remove('activo');
     } else {

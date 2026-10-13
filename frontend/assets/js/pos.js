@@ -584,25 +584,26 @@ function agregarLineaPago() {
     });
 
     const div = document.createElement('div');
-    div.className = 'row g-2 mb-2 align-items-center linea-pago-fila';
+    // FIX: fila flex sin wrap para que la equis de eliminar quede SIEMPRE
+    // en la misma linea que su metodo de pago (antes un row de columnas
+    // fijas desbordaba y la equis saltaba a la linea de abajo).
+    div.className = 'd-flex flex-nowrap align-items-center gap-2 mb-2 linea-pago-fila';
     div.id = 'linea-pago-' + idx;
     div.innerHTML = '' +
-        '<div class="col-5">' +
-            '<select class="form-select form-select-sm metodo-pago-select" data-prev-moneda="" onchange="alCambiarMetodoPago(this)">' +
-                optionsHTML +
-            '</select>' +
-        '</div>' +
-        '<div class="col-4">' +
-            '<input type="number" class="form-control form-control-sm monto-pago-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoPago(); actualizarEquivalenteFila(this.closest(\'.linea-pago-fila\'));">' +
-        '</div>' +
-        '<div class="col-1 text-center" style="min-width: 90px;">' +
-            '<small class="text-muted equiv-pago-display" style="display: none; font-size: 0.75em; white-space: nowrap;"></small>' +
-        '</div>' +
-        '<div class="col-2">' +
-            '<button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest(\'.linea-pago-fila\').remove(); evaluarEstadoPago();">X</button>' +
-        '</div>';
+        '<select class="form-select form-select-sm metodo-pago-select flex-grow-1" style="min-width: 0;" data-prev-moneda="" onchange="alCambiarMetodoPago(this)">' +
+            optionsHTML +
+        '</select>' +
+        '<input type="number" class="form-control form-control-sm monto-pago-input flex-grow-1" style="min-width: 0; max-width: 130px;" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoPago(); actualizarEquivalenteFila(this.closest(\'.linea-pago-fila\'));">' +
+        '<small class="text-muted equiv-pago-display flex-shrink-0" style="display: none; font-size: 0.75em; white-space: nowrap; min-width: 62px;"></small>' +
+        '<button type="button" class="btn btn-sm btn-outline-danger flex-shrink-0 d-flex align-items-center justify-content-center px-2" style="width: 32px; height: 32px;" title="Quitar metodo de pago" onclick="eliminarLineaPago(this)"><i class="bi bi-x-lg"></i></button>';
     cont.appendChild(div);
 
+    evaluarEstadoPago();
+}
+
+function eliminarLineaPago(btn) {
+    const fila = btn.closest('.linea-pago-fila');
+    if (fila) fila.remove();
     evaluarEstadoPago();
 }
 
@@ -1255,19 +1256,23 @@ function abreviarUnidad(nombrePresentacion) {
 // ==============================================================================
 // 9. TICKETS - VERSION 2 LINEAS POR PRODUCTO + BLOQUES DE DEUDA/PAGOS/PENDIENTE
 // ==============================================================================
-function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito) {
+function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, pagos, infoCredito, extras) {
     infoCredito = infoCredito || {};
+    // extras (opcional): solo lo usa la reimpresion desde el historial
+    // para fecha/cliente/cajero/tasa de la factura original.
+    // Al facturar una venta nueva no se pasa nada y todo queda igual que antes.
+    extras = extras || {};
     const ticket = document.getElementById('ticket-impresion');
 
     ticket.classList.remove('activo');
 
     document.getElementById('ticket-id').innerText = ventaId;
-    document.getElementById('ticket-fecha').innerText = new Date().toLocaleString('es-VE', {
+    document.getElementById('ticket-fecha').innerText = extras.fechaTexto || new Date().toLocaleString('es-VE', {
         day: '2-digit', month: '2-digit', year: 'numeric',
         hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
-    document.getElementById('ticket-cajero').innerText = document.getElementById('nombreCajero').innerText;
-    document.getElementById('ticket-cliente').innerText = clienteSeleccionadoNombre;
+    document.getElementById('ticket-cajero').innerText = extras.cajeroTexto || document.getElementById('nombreCajero').innerText;
+    document.getElementById('ticket-cliente').innerText = extras.clienteTexto || clienteSeleccionadoNombre;
     document.getElementById('ticket-tipo-venta').innerText = tipoVenta;
 
     const totalUSD = parseFloat(totales.total_usd);
@@ -1286,7 +1291,7 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
             unidad = String(catItem.unidad_sigla || '').toUpperCase().trim();
         }
         if (!unidad) {
-            unidad = catItem ? abreviarUnidad(catItem.nombre_presentacion) : '';
+            unidad = catItem ? abreviarUnidad(catItem.nombre_presentacion) : abreviarUnidad(item.presentacion || '');
         }
         if (nombreProd.length > 24) nombreProd = nombreProd.substring(0, 23) + '…';
 
@@ -1309,7 +1314,7 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
     document.getElementById('ticket-iva').innerText = totales.impuestos;
     document.getElementById('ticket-total-usd').innerText = totales.total_usd;
     document.getElementById('ticket-total-bs').innerText = totales.total_bs;
-    document.getElementById('ticket-tasa').innerText = tasaCambio.toFixed(2);
+    document.getElementById('ticket-tasa').innerText = extras.tasaTexto || tasaCambio.toFixed(2);
 
     const abonosViejos = infoCredito.abonos_cxc_viejas || [];
     const abonoNueva = parseFloat(infoCredito.abono_nueva_cxc) || 0;
@@ -1353,8 +1358,10 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
         if (pagos && pagos.length > 0) {
             pagos.forEach(function(pago) {
                 const metodo = metodosPagoCache.find(function(m) { return m.id === pago.metodo_id; });
-                const nombreMetodo = metodo ? metodo.nombre.toUpperCase() : 'METODO';
-                const esSecundaria = metodo && metodo.moneda_referencia === 'SECUNDARIA';
+                // Fallback para reimpresion: si el metodo ya no esta en cache,
+                // se usa el nombre/moneda que trae el propio pago.
+                const nombreMetodo = metodo ? metodo.nombre.toUpperCase() : String(pago.metodo_nombre || 'METODO').toUpperCase();
+                const esSecundaria = metodo ? metodo.moneda_referencia === 'SECUNDARIA' : (pago.moneda === 'SECUNDARIA');
 
                 let montoTxt;
                 if (esSecundaria) {
@@ -2106,6 +2113,8 @@ async function verDetalleFactura(id) {
 }
 
 function mostrarDetalleFacturaModal(data) {
+    // Guardar el detalle para poder reimprimirlo en el mismo formato del ticket
+    window._detalleFacturaActual = data;
     document.getElementById('detalle-factura-id').innerText = data.id;
     document.getElementById('detalle-factura-fecha').innerText = new Date(data.fecha).toLocaleString('es-VE');
     document.getElementById('detalle-factura-tipo').innerText = data.tipo;
@@ -2153,6 +2162,120 @@ function mostrarDetalleFacturaModal(data) {
 
     const modalDetalle = new bootstrap.Modal(document.getElementById('modalDetalleFactura'));
     modalDetalle.show();
+}
+
+// ==============================================================================
+// REIMPRESION DE FACTURAS (mismo formato del ticket al finalizar la venta)
+// ==============================================================================
+
+function reimprimirFactura() {
+    const data = window._detalleFacturaActual;
+    if (!data) {
+        alert("No hay factura cargada para reimprimir.");
+        return;
+    }
+
+    try {
+        // Totales en el mismo formato que devuelve calcularTotales()
+        const totales = {
+            subtotal: (parseFloat(data.subtotal_principal) || 0).toFixed(2),
+            impuestos: (parseFloat(data.total_impuestos_principal) || 0).toFixed(2),
+            total_usd: (parseFloat(data.total_principal) || 0).toFixed(2),
+            total_bs: (parseFloat(data.total_secundaria) || 0).toFixed(2)
+        };
+        const totalUSD = parseFloat(data.total_principal) || 0;
+        const tasaHist = parseFloat(data.tasa_cambio) || tasaCambio || 0;
+
+        // Productos adaptados al formato del carrito que usa generarEImprimirTicket
+        const carritoFacturado = (data.productos || []).map(function(p) {
+            return {
+                presentacion_id: p.presentacion_id || null,
+                nombre: p.producto || 'PRODUCTO',
+                presentacion: p.presentacion || '',
+                cantidad: parseFloat(p.cantidad) || 0,
+                precio_unitario: parseFloat(p.precio_unitario) || 0,
+                subtotal: parseFloat(p.subtotal) || 0
+            };
+        });
+
+        // Pagos adaptados al formato del ticket. Si el backend ya trae
+        // monto_pagado/moneda se usan tal cual; si solo trae monto_usd,
+        // se reconstruye el monto en la moneda original con la tasa historica.
+        const pagos = (data.pagos || []).map(function(p) {
+            const metodoCache = p.metodo_id
+                ? metodosPagoCache.find(function(m) { return m.id === parseInt(p.metodo_id); })
+                : metodosPagoCache.find(function(m) { return m.nombre === p.metodo; });
+
+            const moneda = p.moneda_referencia || p.moneda || (metodoCache ? metodoCache.moneda_referencia : 'PRINCIPAL');
+            const montoUSD = parseFloat(p.monto_equivalente_principal != null ? p.monto_equivalente_principal : p.monto_usd) || 0;
+
+            let montoPagado = (p.monto_pagado != null && p.monto_pagado !== '') ? (parseFloat(p.monto_pagado) || 0) : null;
+            if (montoPagado === null) {
+                montoPagado = montoUSD;
+                if (moneda === 'SECUNDARIA' && tasaHist > 0) {
+                    montoPagado = Math.round(montoUSD * tasaHist * 100) / 100;
+                }
+            }
+
+            return {
+                metodo_id: p.metodo_id ? parseInt(p.metodo_id) : (metodoCache ? metodoCache.id : null),
+                metodo_nombre: p.metodo || (metodoCache ? metodoCache.nombre : 'METODO'),
+                moneda: moneda,
+                monto_pagado: montoPagado,
+                monto_equivalente_principal: montoUSD
+            };
+        });
+
+        const sumaPagosUSD = pagos.reduce(function(s, p) { return s + p.monto_equivalente_principal; }, 0);
+
+        // Bloques de credito: si el backend trae los datos se usan tal cual;
+        // si no, se estima con lo conocido (total - pagos) sin inventar cifras.
+        const tipoVenta = String(data.tipo || 'CONTADO').toUpperCase();
+        const infoCredito = {
+            deuda_anterior: parseFloat(data.deuda_anterior) || 0,
+            abonos_cxc_viejas: Array.isArray(data.abonos_cxc_viejas) ? data.abonos_cxc_viejas : [],
+            abono_nueva_cxc: parseFloat(data.abono_nueva_cxc) || 0,
+            saldo_favor_a_nueva: parseFloat(data.saldo_favor_a_nueva) || 0,
+            sobrante_abono: parseFloat(data.sobrante_abono) || 0,
+            deuda_total_cliente: parseFloat(data.deuda_total_cliente) || 0
+        };
+        if (tipoVenta === 'CREDITO' && !(parseFloat(data.deuda_total_cliente) > 0)) {
+            if (!(infoCredito.abono_nueva_cxc > 0)) infoCredito.abono_nueva_cxc = sumaPagosUSD;
+            infoCredito.deuda_total_cliente = Math.max(0, totalUSD - sumaPagosUSD);
+        }
+
+        // Textos de la factura original (cliente/cajero/fecha/tasa)
+        let clienteTxt = '';
+        if (typeof data.cliente === 'string') {
+            clienteTxt = data.cliente;
+        } else if (data.cliente && typeof data.cliente === 'object') {
+            clienteTxt = data.cliente.nombre || data.cliente.nombre_completo || '';
+        }
+        clienteTxt = clienteTxt || data.cliente_nombre || data.cliente_nombre_completo || 'Cliente Mostrador';
+
+        const nombreCajeroEl = document.getElementById('nombreCajero');
+        const cajeroTxt = data.cajero || data.cajero_nombre || (nombreCajeroEl ? nombreCajeroEl.innerText : 'Admin');
+
+        const fechaTxt = data.fecha ? new Date(data.fecha).toLocaleString('es-VE', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }) : '';
+
+        const tasaTxt = (tasaHist > 0 ? tasaHist : tasaCambio).toFixed(2);
+
+        generarEImprimirTicket(
+            data.id,
+            totales,
+            carritoFacturado,
+            tipoVenta,
+            pagos,
+            infoCredito,
+            { fechaTexto: fechaTxt, clienteTexto: clienteTxt, cajeroTexto: cajeroTxt, tasaTexto: tasaTxt }
+        );
+    } catch (e) {
+        console.error("Error al reimprimir factura:", e);
+        alert("No se pudo generar la reimpresion de la factura.");
+    }
 }
 
 // ==============================================================================

@@ -104,6 +104,41 @@
         }
 
         /* ============================================
+           INFORME COMPLETO (hoja carta/A4)
+           ============================================ */
+        .inf-hoja { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 12px; }
+        .inf-hoja .inf-header { border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 12px; }
+        .inf-hoja .inf-titulo { text-align: center; font-size: 17px; font-weight: 700; margin: 0 0 2px; text-transform: uppercase; }
+        .inf-hoja .inf-subtitulo { text-align: center; font-size: 10px; color: #444; margin: 0 0 8px; }
+        .inf-hoja .inf-meta { display: flex; flex-wrap: wrap; gap: 3px 24px; font-size: 11px; }
+        .inf-hoja .inf-meta b { display: inline-block; min-width: 105px; }
+        .inf-hoja h5 { font-size: 13px; font-weight: 700; margin: 14px 0 6px; border-bottom: 1px solid #000; padding-bottom: 3px; }
+        .inf-hoja table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+        .inf-hoja th, .inf-hoja td { border: 1px solid #999; padding: 4px 6px; font-size: 11px; }
+        .inf-hoja th { background: #e9ecef; font-weight: 700; }
+        .inf-hoja thead { display: table-header-group; }
+        .inf-hoja tr { page-break-inside: avoid; }
+        .inf-hoja .text-end { text-align: right; }
+        .inf-hoja .text-center { text-align: center; }
+        .inf-hoja .num-danger { color: #b02a37; font-weight: 700; }
+        .inf-hoja .num-success { color: #146c43; font-weight: 700; }
+        .inf-hoja .inf-resumen { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .inf-hoja .inf-box { flex: 1 1 20%; border: 1px solid #999; border-radius: 6px; padding: 8px 4px; text-align: center; }
+        .inf-hoja .inf-box .v { font-size: 18px; font-weight: 700; }
+        .inf-hoja .inf-box .l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.3px; }
+        .inf-hoja .inf-box-danger .v { color: #b02a37; }
+        .inf-hoja .inf-box-success .v { color: #146c43; }
+        .inf-hoja .inf-totales { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .inf-hoja .inf-total { flex: 1 1 30%; text-align: center; border: 1px solid #ccc; padding: 6px; }
+        .inf-hoja .inf-total .l { font-size: 10px; text-transform: uppercase; }
+        .inf-hoja .inf-total .v { font-size: 14px; font-weight: 700; }
+        .inf-hoja .inf-total-row td { font-weight: 700; background: #f2f2f2; }
+        .inf-hoja .inf-vacio { font-size: 11px; color: #555; font-style: italic; }
+        .inf-hoja .inf-firmas { display: flex; gap: 24px; margin-top: 34px; page-break-inside: avoid; }
+        .inf-hoja .inf-firma { flex: 1; text-align: center; font-size: 11px; }
+        .inf-hoja .inf-firma .linea { border-top: 1px solid #000; padding-top: 4px; }
+
+        /* ============================================
            IMPRESIÓN DUAL: TICKET 48mm / HOJA COMPLETA
            ============================================ */
         @media print {
@@ -536,8 +571,6 @@
         <p id="ticket-inf-almacen">--</p>
         <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
     </div>
-<!-- Informe Completo (Impresión hoja carta/A4) -->
-<div id="informe-completo-impresion" style="display: none;"></div>
     <div class="seccion">
         <div class="fila"><span>Total Líneas:</span><span id="ticket-inf-total">0</span></div>
         <div class="fila"><span>Cuadrados:</span><span id="ticket-inf-cuadrados">0</span></div>
@@ -563,9 +596,14 @@
     </div>
 </div>
 
+<!-- Informe Completo (Impresión hoja carta/A4) -->
+<!-- IMPORTANTE: debe ser hermano del ticket, NO hijo. Si queda dentro de
+     #ticket-informe-impresion (display:none salvo .activo), nunca puede imprimirse. -->
+<div id="informe-completo-impresion" style="display: none;"></div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/api.js?v=7.1"></script>
 <script src="assets/js/menu.js"></script>
-<script src="assets/js/conteo.js?v=3.1"></script>
+<script src="assets/js/conteo.js?v=3.2"></script>
 </body>
 </html>

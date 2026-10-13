@@ -512,11 +512,8 @@ function agregarLineaPagoAbono() {
                 ${optionsHTML}
             </select>
         </div>
-        <div class="col-4">
-            <input type="number" class="form-control form-control-sm monto-abono-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoAbono(); actualizarEquivalenteAbono(this.closest('.linea-pago-abono'));">
-        </div>
-        <div class="col-1 text-center" style="min-width: 90px;">
-            <small class="text-muted equiv-abono-display" style="display: none; font-size: 0.75em; white-space: nowrap;"></small>
+        <div class="col-5">
+            <input type="number" class="form-control form-control-sm monto-abono-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoAbono()">
         </div>
         <div class="col-2">
             <button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest('.linea-pago-abono').remove(); evaluarEstadoAbono();">X</button>
@@ -590,8 +587,6 @@ function alCambiarMetodoAbono(selectElement) {
 
     selectElement.setAttribute('data-prev-moneda', nuevaMoneda);
     evaluarEstadoAbono();
-    actualizarEquivalenteAbono(fila);
-}
 }
 
 function evaluarEstadoAbono() {
@@ -616,20 +611,8 @@ function evaluarEstadoAbono() {
 
     const restante = deudaTotal - sumaUSD;
     const restanteEl = document.getElementById('abono-restante-usd');
-    const restanteBsEl = document.getElementById('abono-restante-bs');
     const btnConfirmar = document.getElementById('btn-confirmar-abono');
     const alertaSobrante = document.getElementById('abono-alerta-sobrante');
-
-    // --- Equivalencia BS del restante (siempre visible si hay tasa) ---
-    if (restanteBsEl) {
-        if (tasa > 0 && Math.abs(restante) > 0.01) {
-            const restanteBS = Math.abs(restante) * tasa;
-            restanteBsEl.textContent = '≈ BS ' + restanteBS.toFixed(2);
-            restanteBsEl.style.display = 'block';
-        } else {
-            restanteBsEl.style.display = 'none';
-        }
-    }
 
     if (sumaUSD <= 0) {
         restanteEl.innerText = '$ ' + deudaTotal.toFixed(2);
@@ -637,49 +620,24 @@ function evaluarEstadoAbono() {
         btnConfirmar.disabled = true;
         alertaSobrante.classList.add('d-none');
     } else if (restante > 0.01) {
+        // Abono parcial
         restanteEl.innerText = '$ ' + restante.toFixed(2) + ' (PENDIENTE)';
         restanteEl.className = 'text-info fw-bold mb-0';
         btnConfirmar.disabled = false;
         alertaSobrante.classList.add('d-none');
     } else if (restante < -0.01) {
+        // Sobrante - mostrar alerta
         restanteEl.innerText = 'SOBRANTE: $ ' + Math.abs(restante).toFixed(2);
         restanteEl.className = 'text-success fw-bold mb-0';
         btnConfirmar.disabled = false;
         alertaSobrante.classList.remove('d-none');
         document.getElementById('abono-monto-sobrante').innerText = Math.abs(restante).toFixed(2);
     } else {
+        // Pago exacto
         restanteEl.innerText = '$ 0.00';
         restanteEl.className = 'text-success fw-bold mb-0';
         btnConfirmar.disabled = false;
         alertaSobrante.classList.add('d-none');
-    }
-}
-
-function actualizarEquivalenteAbono(fila) {
-    if (!fila) return;
-    const select = fila.querySelector('.metodo-abono-select');
-    const inputMonto = fila.querySelector('.monto-abono-input');
-    const display = fila.querySelector('.equiv-abono-display');
-    if (!select || !inputMonto || !display) return;
-
-    const opcion = select.options[select.selectedIndex];
-    const moneda = opcion ? (opcion.getAttribute('data-moneda') || 'PRINCIPAL') : 'PRINCIPAL';
-    const monto = parseFloat(inputMonto.value) || 0;
-    const tasa = parseFloat(document.getElementById('abono-tasa-cambio').value) || 0;
-
-    if (monto <= 0 || tasa <= 0) {
-        display.style.display = 'none';
-        return;
-    }
-
-    if (moneda === 'SECUNDARIA') {
-        const usd = monto / tasa;
-        display.textContent = '≈ $ ' + usd.toFixed(2);
-        display.style.display = 'inline';
-    } else {
-        const bs = monto * tasa;
-        display.textContent = '≈ BS ' + bs.toFixed(2);
-        display.style.display = 'inline';
     }
 }
 

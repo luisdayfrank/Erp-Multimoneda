@@ -21,6 +21,32 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ==============================================================================
+// FECHAS: parseo seguro
+// Evita que un 'YYYY-MM-DD' se muestre como el día anterior (se interpretaba en UTC)
+// ==============================================================================
+function parseFechaLocal(valor) {
+    if (!valor) return null;
+    const s = String(valor).trim();
+    const soloFecha = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (soloFecha) {
+        // Fecha sin hora: se interpreta en hora LOCAL, no en UTC
+        return new Date(Number(soloFecha[1]), Number(soloFecha[2]) - 1, Number(soloFecha[3]));
+    }
+    const d = new Date(s);
+    return isNaN(d) ? null : d;
+}
+
+function fmtFecha(valor) {
+    const d = parseFechaLocal(valor);
+    return d ? d.toLocaleDateString() : '—';
+}
+
+function fmtHora(valor) {
+    const d = parseFechaLocal(valor);
+    return d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+}
+
+// ==============================================================================
 // CARGA DE DATOS INICIALES (Métodos de pago + Tasa)
 // ==============================================================================
 async function cargarMetodosPagoYConfig() {
@@ -289,25 +315,37 @@ function renderizarFacturasPendientes(facturas) {
     }
 
     facturas.forEach(f => {
-        const fechaVenta = new Date(f.fecha).toLocaleDateString();
-        const horaVenta = new Date(f.fecha).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        const fechaVenta = fmtFecha(f.fecha);
+        const horaVenta = fmtHora(f.fecha);
 
-        // >>> NUEVO: Badge de tipo de venta <<<
-        const badgeTipo = f.tipo_venta === 'CREDITO' 
-            ? '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>' 
-            : '<span class="badge bg-success ms-1">CONTADO</span>';
+        // >>> NUEVO: origen real del documento (venta / deuda inicial / crédito de ruta) <<<
+        const esVenta = !!f.venta_id;
+        let tituloDoc;
+        if (esVenta) {
+            const badgeTipo = f.tipo_venta === 'CREDITO'
+                ? '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>'
+                : '<span class="badge bg-success ms-1">CONTADO</span>';
+            tituloDoc = `<div class="fw-bold text-primary fs-5" style="cursor:pointer; text-decoration:underline;"
+                         onclick="verDetalleFactura(${f.venta_id}, 'facturas')"
+                         title="Haga clic para ver los artículos comprados">
+                        Factura #${f.venta_id} ${badgeTipo}
+                    </div>`;
+        } else {
+            const esDeudaInicial = f.tipo_origen !== 'CREDITO_RUTA';
+            const etiqueta = esDeudaInicial ? 'Deuda Inicial' : 'Crédito de Ruta';
+            const badgeOrigen = esDeudaInicial
+                ? '<span class="badge bg-secondary ms-1">DEUDA INICIAL</span>'
+                : '<span class="badge bg-info text-dark ms-1">CRÉDITO DE RUTA</span>';
+            tituloDoc = `<div class="fw-bold text-primary fs-5">${etiqueta} (Registro #${f.cxc_id}) ${badgeOrigen}</div>`;
+        }
 
         const html = `
             <div class="d-flex align-items-center p-3 border-bottom bg-white">
                 <div class="me-3 fs-3 text-danger"><i class="bi bi-file-earmark-text"></i></div>
                 <div class="flex-grow-1 text-dark">
-                    <div class="fw-bold text-primary fs-5" style="cursor:pointer; text-decoration:underline;" 
-                         onclick="verDetalleFactura(${f.venta_id}, 'facturas')" 
-                         title="Haga clic para ver los artículos comprados">
-                        Factura #${f.venta_id} ${badgeTipo}
-                    </div>
+                    ${tituloDoc}
                     <div class="small text-muted mt-1">
-                        <i class="bi bi-calendar3 me-1"></i> <b>Emisión:</b> ${fechaVenta} - ${horaVenta} <br>
+                        <i class="bi bi-calendar3 me-1"></i> <b>Emisión:</b> ${fechaVenta}${horaVenta ? ' - ' + horaVenta : ''} <br>
                         <i class="bi bi-currency-dollar me-1"></i> <b>Monto Original:</b> $ ${f.monto_total.toFixed(2)}
                     </div>
                 </div>
@@ -331,7 +369,7 @@ function renderizarMovimientos(ventas, recibos) {
     let movimientos = [
         ...ventas.map(v => ({...v, clase: 'VENTA', icon: 'bi-cart-fill', color: 'text-dark'})),
         ...(recibos || []).map(r => ({...r, clase: 'RECIBO', icon: 'bi-receipt-cutoff', color: 'text-success'}))
-    ].sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    ].sort((a, b) => (parseFechaLocal(b.fecha)?.getTime() || 0) - (parseFechaLocal(a.fecha)?.getTime() || 0));
 
     if (movimientos.length === 0) {
         contenedor.innerHTML = '<div class="p-4 text-center text-muted">Sin movimientos registrados</div>';
@@ -339,14 +377,16 @@ function renderizarMovimientos(ventas, recibos) {
     }
 
     movimientos.forEach(m => {
-        const fecha = new Date(m.fecha).toLocaleDateString();
-        const hora = new Date(m.fecha).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        const fecha = fmtFecha(m.fecha);
+        const hora = fmtHora(m.fecha);
 
         // Badge de tipo
         let badgeTipo = '';
         if (m.clase === 'VENTA') {
             if (m.tipo === 'DEUDA_INICIAL') {
                 badgeTipo = '<span class="badge bg-secondary ms-1">DEUDA INICIAL</span>';
+            } else if (m.tipo === 'CREDITO_RUTA') {
+                badgeTipo = '<span class="badge bg-info text-dark ms-1">CRÉDITO DE RUTA</span>';
             } else if (m.tipo === 'CREDITO') {
                 badgeTipo = '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>';
             } else {
@@ -359,7 +399,13 @@ function renderizarMovimientos(ventas, recibos) {
         // Título de la fila
         let tituloCelda;
         if (m.clase === 'VENTA') {
-            tituloCelda = `<div class="fw-bold text-primary" style="cursor:pointer; text-decoration:underline;" onclick="verDetalleFactura(${m.id}, 'historial')" title="Ver detalles de esta venta">Compra de Mercancía (Factura #${m.id}) ${badgeTipo}</div>`;
+            if (m.id) {
+                tituloCelda = `<div class="fw-bold text-primary" style="cursor:pointer; text-decoration:underline;" onclick="verDetalleFactura(${m.id}, 'historial')" title="Ver detalles de esta venta">Compra de Mercancía (Factura #${m.id}) ${badgeTipo}</div>`;
+            } else {
+                // Deuda inicial o crédito de ruta: no tienen factura que abrir
+                const etiqueta = m.tipo === 'CREDITO_RUTA' ? 'Crédito de Ruta' : 'Deuda Inicial';
+                tituloCelda = `<div class="fw-bold text-primary">${etiqueta} (Registro #${m.cxc_id}) ${badgeTipo}</div>`;
+            }
         } else {
             tituloCelda = `<div class="fw-bold text-dark">Recibo de Abono ${badgeTipo}<br><small class="text-muted">${m.referencia || ''}</small></div>`;
         }
@@ -401,12 +447,20 @@ function renderizarMovimientos(ventas, recibos) {
 // DETALLE DE FACTURA
 // ==============================================================================
 async function verDetalleFactura(ventaId, origen) {
+    // Las deudas iniciales y los créditos de ruta no tienen factura que abrir
+    if (!ventaId) {
+        alert('Este registro no tiene factura asociada (es una deuda inicial o un crédito de ruta).');
+        return;
+    }
     try {
         const f = await apiFetch(`/ventas/${ventaId}/detalle/`, 'GET');
 
         document.getElementById('titulo-detalle-factura').innerHTML = `<i class="bi bi-file-earmark-spreadsheet me-2"></i>DETALLE DE FACTURA #${f.id}`;
 
-        document.getElementById('fd-fecha').innerText = new Date(f.fecha).toLocaleString();
+        document.getElementById('fd-fecha').innerText = (() => {
+            const d = parseFechaLocal(f.fecha);
+            return d ? d.toLocaleString() : '—';
+        })();
         document.getElementById('fd-tipo').innerText = f.tipo;
         document.getElementById('fd-estado').innerText = f.estado;
         document.getElementById('fd-tasa').innerText = `${f.tasa_cambio.toFixed(2)} Bs/$`;

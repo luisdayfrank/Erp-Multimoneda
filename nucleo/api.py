@@ -43,6 +43,35 @@ from .serializers import (
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
 
+
+# ==============================================================================
+# HELPERS DE FECHAS Y ORIGEN DE DOCUMENTOS
+# ==============================================================================
+def _fecha_doc(fecha):
+    """
+    Convierte una fecha (date) en datetime consciente para que el frontend
+    reciba ISO completo y no pierda un día al parsear 'YYYY-MM-DD' como UTC.
+    Si no hay fecha devuelve None: NUNCA se usa timezone.now() como fallback
+    de un registro histórico (eso "movía" las fechas cada vez que se abría la ficha).
+    """
+    if not fecha:
+        return None
+    return timezone.make_aware(datetime.combine(fecha, time.min))
+
+
+def _tipo_documento_cxc(cxc):
+    """
+    Origen real de una CxC:
+    - VENTA: tiene venta asociada
+    - DEUDA_INICIAL: deuda migrada del cliente (flag es_deuda_inicial o legacy sin venta ni ruta)
+    - CREDITO_RUTA: crédito generado al cerrar una Ruta de Mercado
+    """
+    if cxc.venta_id:
+        return "VENTA"
+    if cxc.es_deuda_inicial or not cxc.origen_ruta.exists():
+        return "DEUDA_INICIAL"
+    return "CREDITO_RUTA"
+
 class GestionCajaAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
@@ -227,7 +256,7 @@ class RegistrarAbonoMasivoAPIView(APIView):
         facturas_pendientes = CuentaPorCobrar.objects.filter(
             cliente=cliente,
             estado__in=['PENDIENTE', 'VENCIDA']
-        ).select_related('venta').order_by('id')
+        ).select_related('venta').order_by('fecha_creacion', 'id')  # FIFO por antigüedad de la deuda
 
         # Caso: no hay facturas y el cliente quiere guardar saldo a favor
         if not facturas_pendientes.exists() and total_abono_usd > 0:
@@ -530,19 +559,22 @@ class ClienteDetalleHistorialAPIView(APIView):
             # ═══════════════════════════════════════════════════════
             documentos = []
 
-            # Deudas iniciales (CxC sin venta asociada)
-            deudas_iniciales = CuentaPorCobrar.objects.filter(cliente=cliente, venta=None)
-            for cxc_ini in deudas_iniciales:
+            # Deudas sin venta asociada: deuda inicial y créditos de ruta
+            cxc_sin_venta = CuentaPorCobrar.objects.filter(
+                cliente=cliente, venta=None
+            ).prefetch_related('origen_ruta')
+            for cxc_ini in cxc_sin_venta:
+                tipo_doc = _tipo_documento_cxc(cxc_ini)
+                # Fecha propia del registro (editable en el admin), jamás "ahora"
+                fecha_doc = cxc_ini.fecha_creacion or cxc_ini.fecha_vencimiento
                 documentos.append({
                     "id": None,
                     "cxc_id": cxc_ini.id,
-                    "fecha": timezone.make_aware(
-                        datetime.combine(cxc_ini.fecha_vencimiento, time.min)
-                    ) if cxc_ini.fecha_vencimiento else timezone.now(),
-                    "tipo": "DEUDA_INICIAL",
+                    "fecha": _fecha_doc(fecha_doc),
+                    "tipo": tipo_doc,
                     "monto": float(cxc_ini.monto_total),
                     "estado": cxc_ini.estado,
-                    "es_deuda_inicial": True,
+                    "es_deuda_inicial": tipo_doc == "DEUDA_INICIAL",
                     "saldo_pendiente": float(cxc_ini.saldo_pendiente),
                     "numero_factura": None,
                 })
@@ -568,10 +600,10 @@ class ClienteDetalleHistorialAPIView(APIView):
                 reverse=True
             )
 
-            # Pagos mejorados
+            # Pagos / abonos (compatibilidad con el frontend)
             pagos_data = []
             for p in pagos:
-                es_a_deuda_inicial = (p.cuenta.venta is None)
+                tipo_doc = _tipo_documento_cxc(p.cuenta)
                 pagos_data.append({
                     "id": p.id,
                     "fecha": p.fecha,
@@ -580,12 +612,12 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "tasa_cambio": float(p.tasa_cambio_pago),
                     "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
                     "cxc_id": p.cuenta.id,
-                    "es_abono_deuda_inicial": es_a_deuda_inicial,
-                    "tipo_documento_afectado": "DEUDA_INICIAL" if es_a_deuda_inicial else "VENTA",
+                    "es_abono_deuda_inicial": tipo_doc == "DEUDA_INICIAL",
+                    "tipo_documento_afectado": tipo_doc,
                 })
 
             # ═══════════════════════════════════════════════════════
-            # RECIBOS (nuevo) + Pagos legacy (compatibilidad)
+            # RECIBOS (un recibo = un acto de pago del cliente)
             # ═══════════════════════════════════════════════════════
             recibos = ReciboAbono.objects.filter(cliente=cliente).order_by('-fecha')
             recibos_data = []
@@ -603,22 +635,6 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "desglose_metodos": r.desglose_metodos,
                 })
 
-            # Pagos legacy (por compatibilidad del frontend)
-            pagos_data = []
-            for p in pagos:
-                es_a_deuda_inicial = (p.cuenta.venta is None)
-                pagos_data.append({
-                    "id": p.id,
-                    "fecha": p.fecha,
-                    "monto": float(p.monto_abono_principal),
-                    "referencia": p.referencia,
-                    "tasa_cambio": float(p.tasa_cambio_pago),
-                    "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
-                    "cxc_id": p.cuenta.id,
-                    "es_abono_deuda_inicial": es_a_deuda_inicial,
-                    "tipo_documento_afectado": "DEUDA_INICIAL" if es_a_deuda_inicial else "VENTA",
-                })
-
             return Response({
                 "cliente": data_cliente,
                 "deuda_total": float(deuda_total),
@@ -629,12 +645,13 @@ class ClienteDetalleHistorialAPIView(APIView):
                 "facturas_pendientes": [{
                     "cxc_id": c.id,
                     "venta_id": c.venta.id if c.venta else None,
-                    "tipo_origen": "VENTA" if c.venta else "DEUDA_INICIAL",
+                    "tipo_origen": _tipo_documento_cxc(c),
                     "saldo_pendiente": float(c.saldo_pendiente),
-                    "fecha": c.venta.fecha if c.venta else c.fecha_vencimiento,
+                    # Fecha estable del documento (fecha de la venta o fecha del registro de la deuda)
+                    "fecha": c.venta.fecha if c.venta else _fecha_doc(c.fecha_creacion or c.fecha_vencimiento),
                     "monto_total": float(c.monto_total),
                     "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
-                } for c in cxc_pendientes],
+                } for c in cxc_pendientes.order_by('fecha_creacion', 'id')],
                 "ventas": documentos,
                 "recibos": recibos_data,
                 "pagos": pagos_data,

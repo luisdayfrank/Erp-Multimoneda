@@ -452,48 +452,99 @@ class CompraAdmin(admin.ModelAdmin):
 # 5. CUENTAS Y CRÉDITOS
 # ==============================================================================
 
+def _guardar_abonos_inline(request, form, formset, change):
+    """
+    Al guardar abonos desde el admin (inline):
+    - Asigna el usuario que registra el abono (queda en readonly en el formulario).
+    - Aplica el descuento al saldo de la cuenta, igual que hace la API,
+      para no dejar la CxC/CxP desincronizada.
+    - La fecha del abono es editable en el formulario (por si se registró mal).
+    """
+    instances = formset.save(commit=False)
+    for obj in formset.deleted_objects:
+        obj.delete()
+    for obj in instances:
+        es_nuevo = obj.pk is None
+        if getattr(obj, 'usuario_id', None) is None and hasattr(obj, 'usuario'):
+            obj.usuario = request.user
+        obj.save()
+        if es_nuevo and hasattr(obj, 'procesar_pago'):
+            obj.procesar_pago()
+    # Guardar relaciones m2m (si las hubiera) cuando se usó commit=False
+    for form in formset.forms:
+        save_m2m = getattr(form, 'save_m2m', None)
+        if callable(save_m2m):
+            save_m2m()
+
+
 class PagoCuentaCobrarInline(admin.TabularInline):
     model = PagoCuentaCobrar
     extra = 0
-    readonly_fields = ('fecha', 'usuario')
+    # 'fecha' es editable a propósito: permite corregir la fecha del abono
+    # si se registró mal, sin tener que borrar y recrear el registro.
+    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago', 'referencia', 'usuario')
+    readonly_fields = ('usuario',)
 
 class PagoCuentaPagarInline(admin.TabularInline):
     model = PagoCuentaPagar
     extra = 0
-    readonly_fields = ('fecha', 'usuario')
+    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago', 'referencia', 'usuario')
+    readonly_fields = ('usuario',)
 
 @admin.register(CuentaPorCobrar)
 class CuentaPorCobrarAdmin(admin.ModelAdmin):
-    list_display = ('id', 'get_venta_info', 'cliente', 'monto_total', 'saldo_pendiente', 'estado')
-    list_filter = ('estado', 'fecha_vencimiento')
-    search_fields = ('cliente__nombre',)
+    list_display = ('id', 'get_venta_info', 'cliente', 'fecha_creacion', 'monto_total', 'saldo_pendiente', 'estado')
+    list_filter = ('estado', 'es_deuda_inicial', 'fecha_creacion', 'fecha_vencimiento')
+    search_fields = ('cliente__nombre', 'cliente__documento')
+    date_hierarchy = 'fecha_creacion'
     inlines = [PagoCuentaCobrarInline]
 
+    # La FECHA del registro se puede cambiar al agregar y al modificar.
+    fields = (
+        'cliente', 'venta', 'es_deuda_inicial',
+        'fecha_creacion', 'fecha_vencimiento',
+        'monto_total', 'saldo_pendiente', 'estado',
+    )
+
     def get_readonly_fields(self, request, obj=None):
-        # Al crear: solo estado es readonly (tiene default). Monto y saldo deben ser editables.
-        # Al editar: todo bloqueado para evitar desincronización.
+        # Al crear: solo estado es readonly (tiene default). Monto, saldo y FECHA editables.
+        # Al editar: montos bloqueados para evitar desincronización con los abonos,
+        # pero la FECHA (fecha_creacion / fecha_vencimiento) sigue siendo editable.
         if obj:
             return ('monto_total', 'saldo_pendiente', 'estado')
         return ('estado',)
 
+    def save_formset(self, request, form, formset, change):
+        _guardar_abonos_inline(request, form, formset, change)
+
     def get_venta_info(self, obj):
         if obj.venta:
             return f"Venta #{obj.venta.id}"
-        return "Deuda Inicial"
+        if obj.es_deuda_inicial:
+            return "Deuda Inicial"
+        return "Crédito de Ruta"
     get_venta_info.short_description = 'Origen'
 
 
 @admin.register(CuentaPorPagar)
 class CuentaPorPagarAdmin(admin.ModelAdmin):
-    list_display = ('id', 'compra', 'proveedor', 'monto_total', 'saldo_pendiente', 'estado')
-    list_filter = ('estado', 'fecha_vencimiento')
+    list_display = ('id', 'compra', 'proveedor', 'fecha_creacion', 'monto_total', 'saldo_pendiente', 'estado')
+    list_filter = ('estado', 'fecha_creacion', 'fecha_vencimiento')
     search_fields = ('proveedor__nombre',)
     inlines = [PagoCuentaPagarInline]
+    fields = (
+        'compra', 'proveedor',
+        'fecha_creacion', 'fecha_vencimiento',
+        'monto_total', 'saldo_pendiente', 'estado',
+    )
 
     def get_readonly_fields(self, request, obj=None):
         if obj:
             return ('monto_total', 'saldo_pendiente', 'estado')
         return ('estado',)
+
+    def save_formset(self, request, form, formset, change):
+        _guardar_abonos_inline(request, form, formset, change)
 
 @admin.register(ConceptoEgreso)
 class ConceptoEgresoAdmin(admin.ModelAdmin):
@@ -601,7 +652,8 @@ class ReciboAbonoAdmin(admin.ModelAdmin):
     list_display = ('id', 'cliente', 'fecha', 'monto_total_entregado', 'total_aplicado_display', 'sobrante_a_favor', 'origen', 'usuario')
     list_filter = ('origen', 'fecha', 'usuario')
     search_fields = ('cliente__nombre', 'referencia')
-    readonly_fields = ('fecha', 'total_aplicado_display', 'facturas_afectadas_display')
+    # 'fecha' editable: se puede corregir la fecha del recibo al agregar o modificar
+    readonly_fields = ('total_aplicado_display', 'facturas_afectadas_display')
     inlines = [ReciboAbonoAplicacionInline]
     
     def total_aplicado_display(self, obj):

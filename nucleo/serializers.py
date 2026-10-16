@@ -731,7 +731,11 @@ class ReciboAbonoAplicacionSerializer(serializers.ModelSerializer):
         ]
     
     def get_es_deuda_inicial(self, obj):
-        return obj.cuenta.venta is None
+        cuenta = obj.cuenta
+        if cuenta.venta_id:
+            return False
+        # Los créditos de ruta (venta=None pero vinculados a una ruta) NO son deuda inicial
+        return cuenta.es_deuda_inicial or not cuenta.origen_ruta.exists()
 
 
 class ReciboAbonoListSerializer(serializers.ModelSerializer):

@@ -107,26 +107,76 @@ class Cliente(EntidadComercial):
 
     def save(self, *args, **kwargs):
         from .models import CuentaPorCobrar
-        
+
         is_new = self.pk is None
         super().save(*args, **kwargs)
 
-        # Solo crear CxC de deuda inicial si es cliente NUEVO
-        # Si ya existe, NUNCA sobrescribir (podría tener abonos)
-        if is_new and self.deuda_inicial > Decimal('0.00'):
+        # La CxC de deuda inicial se crea SOLO con el cliente nuevo.
+        # Después nunca se borra ni se recrea: solo se ajusta por diferencia
+        # (ver _sincronizar_deuda_inicial) para no perder fecha ni abonos.
+        if is_new:
+            if self.deuda_inicial > Decimal('0.00'):
+                CuentaPorCobrar.objects.create(
+                    cliente=self,
+                    venta=None,
+                    es_deuda_inicial=True,
+                    monto_total=self.deuda_inicial,
+                    saldo_pendiente=self.deuda_inicial,
+                    estado='PENDIENTE',
+                    fecha_creacion=timezone.localdate(),
+                )
+        else:
+            self._sincronizar_deuda_inicial()
+
+    def _sincronizar_deuda_inicial(self):
+        """
+        Mantiene la CxC de deuda inicial alineada con el campo `deuda_inicial`
+        SIN tocar su fecha original ni borrar/recrear registros con pagos.
+        Nunca toca los créditos de ruta (venta=None pero es_deuda_inicial=False).
+        """
+        from .models import CuentaPorCobrar
+
+        cxc = CuentaPorCobrar.objects.filter(cliente=self, es_deuda_inicial=True).first()
+        if cxc is None:
+            # Compatibilidad con CxC antiguas creadas sin el flag: se marcan,
+            # no se crean duplicados.
+            legacy = CuentaPorCobrar.objects.filter(
+                cliente=self, venta=None, origen_ruta__isnull=True
+            ).first()
+            if legacy:
+                legacy.es_deuda_inicial = True
+                legacy.save(update_fields=['es_deuda_inicial'])
+                cxc = legacy
+
+        # Si la deuda se puso en 0, eliminar la CxC inicial SOLO si no tiene pagos
+        if self.deuda_inicial <= Decimal('0.00'):
+            if cxc and not cxc.pagos.exists():
+                cxc.delete()
+            return
+
+        if cxc is None:
+            # Se restauró una deuda inicial que no tenía CxC: se crea con fecha de hoy
             CuentaPorCobrar.objects.create(
                 cliente=self,
                 venta=None,
+                es_deuda_inicial=True,
                 monto_total=self.deuda_inicial,
                 saldo_pendiente=self.deuda_inicial,
                 estado='PENDIENTE',
-                fecha_vencimiento=timezone.localdate(),
+                fecha_creacion=timezone.localdate(),
             )
-        elif self.deuda_inicial <= Decimal('0.00') and not is_new:
-            # Si la deuda se puso en 0, eliminar la CxC inicial SOLO si no tiene pagos
-            cxc_inicial = CuentaPorCobrar.objects.filter(cliente=self, venta=None).first()
-            if cxc_inicial and not cxc_inicial.pagos.exists():
-                cxc_inicial.delete()
+            return
+
+        # Corrección del monto: se ajusta por diferencia preservando fecha y abonos
+        delta = self.deuda_inicial - cxc.monto_total
+        if delta != Decimal('0.00'):
+            cxc.monto_total = self.deuda_inicial
+            cxc.saldo_pendiente = max(Decimal('0.00'), cxc.saldo_pendiente + delta)
+            if cxc.saldo_pendiente <= Decimal('0.00'):
+                cxc.estado = 'PAGADA'
+            elif cxc.estado == 'PAGADA':
+                cxc.estado = 'PENDIENTE'
+            cxc.save()
     def __str__(self):
         return f"Cliente: {self.nombre}"
 
@@ -446,7 +496,7 @@ class Venta(TransaccionBase):
                 facturas_pendientes = CuentaPorCobrar.objects.filter(
                     cliente=cliente,
                     estado__in=['PENDIENTE', 'VENCIDA']
-                ).exclude(venta=self).order_by('id')
+                ).exclude(venta=self).order_by('fecha_creacion', 'id')
 
                 abono_restante = dinero_fisico
                 abonos_viejas = []
@@ -484,7 +534,7 @@ class Venta(TransaccionBase):
                     viejas_con_saldo = CuentaPorCobrar.objects.filter(
                         cliente=cliente,
                         estado__in=['PENDIENTE', 'VENCIDA']
-                    ).exclude(venta=self).order_by('id')
+                    ).exclude(venta=self).order_by('fecha_creacion', 'id')
 
                     for cxc_vieja in viejas_con_saldo:
                         if cliente.saldo_a_favor <= Decimal('0.00'):
@@ -563,13 +613,14 @@ class Venta(TransaccionBase):
                 deuda_total_cliente = deuda_viejas_pendientes + saldo_restante
                 resultado['deuda_total_cliente'] = deuda_total_cliente
 
-                # PASO 5: Crear CxC
+                # PASO 5: Crear CxC (la fecha del registro es la fecha real de la venta)
                 cxc = CuentaPorCobrar.objects.create(
                     venta=self,
                     cliente=cliente,
                     monto_total=self.total_principal,
                     saldo_pendiente=saldo_restante,
-                    estado=estado_cxc
+                    estado=estado_cxc,
+                    fecha_creacion=timezone.localtime(self.fecha).date()
                 )
 
                 # PASO 6: Registrar abono inicial
@@ -794,20 +845,36 @@ class CuentaBase(models.Model):
     monto_total = models.DecimalField(max_digits=15, decimal_places=2)
     saldo_pendiente = models.DecimalField(max_digits=15, decimal_places=2)
     estado = models.CharField(max_length=15, choices=ESTADOS_CUENTA, default='PENDIENTE')
+    # Fecha REAL del registro de la deuda (emisión). Es editable a propósito:
+    # en el admin se puede corregir al agregar o modificar el registro, pero
+    # jamás se recalcula al pagar ni se usa "hoy" como fallback.
+    fecha_creacion = models.DateField(
+        default=timezone.localdate,
+        help_text="Fecha en que se registró esta deuda. Se puede cambiar al agregar o modificar el registro."
+    )
+    # Plazo/vencimiento (opcional). Ya NO se usa como fecha del registro.
     fecha_vencimiento = models.DateField(blank=True, null=True)
 
     class Meta:
         abstract = True
+        ordering = ['fecha_creacion', 'id']
 
 class CuentaPorCobrar(CuentaBase):
     # >>> MODIFICADO: venta es opcional para permitir deudas iniciales <<<
     venta = models.OneToOneField(Venta, on_delete=models.CASCADE, null=True, blank=True)
     cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE)
+    # >>> NUEVO: distingue la deuda inicial de los créditos de ruta <<<
+    es_deuda_inicial = models.BooleanField(
+        default=False,
+        help_text="Marca las deudas migradas del cliente (sin venta). Los créditos de ruta quedan en False."
+    )
 
     def __str__(self):
         if self.venta:
             return f"CxC Venta #{self.venta.id} - Saldo: {self.saldo_pendiente}"
-        return f"CxC Deuda Inicial - {self.cliente.nombre} - Saldo: {self.saldo_pendiente}"
+        if self.es_deuda_inicial:
+            return f"CxC Deuda Inicial - {self.cliente.nombre} - Saldo: {self.saldo_pendiente}"
+        return f"CxC Crédito de Ruta - {self.cliente.nombre} - Saldo: {self.saldo_pendiente}"
 
 class CuentaPorPagar(CuentaBase):
     compra = models.OneToOneField(Compra, on_delete=models.CASCADE)
@@ -825,7 +892,12 @@ class PagoBase(models.Model):
     """
     Modelo abstracto para reutilizar la lógica de pagos a deudas.
     """
-    fecha = models.DateTimeField(auto_now_add=True)
+    # Fecha del abono: editable para poder corregir registros desde el admin.
+    # Por defecto toma el momento del registro (antes era auto_now_add, inmutable).
+    fecha = models.DateTimeField(
+        default=timezone.now,
+        help_text="Fecha y hora del abono. Se puede corregir en el admin si se registró mal."
+    )
     # Cuánto de la deuda en moneda principal (ej. USD) se está cancelando con este abono
     monto_abono_principal = models.DecimalField(max_digits=15, decimal_places=2)
     # Cuánto entregó físicamente en moneda secundaria (ej. BS), si aplica
@@ -1139,12 +1211,13 @@ class RutaMercado(models.Model):
                     continue  # Ya fue creada
 
                 cxc = CuentaPorCobrar.objects.create(
-                    venta=None,  # Deuda sin venta asociada (como deuda_inicial)
+                    venta=None,  # Crédito de ruta: deuda sin venta asociada
+                    es_deuda_inicial=False,  # NO es deuda inicial, es crédito de ruta
                     cliente=credito.cliente,
                     monto_total=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
                     saldo_pendiente=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
                     estado='PENDIENTE',
-                    fecha_vencimiento=timezone.localdate(),
+                    fecha_creacion=timezone.localdate(),
                 )
                 credito.cuenta_cobrar = cxc
                 credito.save()
@@ -1485,7 +1558,11 @@ class ReciboAbono(models.Model):
     """
     cliente = models.ForeignKey(Cliente, on_delete=models.RESTRICT, related_name='recibos')
     usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, help_text="Cajero que recibió el pago")
-    fecha = models.DateTimeField(auto_now_add=True)
+    # Fecha del recibo: editable para poder corregir registros desde el admin.
+    fecha = models.DateTimeField(
+        default=timezone.now,
+        help_text="Fecha y hora del recibo. Se puede corregir en el admin si se registró mal."
+    )
     
     monto_total_entregado = models.DecimalField(max_digits=15, decimal_places=2)
     desglose_metodos = models.JSONField(default=list, help_text="Lista de métodos usados en este recibo")

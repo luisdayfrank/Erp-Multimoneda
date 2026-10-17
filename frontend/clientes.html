@@ -235,8 +235,8 @@
                         <div class="col-md-6">
                             <label class="form-label fw-bold text-muted"><i class="bi bi-currency-exchange me-1"></i> Tasa de Cambio (Bs/$)</label>
                             <div class="input-group">
-                                <input type="number" class="form-control" id="abono-tasa-cambio" step="0.01" value="0.00" onchange="evaluarEstadoAbono()">
-                                <button class="btn btn-outline-secondary" type="button" onclick="cargarMetodosPagoYConfig(); evaluarEstadoAbono();" title="Recargar tasa actual">
+                                <input type="number" class="form-control" id="abono-tasa-cambio" step="0.01" value="0.00" oninput="evaluarEstadoAbono()">
+                                <button class="btn btn-outline-secondary" type="button" onclick="recargarTasaAbono()" title="Recargar tasa actual">
                                     <i class="bi bi-arrow-clockwise"></i>
                                 </button>
                             </div>
@@ -274,6 +274,8 @@
                         </div>
                         <div class="col-6 text-end">
                             <h3 class="text-warning fw-bold mb-0" id="abono-restante-usd">$ 0.00</h3>
+                            <!-- >>> NUEVO: equivalente BS del restante / sobrante <<< -->
+                            <small class="text-white-50 d-block" id="abono-restante-bs" style="display: none;"></small>
                         </div>
                     </div>
                 </div>
@@ -290,7 +292,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js"></script>
     <script src="assets/js/menu.js"></script>
-    <script src="assets/js/clientes.js?v=3.0"></script>
+    <script src="assets/js/clientes.js?v=4.0"></script>
 
 </body>
 </html>

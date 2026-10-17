@@ -566,8 +566,11 @@ function agregarLineaPagoAbono() {
                 ${optionsHTML}
             </select>
         </div>
-        <div class="col-5">
-            <input type="number" class="form-control form-control-sm monto-abono-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoAbono()">
+        <div class="col-3">
+            <input type="number" class="form-control form-control-sm monto-abono-input" placeholder="Monto" step="0.01" value="" onclick="this.select()" oninput="evaluarEstadoAbono(); actualizarEquivalenteAbono(this.closest('.linea-pago-abono'));">
+        </div>
+        <div class="col-2 text-center">
+            <small class="text-muted equiv-abono-display" style="display: none; font-size: 0.75em; white-space: nowrap;"></small>
         </div>
         <div class="col-2">
             <button class="btn btn-sm btn-outline-danger w-100" onclick="this.closest('.linea-pago-abono').remove(); evaluarEstadoAbono();">X</button>
@@ -576,6 +579,38 @@ function agregarLineaPagoAbono() {
     cont.appendChild(div);
 
     evaluarEstadoAbono();
+}
+
+// ==============================================================================
+// EQUIVALENCIA EN VIVO DE CADA LÍNEA DE PAGO (USD <-> BS)
+// ==============================================================================
+function actualizarEquivalenteAbono(fila) {
+    if (!fila) return;
+    const select = fila.querySelector('.metodo-abono-select');
+    const inputMonto = fila.querySelector('.monto-abono-input');
+    const display = fila.querySelector('.equiv-abono-display');
+    if (!select || !inputMonto || !display) return;
+
+    const opcion = select.options[select.selectedIndex];
+    const moneda = opcion ? (opcion.getAttribute('data-moneda') || 'PRINCIPAL') : 'PRINCIPAL';
+    const monto = parseFloat(inputMonto.value) || 0;
+    const inputTasa = document.getElementById('abono-tasa-cambio');
+    const tasa = inputTasa ? (parseFloat(inputTasa.value) || 0) : 0;
+
+    if (monto <= 0 || tasa <= 0) {
+        display.style.display = 'none';
+        display.textContent = '';
+        return;
+    }
+
+    if (moneda === 'SECUNDARIA') {
+        const usd = monto / tasa;
+        display.textContent = '\u2248 $ ' + usd.toFixed(2);
+    } else {
+        const bs = monto * tasa;
+        display.textContent = '\u2248 BS ' + bs.toFixed(2);
+    }
+    display.style.display = 'inline';
 }
 
 function alCambiarMetodoAbono(selectElement) {
@@ -641,6 +676,7 @@ function alCambiarMetodoAbono(selectElement) {
 
     selectElement.setAttribute('data-prev-moneda', nuevaMoneda);
     evaluarEstadoAbono();
+    actualizarEquivalenteAbono(fila);
 }
 
 function evaluarEstadoAbono() {
@@ -661,12 +697,28 @@ function evaluarEstadoAbono() {
         } else {
             sumaUSD += monto;
         }
+
+        // Equivalencia en vivo de cada línea (USD <-> BS)
+        actualizarEquivalenteAbono(fila);
     });
 
     const restante = deudaTotal - sumaUSD;
     const restanteEl = document.getElementById('abono-restante-usd');
+    const restanteBsEl = document.getElementById('abono-restante-bs');
     const btnConfirmar = document.getElementById('btn-confirmar-abono');
     const alertaSobrante = document.getElementById('abono-alerta-sobrante');
+
+    // >>> NUEVO: equivalente BS del restante (o del sobrante) <<<
+    if (restanteBsEl) {
+        if (tasa > 0 && Math.abs(restante) > 0.01) {
+            const esSobrante = restante < -0.01;
+            const etiqueta = esSobrante ? 'Sobrante \u2248 BS ' : '\u2248 BS ';
+            restanteBsEl.textContent = etiqueta + (Math.abs(restante) * tasa).toFixed(2);
+            restanteBsEl.style.display = 'block';
+        } else {
+            restanteBsEl.style.display = 'none';
+        }
+    }
 
     if (sumaUSD <= 0) {
         restanteEl.innerText = '$ ' + deudaTotal.toFixed(2);
@@ -693,6 +745,14 @@ function evaluarEstadoAbono() {
         btnConfirmar.disabled = false;
         alertaSobrante.classList.add('d-none');
     }
+}
+
+async function recargarTasaAbono() {
+    // Recarga la tasa desde el servidor y la escribe en el input del modal
+    await cargarMetodosPagoYConfig();
+    const inputTasa = document.getElementById('abono-tasa-cambio');
+    if (inputTasa) inputTasa.value = tasaCambioActual.toFixed(2);
+    evaluarEstadoAbono();
 }
 
 async function procesarAbono() {

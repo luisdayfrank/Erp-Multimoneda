@@ -1,24 +1,24 @@
-# An·lisis del "CorazÛn" del ERP y Propuesta Integral de Cierre de Caja + Reportes
+# An√°lisis del "Coraz√≥n" del ERP y Propuesta Integral de Cierre de Caja + Reportes
 
-He revisado a fondo `models.py`, `api.py`, `admin.py`, `serializers.py` y el `pos.js`. AquÌ te doy el diagnÛstico, la arquitectura del problema y una propuesta concreta, dividida por fases.
+He revisado a fondo `models.py`, `api.py`, `admin.py`, `serializers.py` y el `pos.js`. Aqu√≠ te doy el diagn√≥stico, la arquitectura del problema y una propuesta concreta, dividida por fases.
 
 ---
 
-## 1. DiagnÛstico: el "corazÛn" del sistema
+## 1. Diagn√≥stico: el "coraz√≥n" del sistema
 
-Tu ERP es un **POS bimonetario con crÈdito (CxC) y control de inventario**. El n˙cleo del negocio es:
+Tu ERP es un **POS bimonetario con cr√©dito (CxC) y control de inventario**. El n√∫cleo del negocio es:
 
 ```
-Producto ? PresentaciÛn ? Inventario
+Producto ? Presentaci√≥n ? Inventario
                 ?
-         Venta (contado/crÈdito) ? Pago (mÈtodo ◊ moneda) ? CxC o cierre
+         Venta (contado/cr√©dito) ? Pago (m√©todo √ó moneda) ? CxC o cierre
                 ?
          Cliente ? Abonos ? Recibos ? CxC actualizada
 ```
 
-Y la **caja** (`SesionCaja`) es el punto donde todo se materializa en dinero fÌsico y electrÛnico. **AhÌ est· el problema principal.**
+Y la **caja** (`SesionCaja`) es el punto donde todo se materializa en dinero f√≠sico y electr√≥nico. **Ah√≠ est√° el problema principal.**
 
-### 1.1 CÛmo calcula el cierre HOY (`SesionCaja`)
+### 1.1 C√≥mo calcula el cierre HOY (`SesionCaja`)
 
 ```python
 @property
@@ -36,38 +36,38 @@ Esto tiene **fallas graves**:
 
 | # | Falla | Impacto real |
 |---|-------|--------------|
-| 1 | Solo cuadra la **moneda principal** (USD). Ignora los bolÌvares. | Si el cajero tiene 15.000 BS y 50 USD, el reporte dice "cuadre perfecto" aunque le falten 2.000 BS. |
-| 2 | Suma **todas** las ventas (contado + crÈdito). | Una venta a crÈdito **NO entra a la gaveta**, pero el sistema la cuenta como ingreso esperado. El cierre va a dar "faltante" falsamente. |
-| 3 | No desglosa por **mÈtodo de pago**. | Pago MÛvil, Zelle, Punto de Venta: ese dinero no est· fÌsicamente en la gaveta, pero no se separa para cuadrar con bancos. |
+| 1 | Solo cuadra la **moneda principal** (USD). Ignora los bol√≠vares. | Si el cajero tiene 15.000 BS y 50 USD, el reporte dice "cuadre perfecto" aunque le falten 2.000 BS. |
+| 2 | Suma **todas** las ventas (contado + cr√©dito). | Una venta a cr√©dito **NO entra a la gaveta**, pero el sistema la cuenta como ingreso esperado. El cierre va a dar "faltante" falsamente. |
+| 3 | No desglosa por **m√©todo de pago**. | Pago M√≥vil, Zelle, Punto de Venta: ese dinero no est√° f√≠sicamente en la gaveta, pero no se separa para cuadrar con bancos. |
 | 4 | Los **abonos a CxC viejas** no suman al esperado. | Un cliente llega a pagar su deuda: entra efectivo que el sistema no reconoce como "esperado en gaveta". |
-| 5 | Los **abonos masivos** (`RegistrarAbonoMasivoAPIView`) no est·n vinculados a la sesiÛn. | Ese dinero no aparece en ning˙n cierre. |
+| 5 | Los **abonos masivos** (`RegistrarAbonoMasivoAPIView`) no est√°n vinculados a la sesi√≥n. | Ese dinero no aparece en ning√∫n cierre. |
 | 6 | Los **recibos** (`ReciboAbono`) no tienen `sesion_caja`. | Imposible reconstruir la historia del turno. |
-| 7 | No hay **vuelto registrado**. | Si cliente paga $20 por algo de $18.50, no se registra el $1.50 que saliÛ. |
-| 8 | No hay **cuadre cambiario**. | Si la tasa cambiÛ durante el turno, las ventas en BS se valorizaron a tasa histÛrica, pero el cajero cerrÛ a tasa del cierre. Diferencia invisible. |
-| 9 | Usa `sum()` en Python (N+1). | Con miles de ventas se vuelve lento y adem·s se trae todos los objetos a memoria. |
-| 10 | `reporte_cierre_principal` y `reporte_cierre_secundaria` se capturan pero **no se comparan entre sÌ ni contra el desglose por mÈtodo**. | Solo hay "un n˙mero declarado" sin saber de dÛnde saliÛ. |
+| 7 | No hay **vuelto registrado**. | Si cliente paga $20 por algo de $18.50, no se registra el $1.50 que sali√≥. |
+| 8 | No hay **cuadre cambiario**. | Si la tasa cambi√≥ durante el turno, las ventas en BS se valorizaron a tasa hist√≥rica, pero el cajero cerr√≥ a tasa del cierre. Diferencia invisible. |
+| 9 | Usa `sum()` en Python (N+1). | Con miles de ventas se vuelve lento y adem√°s se trae todos los objetos a memoria. |
+| 10 | `reporte_cierre_principal` y `reporte_cierre_secundaria` se capturan pero **no se comparan entre s√≠ ni contra el desglose por m√©todo**. | Solo hay "un n√∫mero declarado" sin saber de d√≥nde sali√≥. |
 
-**ConclusiÛn: el cierre actual es un "conteo bruto de USD", no un cierre de caja real.**
+**Conclusi√≥n: el cierre actual es un "conteo bruto de USD", no un cierre de caja real.**
 
 ---
 
-## 2. Lo que deberÌa ser un cierre de caja profesional
+## 2. Lo que deber√≠a ser un cierre de caja profesional
 
-Un cierre de caja real responde a **cuatro preguntas por moneda y por mÈtodo**:
+Un cierre de caja real responde a **cuatro preguntas por moneda y por m√©todo**:
 
 ```
-Para cada mÈtodo (Efectivo USD, Efectivo BS, Pago MÛvil, Punto de Venta, Zelle, Transferencia):
-  øCu·nto DEBÕ tener?      ? esperado
-  øCu·nto TENGO?           ? declarado (arqueo fÌsico)
-  øCu·l es la diferencia?  ? descuadre
+Para cada m√©todo (Efectivo USD, Efectivo BS, Pago M√≥vil, Punto de Venta, Zelle, Transferencia):
+  ¬øCu√°nto DEB√ç tener?      ? esperado
+  ¬øCu√°nto TENGO?           ? declarado (arqueo f√≠sico)
+  ¬øCu√°l es la diferencia?  ? descuadre
 ```
 
 Y luego, **arriba de eso**:
 
 ```
-Total facturado del turno     = contado + crÈdito
-Total cobrado del turno       = pagos de ventas + abonos CxC (todos los mÈtodos)
-Total a crÈdito del turno     = CxC nuevas generadas
+Total facturado del turno     = contado + cr√©dito
+Total cobrado del turno       = pagos de ventas + abonos CxC (todos los m√©todos)
+Total a cr√©dito del turno     = CxC nuevas generadas
 Caja final esperada           = fondo inicial + cobrado en efectivo - egresos efectivo - vueltos
 ```
 
@@ -76,12 +76,12 @@ Caja final esperada           = fondo inicial + cobrado en efectivo - egresos ef
 ```
 ENTRADAS a la caja del turno
 +-- Fondo inicial
-¶   +-- USD
-¶   +-- BS
-+-- Ventas CONTADO del turno (por mÈtodo)
-+-- Abonos iniciales de ventas CR…DITO (por mÈtodo)
-+-- Abonos a CxC viejas recibidos en el turno (por mÈtodo)
-+-- Abonos masivos recibidos en el turno (por mÈtodo)
+¬¶   +-- USD
+¬¶   +-- BS
++-- Ventas CONTADO del turno (por m√©todo)
++-- Abonos iniciales de ventas CR√âDITO (por m√©todo)
++-- Abonos a CxC viejas recibidos en el turno (por m√©todo)
++-- Abonos masivos recibidos en el turno (por m√©todo)
 +-- (posible futuro: otros ingresos)
 
 SALIDAS de la caja del turno
@@ -89,21 +89,21 @@ SALIDAS de la caja del turno
 +-- Vueltos entregados (diferencia a favor del cliente)
 +-- (posible futuro: retiros, devoluciones)
 
-NO afectan caja fÌsica pero SÕ son parte del turno
-+-- Pagos con Pago MÛvil / Punto / Zelle (van al banco)
-+-- Ventas a crÈdito sin abono (van a CxC)
+NO afectan caja f√≠sica pero S√ç son parte del turno
++-- Pagos con Pago M√≥vil / Punto / Zelle (van al banco)
++-- Ventas a cr√©dito sin abono (van a CxC)
 +-- CxC nuevas generadas (cuentas por cobrar del turno)
 ```
 
-**Hoy el sistema solo modela el primer nivel (`fondo + ventas - egresos`), en USD.** Todo lo dem·s se pierde.
+**Hoy el sistema solo modela el primer nivel (`fondo + ventas - egresos`), en USD.** Todo lo dem√°s se pierde.
 
 ---
 
-## 3. Propuesta tÈcnica: modelos
+## 3. Propuesta t√©cnica: modelos
 
-### 3.1 Cambios mÌnimos que desbloquean todo
+### 3.1 Cambios m√≠nimos que desbloquean todo
 
-**A) Vincular abonos y recibos a la sesiÛn de caja**
+**A) Vincular abonos y recibos a la sesi√≥n de caja**
 
 ```python
 # models.py
@@ -112,7 +112,7 @@ class PagoCuentaCobrar(PagoBase):
     sesion_caja = models.ForeignKey(
         SesionCaja, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='abonos_cxc',
-        help_text="SesiÛn en la que se recibiÛ este abono (null si fue por admin/offline)"
+        help_text="Sesi√≥n en la que se recibi√≥ este abono (null si fue por admin/offline)"
     )
 
 class ReciboAbono(models.Model):
@@ -123,9 +123,9 @@ class ReciboAbono(models.Model):
     )
 ```
 
-En `Venta.procesar_venta`, `RegistrarAbonoMasivoAPIView` y `RegistrarAbonoCxCAPIView`, **pasar `sesion_caja=self.sesion_caja`** (o buscar la activa del usuario). En el admin, si no hay sesiÛn, dejar `null` (y el cierre lo marca como "offline, no suma al arqueo del turno").
+En `Venta.procesar_venta`, `RegistrarAbonoMasivoAPIView` y `RegistrarAbonoCxCAPIView`, **pasar `sesion_caja=self.sesion_caja`** (o buscar la activa del usuario). En el admin, si no hay sesi√≥n, dejar `null` (y el cierre lo marca como "offline, no suma al arqueo del turno").
 
-**B) Registrar el vuelto como dato explÌcito**
+**B) Registrar el vuelto como dato expl√≠cito**
 
 ```python
 class Venta(TransaccionBase):
@@ -134,23 +134,23 @@ class Venta(TransaccionBase):
     # Se calcula al cobrar: max(0, pagos - total). No se guarda como PagoVenta
 ```
 
-Esto te permite saber cu·nto saliÛ de la gaveta en "cambio".
+Esto te permite saber cu√°nto sali√≥ de la gaveta en "cambio".
 
 **C) Nuevos modelos de cierre**
 
 ```python
 class CierreCaja(models.Model):
-    """Foto inmutable del cierre de una sesiÛn."""
+    """Foto inmutable del cierre de una sesi√≥n."""
     sesion = models.OneToOneField(SesionCaja, on_delete=models.CASCADE, related_name='cierre')
     fecha_cierre = models.DateTimeField(auto_now_add=True)
     usuario_cierre = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
 
-    # Totales del turno (en USD, valorizados a tasa histÛrica de cada venta)
+    # Totales del turno (en USD, valorizados a tasa hist√≥rica de cada venta)
     total_facturado_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     total_cobrado_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     total_credito_generado_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
-    # Caja fÌsica
+    # Caja f√≠sica
     fondo_inicial_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     fondo_inicial_bs  = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     efectivo_esperado_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
@@ -165,24 +165,24 @@ class CierreCaja(models.Model):
     tasa_cierre   = models.DecimalField(max_digits=15, decimal_places=2)
     diferencia_cambiaria_estimada_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
-    # Snapshot completo (por si en el futuro querÈs reconstruir el reporte sin recalcular)
+    # Snapshot completo (por si en el futuro quer√©s reconstruir el reporte sin recalcular)
     snapshot_json = models.JSONField(default=dict)
 
     observacion = models.TextField(blank=True)
-    firma_cajero = models.CharField(max_length=100, blank=True)  # opcional, para impresiÛn
+    firma_cajero = models.CharField(max_length=100, blank=True)  # opcional, para impresi√≥n
 
 
 class CierrePorMetodoPago(models.Model):
-    """Una fila por cada mÈtodo de pago usado (o esperado) en el turno."""
+    """Una fila por cada m√©todo de pago usado (o esperado) en el turno."""
     cierre = models.ForeignKey(CierreCaja, on_delete=models.CASCADE, related_name='por_metodo')
     metodo = models.ForeignKey(MetodoPago, on_delete=models.RESTRICT)
     moneda = models.CharField(max_length=15)  # 'PRINCIPAL' o 'SECUNDARIA'
 
-    # Cu·nto debÌ recibir por este mÈtodo (efectivo + electrÛnico)
+    # Cu√°nto deb√≠ recibir por este m√©todo (efectivo + electr√≥nico)
     esperado_en_moneda   = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     esperado_equivalente_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
-    # Cu·nto declarÛ el cajero (solo tiene sentido para efectivo, pero se guarda para todos)
+    # Cu√°nto declar√≥ el cajero (solo tiene sentido para efectivo, pero se guarda para todos)
     declarado_en_moneda  = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     declarado_equivalente_usd = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
@@ -192,46 +192,46 @@ class CierrePorMetodoPago(models.Model):
     observacion = models.CharField(max_length=250, blank=True)
 ```
 
-### 3.2 Por quÈ estos modelos y no propiedades
+### 3.2 Por qu√© estos modelos y no propiedades
 
-- **`CierreCaja` es inmutable** (snapshot). Cambiar `SesionCaja` no debe alterar un cierre histÛrico.
-- **`CierrePorMetodoPago`** permite comparar "efectivo USD" contra "Pago MÛvil" por separado. Si el cajero declara de menos en USD pero de m·s en Pago MÛvil, lo ves.
-- **`snapshot_json`** te guarda el detalle completo (lista de ventas, abonos, egresos) para reconstruir el reporte sin recalcular. Es tu auditorÌa forense.
+- **`CierreCaja` es inmutable** (snapshot). Cambiar `SesionCaja` no debe alterar un cierre hist√≥rico.
+- **`CierrePorMetodoPago`** permite comparar "efectivo USD" contra "Pago M√≥vil" por separado. Si el cajero declara de menos en USD pero de m√°s en Pago M√≥vil, lo ves.
+- **`snapshot_json`** te guarda el detalle completo (lista de ventas, abonos, egresos) para reconstruir el reporte sin recalcular. Es tu auditor√≠a forense.
 
 ---
 
-## 4. Las fÛrmulas correctas (esto es lo m·s importante)
+## 4. Las f√≥rmulas correctas (esto es lo m√°s importante)
 
-### 4.1 C·lculo del "esperado" por mÈtodo
+### 4.1 C√°lculo del "esperado" por m√©todo
 
 ```python
 def calcular_esperado_por_metodo(sesion):
     """Recorre TODAS las fuentes de dinero del turno."""
     esperado = defaultdict(lambda: Decimal('0.00'))  # (metodo_id, moneda) -> monto
 
-    # 1. Pagos de ventas del turno (contado y crÈdito con abono inicial)
+    # 1. Pagos de ventas del turno (contado y cr√©dito con abono inicial)
     for pago in PagoVenta.objects.filter(venta__sesion_caja=sesion,
                                          venta__estado='PROCESADA'):
         key = (pago.metodo_id, pago.metodo.moneda_referencia)
         esperado[key] += pago.monto_pagado
 
     # 2. Abonos a CxC recibidos en el turno
-    #    (incluye los que generÛ `procesar_venta` por FIFO a facturas viejas)
+    #    (incluye los que gener√≥ `procesar_venta` por FIFO a facturas viejas)
     for abono in PagoCuentaCobrar.objects.filter(sesion_caja=sesion):
         # Abono puede no tener metodo (si fue "saldo a favor") ? lo excluimos
         if abono.referencia and 'saldo a favor' in abono.referencia.lower():
             continue
         # Los abonos no tienen FK a metodo en tu modelo; hay que agregarla
-        # o inferirlo del `referencia`. ? Ver "DecisiÛn de diseÒo" abajo
+        # o inferirlo del `referencia`. ? Ver "Decisi√≥n de dise√±o" abajo
         key = (abono.metodo_id, abono.metodo.moneda_referencia)
         esperado[key] += abono.monto_pagado  # o monto_entregado_secundaria si aplica
 
     return esperado
 ```
 
-> **DecisiÛn de diseÒo importante:** hoy `PagoCuentaCobrar` no tiene `metodo_pago`, solo `referencia` (texto). Para cuadrar por mÈtodo necesit·s **agregar `metodo` a `PagoCuentaCobrar` y `PagoCuentaPagar`**. Es un `null=True` para no romper histÛricos.
+> **Decisi√≥n de dise√±o importante:** hoy `PagoCuentaCobrar` no tiene `metodo_pago`, solo `referencia` (texto). Para cuadrar por m√©todo necesit√°s **agregar `metodo` a `PagoCuentaCobrar` y `PagoCuentaPagar`**. Es un `null=True` para no romper hist√≥ricos.
 
-### 4.2 C·lculo del efectivo esperado en gaveta
+### 4.2 C√°lculo del efectivo esperado en gaveta
 
 ```python
 def calcular_efectivo_esperado(sesion, cierre_por_metodo):
@@ -258,18 +258,18 @@ def calcular_efectivo_esperado(sesion, cierre_por_metodo):
     return efectivo_usd_esperado, efectivo_bs_esperado
 ```
 
-**Nota:** necesit·s agregar `es_efectivo` a `MetodoPago`:
+**Nota:** necesit√°s agregar `es_efectivo` a `MetodoPago`:
 
 ```python
 class MetodoPago(models.Model):
     ...
     es_efectivo = models.BooleanField(
         default=False,
-        help_text="True solo para Efectivo USD y Efectivo BS. Los electrÛnicos van al banco."
+        help_text="True solo para Efectivo USD y Efectivo BS. Los electr√≥nicos van al banco."
     )
 ```
 
-### 4.3 C·lculo del descuadre (moneda principal Y secundaria)
+### 4.3 C√°lculo del descuadre (moneda principal Y secundaria)
 
 ```python
 descuadre_usd = declarado_usd - efectivo_usd_esperado
@@ -279,17 +279,17 @@ descuadre_bs  = declarado_bs  - efectivo_bs_esperado
 descuadre_total_usd = descuadre_usd + (descuadre_bs / tasa_cierre)
 ```
 
-**Esto es lo que tu reporte debe mostrar.** Un solo n˙mero (descuadre_usd) es engaÒoso.
+**Esto es lo que tu reporte debe mostrar.** Un solo n√∫mero (descuadre_usd) es enga√±oso.
 
 ### 4.4 Diferencia cambiaria (opcional pero valiosa)
 
 ```python
-# Ventas cobradas en BS durante el turno, valorizadas a tasa histÛrica
+# Ventas cobradas en BS durante el turno, valorizadas a tasa hist√≥rica
 ventas_bs_a_tasa_historica_usd = sum(v.total_principal for v in ventas_bs)
 # Ese mismo monto en BS, valorizado a tasa de cierre
 ventas_bs_a_tasa_cierre_usd = sum(v.total_secundaria for v in ventas_bs) / tasa_cierre
 
-# Si tasa subiÛ, tus BS "valen menos" al cierre que al momento de la venta
+# Si tasa subi√≥, tus BS "valen menos" al cierre que al momento de la venta
 diferencia_cambiaria = ventas_bs_a_tasa_cierre_usd - ventas_bs_a_tasa_historica_usd
 ```
 
@@ -301,39 +301,39 @@ Esto explica **diferencias que no son faltantes reales**.
 
 ```
 ----------------------------------------
-   CIERRE DE CAJA ó TURNO #123
+   CIERRE DE CAJA ¬ó TURNO #123
    Valles del Pollo
 ----------------------------------------
-Cajero:        Juan PÈrez (CAJERO)
+Cajero:        Juan P√©rez (CAJERO)
 Apertura:      20/10/2026 08:00
 Cierre:        20/10/2026 17:30
-DuraciÛn:      9h 30m
+Duraci√≥n:      9h 30m
 Tasa apertura: 742.00 BS/USD
 Tasa cierre:   745.50 BS/USD
 
 -- RESUMEN DE VENTAS ------------------
 Total facturado:           $ 1,250.00
   +- Contado:              $   980.00
-  +- CrÈdito:              $   270.00
+  +- Cr√©dito:              $   270.00
 Total cobrado (real):      $ 1,120.00
-CrÈdito nuevo generado:    $   130.00
-N∞ facturas:               45
+Cr√©dito nuevo generado:    $   130.00
+N¬∞ facturas:               45
 Ticket promedio:           $    27.78
 
 -- ABONOS A CUENTAS VIEJAS ------------
 Total abonos CxC:          $   150.00
-N∞ de abonos:              8
+N¬∞ de abonos:              8
 
--- DESGLOSE POR M…TODO ----------------
-M…TODO              ESPERADO   DECLARADO   DIFERENCIA
+-- DESGLOSE POR M√âTODO ----------------
+M√âTODO              ESPERADO   DECLARADO   DIFERENCIA
 Efectivo USD        $ 800.00   $ 795.00    -$ 5.00 ?
 Efectivo BS        BS 45,000  BS 44,800  -BS 200 ?
-Pago MÛvil BS      BS 30,000       N/A      (banco)
+Pago M√≥vil BS      BS 30,000       N/A      (banco)
 Punto de Venta BS  BS 12,000       N/A      (banco)
 Zelle USD           $ 200.00       N/A      (banco)
 Transferencia USD   $  50.00       N/A      (banco)
 
--- CAJA FÕSICA ------------------------
+-- CAJA F√çSICA ------------------------
 Fondo inicial USD:         $   100.00
 (+) Cobros efectivo USD:   $   800.00
 (-) Egresos efectivo USD:  $    50.00
@@ -351,23 +351,23 @@ Fondo inicial BS:          BS 5,000
 = DESCUADRE BS:            -BS   200 ? FALTANTE
 
 -- EGRESOS DE CAJA --------------------
-10/10 08:30  BotellÛn agua       -$ 5.00
+10/10 08:30  Botell√≥n agua       -$ 5.00
 10/10 14:00  Pasajes             -$ 20.00
 10/10 16:00  Compra emergencia   -$ 25.00
 TOTAL EGRESOS:                   -$ 50.00
 
--- CR…DITOS OTORGADOS -----------------
+-- CR√âDITOS OTORGADOS -----------------
 Fact. #101  Cliente A  $  50.00
 Fact. #108  Cliente B  $  80.00
 TOTAL CxC NUEVAS:      $ 130.00
 
 -- DIFERENCIA CAMBIARIA ---------------
-Tasa variÛ +0.47% durante el turno
-Impacto estimado: -$ 2.30 (pÈrdida)
+Tasa vari√≥ +0.47% durante el turno
+Impacto estimado: -$ 2.30 (p√©rdida)
 
 -- ESTADO FINAL -----------------------
 DESCUADRE CONSOLIDADO USD: -$ 5.27 ?
-ESTADO: REQUIERE REVISI”N
+ESTADO: REQUIERE REVISI√ìN
 Firma cajero: ___________________
 Firma supervisor: _______________
 ----------------------------------------
@@ -379,18 +379,18 @@ Firma supervisor: _______________
 
 ## 6. Arquitectura de API propuesta
 
-### 6.1 Cierre (el n˙cleo)
+### 6.1 Cierre (el n√∫cleo)
 
 ```
-GET  /api/v1/caja/cierre/preview/          ? devuelve TODOS los c·lculos antes de cerrar
+GET  /api/v1/caja/cierre/preview/          ? devuelve TODOS los c√°lculos antes de cerrar
 POST /api/v1/caja/cierre/                  ? cierra y crea CierreCaja + CierrePorMetodoPago
-GET  /api/v1/caja/cierre/<id>/             ? detalle completo de un cierre histÛrico
+GET  /api/v1/caja/cierre/<id>/             ? detalle completo de un cierre hist√≥rico
 GET  /api/v1/caja/cierres/                 ? lista con filtros (rango, cajero, estado)
-POST /api/v1/caja/cierre/<id>/reimprimir/  ? reimpresiÛn del ticket Z
+POST /api/v1/caja/cierre/<id>/reimprimir/  ? reimpresi√≥n del ticket Z
 GET  /api/v1/caja/cierre/<id>/informe-pdf/ ? PDF formal
 ```
 
-**`/cierre/preview/` es clave:** el frontend llama esto y muestra el desglose por mÈtodo. El cajero ingresa los declarados y confirma. **No se cierra a ciegas.**
+**`/cierre/preview/` es clave:** el frontend llama esto y muestra el desglose por m√©todo. El cajero ingresa los declarados y confirma. **No se cierra a ciegas.**
 
 ### 6.2 Reportes operativos (segunda prioridad)
 
@@ -408,74 +408,74 @@ GET /api/v1/reportes/abonos-por-usuario/
 GET /api/v1/reportes/rutas/cierres/
 ```
 
-### 6.3 Reportes estratÈgicos (tercera prioridad)
+### 6.3 Reportes estrat√©gicos (tercera prioridad)
 
 ```
 GET /api/v1/reportes/flujo-caja/?periodo=dia|semana|mes
-GET /api/v1/reportes/pyG/?desde=&hasta=          ? estado de resultados b·sico
+GET /api/v1/reportes/pyG/?desde=&hasta=          ? estado de resultados b√°sico
 GET /api/v1/reportes/comparativo-mensual/
 GET /api/v1/reportes/proyeccion-cobranza/
 ```
 
 ---
 
-## 7. Plan de implementaciÛn por fases
+## 7. Plan de implementaci√≥n por fases
 
-### **FASE 1 ó Cierre de caja correcto (1-2 semanas)**
+### **FASE 1 ¬ó Cierre de caja correcto (1-2 semanas)**
 Objetivo: que el cierre sea confiable.
 
-1. `MetodoPago.es_efectivo` (migraciÛn + data migration: Efectivo USD/BS ? True).
+1. `MetodoPago.es_efectivo` (migraci√≥n + data migration: Efectivo USD/BS ? True).
 2. `PagoCuentaCobrar.metodo`, `PagoCuentaPagar.metodo`, `sesion_caja` (en ambos).
 3. `ReciboAbono.sesion_caja`.
 4. `Venta.vuelto_principal` y `vuelto_secundaria`.
 5. Modelos `CierreCaja` y `CierrePorMetodoPago`.
 6. Endpoint `GET /cierre/preview/` que:
    - Consolida ventas + abonos + egresos + vueltos.
-   - Devuelve **desglose por mÈtodo ◊ moneda**.
+   - Devuelve **desglose por m√©todo √ó moneda**.
    - Devuelve `efectivo_esperado_usd` y `efectivo_esperado_bs`.
 7. Endpoint `POST /cierre/` que crea los registros inmutables.
 8. Modificar el frontend del POS:
-   - Modal de cierre con **una fila por mÈtodo** (declarar cu·nto hay de cada uno).
+   - Modal de cierre con **una fila por m√©todo** (declarar cu√°nto hay de cada uno).
    - Al confirmar: `POST /cierre/` ? recibe cierre ? imprime ticket Z nuevo.
-9. Backfill: opcional, para cierres histÛricos, crear `CierreCaja` aproximado a partir de los datos actuales.
+9. Backfill: opcional, para cierres hist√≥ricos, crear `CierreCaja` aproximado a partir de los datos actuales.
 
-### **FASE 2 ó Reportes operativos (2-3 semanas)**
-1. `GET /reportes/ventas/` con agrupaciÛn por mÈtodo, dÌa, cajero, cliente.
-2. `GET /reportes/cxc/antiguedad/` (aging: 0-30, 31-60, 61-90, +90 dÌas).
+### **FASE 2 ¬ó Reportes operativos (2-3 semanas)**
+1. `GET /reportes/ventas/` con agrupaci√≥n por m√©todo, d√≠a, cajero, cliente.
+2. `GET /reportes/cxc/antiguedad/` (aging: 0-30, 31-60, 61-90, +90 d√≠as).
 3. `GET /reportes/rentabilidad/` (ingresos - costo de ventas).
-4. `GET /reportes/kardex/<producto>/` (histÛrico de movimientos del producto ó ya casi lo tenÈs en `ProductoDetalleHistorialAPIView`, solo falta formalizarlo).
-5. Frontend: nuevo mÛdulo "Informes" con filtros por rango de fechas y exportaciÛn a Excel/PDF.
+4. `GET /reportes/kardex/<producto>/` (hist√≥rico de movimientos del producto ¬ó ya casi lo ten√©s en `ProductoDetalleHistorialAPIView`, solo falta formalizarlo).
+5. Frontend: nuevo m√≥dulo "Informes" con filtros por rango de fechas y exportaci√≥n a Excel/PDF.
 
-### **FASE 3 ó Reportes estratÈgicos (2-3 semanas)**
+### **FASE 3 ¬ó Reportes estrat√©gicos (2-3 semanas)**
 1. Flujo de caja proyectado.
 2. P&G mensual.
 3. Comparativos y tendencias.
-4. Alertas autom·ticas (cliente moroso, stock crÌtico, cierre con descuadre).
+4. Alertas autom√°ticas (cliente moroso, stock cr√≠tico, cierre con descuadre).
 
 ---
 
 ## 8. Recomendaciones adicionales (fuera del cierre)
 
-DetectÈ otros problemas que, aunque no son "cierre", afectan la calidad de los informes:
+Detect√© otros problemas que, aunque no son "cierre", afectan la calidad de los informes:
 
-| ¡rea | Problema | RecomendaciÛn |
+| √Årea | Problema | Recomendaci√≥n |
 |------|----------|---------------|
 | **`SesionCaja.total_ventas_principal`** | Usa `sum()` en Python, N+1. | Cambiar a `self.ventas.filter(estado='PROCESADA').aggregate(t=Sum('total_principal'))['t'] or Decimal('0')`. |
 | **Abonos "saldo a favor"** | Se registran como `PagoCuentaCobrar` con `referencia` textual. | Agregar campo `origen_dinero` (EFECTIVO / SALDO_FAVOR / MIXTO) a `PagoCuentaCobrar`, igual que en `ReciboAbonoAplicacion`. |
-| **PÈrdida de ventas por `total_ventas_principal` (Python sum)** | Si una sesiÛn tiene 5.000 ventas, el c·lculo tarda segundos. | Õdem anterior. |
-| **Doble vÌa de creaciÛn de CxC** | `Venta.procesar_venta` y `Cliente.save` (`_sincronizar_deuda_inicial`) crean CxC. | Centralizar en un servicio `CxCService.crear_desde_*()` para que todas las rutas pasen por el mismo lugar y queden auditadas. |
-| **Recibos huÈrfanos** | `ReciboAbono` solo se crea en algunos flujos. | Unificar: **todo pago** (venta, abono masivo, abono directo, cobro de ruta) debe pasar por `ReciboAbono.crear_desde_abonos`. Ahora hay pagos sin recibo. |
-| **AuditorÌa** | No hay `created_by` ni `updated_by` en modelos crÌticos. | Agregar `created_by` a `CuentaPorCobrar`, `PagoCuentaCobrar`, `ReciboAbono`, `CierreCaja`. |
-| **Cierre bloqueado en `pos.js`** | Al cerrar, `window.location.href = 'index.html'`; no permite ver el cierre sin recargar. | DespuÈs del cierre, redirigir a `/informes/cierre/<id>/` para que el cajero vea el reporte. |
-| **Tasa diaria** | Est· bien el bloqueo, pero no se guarda `tasa_apertura` en la sesiÛn. | Agregar `tasa_apertura` y `tasa_cierre` a `SesionCaja` (o a `CierreCaja`). Lo necesit·s para el c·lculo cambiario. |
+| **P√©rdida de ventas por `total_ventas_principal` (Python sum)** | Si una sesi√≥n tiene 5.000 ventas, el c√°lculo tarda segundos. | √çdem anterior. |
+| **Doble v√≠a de creaci√≥n de CxC** | `Venta.procesar_venta` y `Cliente.save` (`_sincronizar_deuda_inicial`) crean CxC. | Centralizar en un servicio `CxCService.crear_desde_*()` para que todas las rutas pasen por el mismo lugar y queden auditadas. |
+| **Recibos hu√©rfanos** | `ReciboAbono` solo se crea en algunos flujos. | Unificar: **todo pago** (venta, abono masivo, abono directo, cobro de ruta) debe pasar por `ReciboAbono.crear_desde_abonos`. Ahora hay pagos sin recibo. |
+| **Auditor√≠a** | No hay `created_by` ni `updated_by` en modelos cr√≠ticos. | Agregar `created_by` a `CuentaPorCobrar`, `PagoCuentaCobrar`, `ReciboAbono`, `CierreCaja`. |
+| **Cierre bloqueado en `pos.js`** | Al cerrar, `window.location.href = 'index.html'`; no permite ver el cierre sin recargar. | Despu√©s del cierre, redirigir a `/informes/cierre/<id>/` para que el cajero vea el reporte. |
+| **Tasa diaria** | Est√° bien el bloqueo, pero no se guarda `tasa_apertura` en la sesi√≥n. | Agregar `tasa_apertura` y `tasa_cierre` a `SesionCaja` (o a `CierreCaja`). Lo necesit√°s para el c√°lculo cambiario. |
 | **Propina / redondeo** | No existe. Si el negocio lo usa, se pierde. | Agregar `Venta.propina_principal` y `Venta.redondeo_principal` (opcional). |
-| **`PagoVenta` no se reasocia a `PagoCuentaCobrar`** | Si una venta a crÈdito se paga con abono inicial, se crea `PagoVenta` **y** `PagoCuentaCobrar` ó doble conteo en `total_cobrado`. | Unificar: **solo `PagoVenta` para la venta**, y si hay abono inicial a la CxC, que sea el mismo registro o que `PagoCuentaCobrar` sea el ˙nico. Hoy **podÈs tener doble conteo**. Este es un bug real. |
+| **`PagoVenta` no se reasocia a `PagoCuentaCobrar`** | Si una venta a cr√©dito se paga con abono inicial, se crea `PagoVenta` **y** `PagoCuentaCobrar` ¬ó doble conteo en `total_cobrado`. | Unificar: **solo `PagoVenta` para la venta**, y si hay abono inicial a la CxC, que sea el mismo registro o que `PagoCuentaCobrar` sea el √∫nico. Hoy **pod√©s tener doble conteo**. Este es un bug real. |
 
-> ?? **El ˙ltimo punto es crÌtico:** en `Venta.procesar_venta`, cuando hay abono inicial, se crea:
+> ?? **El √∫ltimo punto es cr√≠tico:** en `Venta.procesar_venta`, cuando hay abono inicial, se crea:
 > 1. `PagoVenta` (por el serializer, en `pagos`)
 > 2. `PagoCuentaCobrar` (por `PASO 6: Registrar abono inicial`)
 >
-> Ambos representan **el mismo dinero**. Si los sum·s en un informe, **cont·s el dinero dos veces**. Hay que decidir cu·l es el canÛnico. Mi recomendaciÛn: **`PagoVenta` es la fuente de verdad para "cobrado en venta"; `PagoCuentaCobrar` solo para "cobrado despuÈs de la venta"**. Si querÈs mantener ambos por trazabilidad, agreg· un campo `PagoVenta.genera_pago_cxc = True/False` y excluÌ del cierre los `PagoCuentaCobrar` que tengan origen en la misma venta.
+> Ambos representan **el mismo dinero**. Si los sum√°s en un informe, **cont√°s el dinero dos veces**. Hay que decidir cu√°l es el can√≥nico. Mi recomendaci√≥n: **`PagoVenta` es la fuente de verdad para "cobrado en venta"; `PagoCuentaCobrar` solo para "cobrado despu√©s de la venta"**. Si quer√©s mantener ambos por trazabilidad, agreg√° un campo `PagoVenta.genera_pago_cxc = True/False` y exclu√≠ del cierre los `PagoCuentaCobrar` que tengan origen en la misma venta.
 
 ---
 
@@ -483,54 +483,54 @@ DetectÈ otros problemas que, aunque no son "cierre", afectan la calidad de los i
 
 **Tu cierre actual es un "conteo bruto de USD" que ignora el 60% del flujo de dinero del turno.**
 
-- No desglosa por mÈtodo de pago (Pago MÛvil, Punto, Zelle no se cuadran).
-- No cuadra bolÌvares (la moneda secundaria no se audita).
-- No incluye abonos a CxC viejas ni abonos masivos (dinero que entrÛ a la gaveta).
-- No separa ventas contado de crÈdito (infla el "esperado" con dinero que no est·).
-- No registra vueltos (el cambio que saliÛ de la gaveta).
-- No permite reimprimir ni auditar cierres histÛricos.
+- No desglosa por m√©todo de pago (Pago M√≥vil, Punto, Zelle no se cuadran).
+- No cuadra bol√≠vares (la moneda secundaria no se audita).
+- No incluye abonos a CxC viejas ni abonos masivos (dinero que entr√≥ a la gaveta).
+- No separa ventas contado de cr√©dito (infla el "esperado" con dinero que no est√°).
+- No registra vueltos (el cambio que sali√≥ de la gaveta).
+- No permite reimprimir ni auditar cierres hist√≥ricos.
 
 **La propuesta es:**
 
 1. **Dos modelos nuevos** (`CierreCaja` + `CierrePorMetodoPago`) inmutables.
-2. **Cuatro campos nuevos** (`es_efectivo` en mÈtodo, `sesion_caja` y `metodo` en pagos/recibos, `vuelto` en venta).
-3. **Un endpoint `/cierre/preview/`** que devuelva el desglose completo **por mÈtodo y por moneda**, para que el cajero declare con informaciÛn.
-4. **Un ticket Z rediseÒado** que muestre esperado vs declarado por cada mÈtodo, con descuadre USD y BS por separado, y diferencia cambiaria.
-5. **DespuÈs**, la capa de informes (ventas, aging, rentabilidad, kardex) se construye **sobre los mismos datos ya consolidados**.
+2. **Cuatro campos nuevos** (`es_efectivo` en m√©todo, `sesion_caja` y `metodo` en pagos/recibos, `vuelto` en venta).
+3. **Un endpoint `/cierre/preview/`** que devuelva el desglose completo **por m√©todo y por moneda**, para que el cajero declare con informaci√≥n.
+4. **Un ticket Z redise√±ado** que muestre esperado vs declarado por cada m√©todo, con descuadre USD y BS por separado, y diferencia cambiaria.
+5. **Despu√©s**, la capa de informes (ventas, aging, rentabilidad, kardex) se construye **sobre los mismos datos ya consolidados**.
 
-La inversiÛn en Fase 1 (1-2 semanas) te da visibilidad real y elimina la posibilidad de fugas silenciosas. Es lo primero que harÌa.
+La inversi√≥n en Fase 1 (1-2 semanas) te da visibilidad real y elimina la posibilidad de fugas silenciosas. Es lo primero que har√≠a.
 
 # Anexo de la Propuesta: Vuelto Configurable + Registro Diario de Tasas (BCV)
 
 ---
 
-## Anexo A ó Manejo configurable del vuelto
+## Anexo A ¬ó Manejo configurable del vuelto
 
-### A.1 MotivaciÛn
+### A.1 Motivaci√≥n
 
-En el flujo actual, cuando el cliente paga de m·s, el sistema **siempre** aplica el excedente autom·ticamente (FIFO a deudas viejas y luego a saldo a favor). El cajero no puede elegir. Esto genera tres problemas:
+En el flujo actual, cuando el cliente paga de m√°s, el sistema **siempre** aplica el excedente autom√°ticamente (FIFO a deudas viejas y luego a saldo a favor). El cajero no puede elegir. Esto genera tres problemas:
 
 1. **Rigidez operativa:** si el cliente quiere su cambio en la mano, no puede.
-2. **Descuadre contable:** el dinero "a favor" no se est· registrando como movimiento explÌcito del turno, se infiere.
-3. **Falta de trazabilidad:** no se sabe si el excedente se aplicÛ a deuda vieja, se dejÛ como saldo a favor o se le entregÛ al cliente.
+2. **Descuadre contable:** el dinero "a favor" no se est√° registrando como movimiento expl√≠cito del turno, se infiere.
+3. **Falta de trazabilidad:** no se sabe si el excedente se aplic√≥ a deuda vieja, se dej√≥ como saldo a favor o se le entreg√≥ al cliente.
 
-La propuesta es que **el cajero decida en el momento del cobro** cÛmo distribuir el vuelto, con cuatro destinos configurables por la empresa:
+La propuesta es que **el cajero decida en el momento del cobro** c√≥mo distribuir el vuelto, con cuatro destinos configurables por la empresa:
 
 | Destino | Efecto en caja | Efecto contable |
 |---|---|---|
 | **ENTREGAR** (efectivo) | Sale dinero de la gaveta | Nada (cierra el ciclo) |
 | **ABONAR CxC vieja** | No sale dinero | Genera `PagoCuentaCobrar` FIFO (baja deuda del cliente) |
 | **SALDO A FAVOR** | No sale dinero | Sube `cliente.saldo_a_favor` |
-| **MIXTO** | CombinaciÛn de las anteriores | CombinaciÛn |
+| **MIXTO** | Combinaci√≥n de las anteriores | Combinaci√≥n |
 
-Esto es un atajo UX valioso: en lugar de "entregar cambio ? el cliente lo devuelve como abono", se hace en una sola operaciÛn, sin que el dinero salga fÌsicamente de la gaveta.
+Esto es un atajo UX valioso: en lugar de "entregar cambio ? el cliente lo devuelve como abono", se hace en una sola operaci√≥n, sin que el dinero salga f√≠sicamente de la gaveta.
 
 ### A.2 Modelo
 
 Se agregan campos a `Venta` (no se necesita modelo nuevo):
 
 ```python
-# models.py ó dentro de class Venta(TransaccionBase)
+# models.py ¬ó dentro de class Venta(TransaccionBase)
 
 # --- Vuelto: monto total del excedente (pagos - total) ---
 vuelto_total_principal = models.DecimalField(
@@ -538,14 +538,14 @@ vuelto_total_principal = models.DecimalField(
     help_text="Excedente total (pagos - total_venta) en USD equivalente"
 )
 
-# --- DistribuciÛn (la suma en USD equivalente debe igualar vuelto_total) ---
+# --- Distribuci√≥n (la suma en USD equivalente debe igualar vuelto_total) ---
 vuelto_entregado_principal = models.DecimalField(
     max_digits=15, decimal_places=2, default=Decimal('0.00'),
-    help_text="Parte del vuelto entregada fÌsicamente en USD"
+    help_text="Parte del vuelto entregada f√≠sicamente en USD"
 )
 vuelto_entregado_secundaria = models.DecimalField(
     max_digits=15, decimal_places=2, default=Decimal('0.00'),
-    help_text="Parte del vuelto entregada fÌsicamente en BS"
+    help_text="Parte del vuelto entregada f√≠sicamente en BS"
 )
 vuelto_aplicado_cxc_principal = models.DecimalField(
     max_digits=15, decimal_places=2, default=Decimal('0.00'),
@@ -568,7 +568,7 @@ def vuelto_asignado_principal(self):
     )
 ```
 
-### A.3 Reglas de validaciÛn
+### A.3 Reglas de validaci√≥n
 
 Al procesar la venta:
 
@@ -576,18 +576,18 @@ Al procesar la venta:
 si vuelto_total <= 0:
     no hay nada que distribuir ? los 4 campos quedan en 0
 si vuelto_total > 0:
-    vuelto_asignado_principal == vuelto_total (tolerancia ±0.01)
+    vuelto_asignado_principal == vuelto_total (tolerancia ¬±0.01)
     si vuelto_asignado_principal < vuelto_total:
         el resto se aplica por defecto a CxC vieja (FIFO)
     si vuelto_asignado_principal > vuelto_total:
-        error de validaciÛn
+        error de validaci√≥n
 ```
 
-**Compatibilidad hacia atr·s:** si el payload NO envÌa distribuciÛn (`null` o todos en 0), el sistema usa el comportamiento actual (todo el excedente va a CxC vieja FIFO, y si no hay deudas viejas, a saldo a favor). Cero ruptura.
+**Compatibilidad hacia atr√°s:** si el payload NO env√≠a distribuci√≥n (`null` o todos en 0), el sistema usa el comportamiento actual (todo el excedente va a CxC vieja FIFO, y si no hay deudas viejas, a saldo a favor). Cero ruptura.
 
-### A.4 IntegraciÛn en `Venta.procesar_venta`
+### A.4 Integraci√≥n en `Venta.procesar_venta`
 
-Reemplaza la lÛgica de "PASO 1 / PASO 1.5 / PASO 1.6 / PASO 2 / PASO 3" con un flujo unificado:
+Reemplaza la l√≥gica de "PASO 1 / PASO 1.5 / PASO 1.6 / PASO 2 / PASO 3" con un flujo unificado:
 
 ```python
 def procesar_venta(self):
@@ -597,7 +597,7 @@ def procesar_venta(self):
     vuelto_total = max(Decimal('0.00'), total_pagado - self.total_principal)
     self.vuelto_total_principal = vuelto_total
 
-    # 2. Si el usuario no especificÛ distribuciÛn ? fallback al comportamiento actual
+    # 2. Si el usuario no especific√≥ distribuci√≥n ? fallback al comportamiento actual
     if self.vuelto_asignado_principal <= Decimal('0.00') and vuelto_total > Decimal('0.00'):
         # Comportamiento legacy: todo a CxC vieja, y si no hay, a saldo a favor
         deudas_viejas = CuentaPorCobrar.objects.filter(
@@ -608,16 +608,16 @@ def procesar_venta(self):
         else:
             self.vuelto_a_saldo_favor_principal = vuelto_total
 
-    # 3. Validar que la distribuciÛn no exceda el vuelto
+    # 3. Validar que la distribuci√≥n no exceda el vuelto
     if self.vuelto_asignado_principal > vuelto_total + Decimal('0.01'):
         raise ValueError(
-            f"La distribuciÛn del vuelto (${self.vuelto_asignado_principal}) "
+            f"La distribuci√≥n del vuelto (${self.vuelto_asignado_principal}) "
             f"excede el excedente real (${vuelto_total})."
         )
 
     # 4. Aplicar cada destino
     
-    # 4a. Entregado fÌsico: no genera movimiento contable,
+    # 4a. Entregado f√≠sico: no genera movimiento contable,
     #     pero queda registrado para el cierre de caja.
     #     (efectivo_esperado_usd se resta en el cierre)
     
@@ -646,7 +646,7 @@ def procesar_venta(self):
             restante -= aplicar
         
         if restante > Decimal('0.01'):
-            # No habÌa suficiente deuda vieja ? el resto va a saldo a favor
+            # No hab√≠a suficiente deuda vieja ? el resto va a saldo a favor
             self.vuelto_a_saldo_favor_principal += restante
             self.vuelto_aplicado_cxc_principal -= restante
     
@@ -655,7 +655,7 @@ def procesar_venta(self):
         self.cliente.saldo_a_favor += self.vuelto_a_saldo_favor_principal
         self.cliente.save(update_fields=['saldo_a_favor'])
     
-    # 5. El resto del flujo (crear CxC nueva, recibo, etc.) contin˙a igual
+    # 5. El resto del flujo (crear CxC nueva, recibo, etc.) contin√∫a igual
 ```
 
 ### A.5 Impacto en el cierre de caja
@@ -678,20 +678,20 @@ efectivo_esperado_bs = (
 )
 
 # vuelto_aplicado_cxc y vuelto_a_saldo_favor NO afectan la gaveta
-# pero SÕ aparecen en el reporte como "excedente retenido":
+# pero S√ç aparecen en el reporte como "excedente retenido":
 total_vuelto_retenido_usd = sum(
     v.vuelto_aplicado_cxc_principal + v.vuelto_a_saldo_favor_principal
     for v in ventas
 )
 ```
 
-El ticket Z del anexo anterior debe incluir una lÌnea nueva:
+El ticket Z del anexo anterior debe incluir una l√≠nea nueva:
 
 ```
 -- VUELTOS DEL TURNO ------------------
 Entregados (salen de caja):   -$  45.00
-Aplicados a deudas viejas:      $  80.00 (no saliÛ de caja)
-Guardados como saldo a favor:   $  15.00 (no saliÛ de caja)
+Aplicados a deudas viejas:      $  80.00 (no sali√≥ de caja)
+Guardados como saldo a favor:   $  15.00 (no sali√≥ de caja)
 TOTAL VUELTO GENERADO:          $ 140.00
 ```
 
@@ -701,21 +701,21 @@ En el modal de cobro, cuando `sumaPagosUSD > totalUSD` (hay excedente), aparece 
 
 ```
 +-----------------------------------------------+
-¶  VUELTO: $ 20.00                              ¶
-¶  ---------------------------------            ¶
-¶  ? Entregar en efectivo                       ¶
-¶  ? Aplicar a deudas del cliente ($15.00 disp.)¶
-¶  ? Guardar como saldo a favor                 ¶
-¶  ? Distribuir manualmente                     ¶
-¶                                               ¶
-¶  [Entregar $5.00]  [Aplicar $15.00]           ¶
+¬¶  VUELTO: $ 20.00                              ¬¶
+¬¶  ---------------------------------            ¬¶
+¬¶  ? Entregar en efectivo                       ¬¶
+¬¶  ? Aplicar a deudas del cliente ($15.00 disp.)¬¶
+¬¶  ? Guardar como saldo a favor                 ¬¶
+¬¶  ? Distribuir manualmente                     ¬¶
+¬¶                                               ¬¶
+¬¶  [Entregar $5.00]  [Aplicar $15.00]           ¬¶
 +-----------------------------------------------+
 ```
 
-- El POS consulta `cliente.deuda_total` para saber si la opciÛn "aplicar a deudas" est· disponible.
-- Si el cliente no tiene deudas viejas, esa opciÛn se oculta/deshabilita.
-- Si el cliente no tiene deudas ni la empresa quiere dar saldo a favor, la ˙nica opciÛn es "entregar".
-- Se envÌa al backend en el payload de `/pos/facturar/`:
+- El POS consulta `cliente.deuda_total` para saber si la opci√≥n "aplicar a deudas" est√° disponible.
+- Si el cliente no tiene deudas viejas, esa opci√≥n se oculta/deshabilita.
+- Si el cliente no tiene deudas ni la empresa quiere dar saldo a favor, la √∫nica opci√≥n es "entregar".
+- Se env√≠a al backend en el payload de `/pos/facturar/`:
 
 ```json
 {
@@ -730,7 +730,7 @@ En el modal de cobro, cuando `sumaPagosUSD > totalUSD` (hay excedente), aparece 
 
 ### A.7 Feature toggle en `ConfiguracionGlobal`
 
-Aunque el feature es ˙til, algunas empresas por polÌtica no quieren permitir estas opciones:
+Aunque el feature es √∫til, algunas empresas por pol√≠tica no quieren permitir estas opciones:
 
 ```python
 class ConfiguracionGlobal(models.Model):
@@ -745,7 +745,7 @@ class ConfiguracionGlobal(models.Model):
     )
     vuelto_obligatorio_efectivo = models.BooleanField(
         default=False,
-        help_text="Si est· activo, el vuelto solo puede entregarse en efectivo (desactiva las otras opciones)"
+        help_text="Si est√° activo, el vuelto solo puede entregarse en efectivo (desactiva las otras opciones)"
     )
 ```
 
@@ -753,24 +753,24 @@ Si `vuelto_obligatorio_efectivo=True`, el backend rechaza payloads con `aplicado
 
 ---
 
-## Anexo B ó Registro diario de tasas y consulta autom·tica del BCV
+## Anexo B ¬ó Registro diario de tasas y consulta autom√°tica del BCV
 
-### B.1 MotivaciÛn
+### B.1 Motivaci√≥n
 
 Hoy solo existe `ConfiguracionGlobal.tasa_cambio_actual` y `tasa_actualizada_el`. No hay historial. Esto impide:
 
-- Auditar quÈ tasa se usÛ un dÌa especÌfico.
-- Comparar la tasa oficial del BCV con la que aplicÛ el negocio (para detectar sobreprecios, decisiones comerciales, o errores).
-- Reconstruir c·lculos histÛricos de conversiÛn.
+- Auditar qu√© tasa se us√≥ un d√≠a espec√≠fico.
+- Comparar la tasa oficial del BCV con la que aplic√≥ el negocio (para detectar sobreprecios, decisiones comerciales, o errores).
+- Reconstruir c√°lculos hist√≥ricos de conversi√≥n.
 - Analizar tendencia cambiaria.
 
-Se propone **registro diario de dos tasas** y **consulta autom·tica opcional** al BCV.
+Se propone **registro diario de dos tasas** y **consulta autom√°tica opcional** al BCV.
 
 ### B.2 Modelo
 
 ```python
 class TasaCambioDiaria(models.Model):
-    """Una fila por dÌa. Inmutable una vez usado en cierre."""
+    """Una fila por d√≠a. Inmutable una vez usado en cierre."""
     
     fecha = models.DateField(unique=True, db_index=True)
     
@@ -793,7 +793,7 @@ class TasaCambioDiaria(models.Model):
     )
     tasa_negocio_motivo = models.CharField(
         max_length=250, blank=True,
-        help_text="Opcional: motivo de diferencia con BCV (comisiÛn, spread, etc.)"
+        help_text="Opcional: motivo de diferencia con BCV (comisi√≥n, spread, etc.)"
     )
     
     # --- Metadatos ---
@@ -821,19 +821,19 @@ class TasaCambioDiaria(models.Model):
         return None
 ```
 
-> **`unique=True` en `fecha`** garantiza exactamente una fila por dÌa. Si la tasa cambia intra-dÌa, se **actualiza** la fila y se preserva el `creado_el` original como referencia.
+> **`unique=True` en `fecha`** garantiza exactamente una fila por d√≠a. Si la tasa cambia intra-d√≠a, se **actualiza** la fila y se preserva el `creado_el` original como referencia.
 
 ### B.3 Fuentes para la tasa BCV
 
 Tres opciones, con fallback en cascada:
 
 1. **`https://ve.dolarapi.com/v1/dolares/oficial`** (gratis, sin API key, actualiza ~5pm)
-   Respuesta: `{ "fuente": "oficial", "nombre": "DÛlar", "compra": 745.0, "venta": 745.5, "promedio": 745.25, "fechaActualizacion": "2026-10-20T17:00:00-04:00" }`
+   Respuesta: `{ "fuente": "oficial", "nombre": "D√≥lar", "compra": 745.0, "venta": 745.5, "promedio": 745.25, "fechaActualizacion": "2026-10-20T17:00:00-04:00" }`
 
 2. **`https://pydolarve.org/api/v1/dollar?page=bcv`** (fallback)
    Respuesta similar.
 
-3. **Entrada manual** (siempre disponible como ˙ltimo recurso)
+3. **Entrada manual** (siempre disponible como √∫ltimo recurso)
 
 El sistema intenta en orden, con timeout de 5 segundos por fuente. Si todas fallan, muestra error pero permite al usuario ingresar la tasa a mano (queda como `tasa_bcv_es_manual=True`).
 
@@ -845,13 +845,13 @@ class ConfiguracionGlobal(models.Model):
     # --- Feature de tasas ---
     registrar_historial_tasas = models.BooleanField(
         default=True,
-        help_text="Si est· activo, cada actualizaciÛn de tasa crea/actualiza "
+        help_text="Si est√° activo, cada actualizaci√≥n de tasa crea/actualiza "
                   "una fila en TasaCambioDiaria"
     )
     usar_tasa_bcv = models.BooleanField(
         default=False,
-        help_text="Si est· activo, se consulta autom·ticamente la tasa oficial "
-                  "del BCV al actualizar la tasa del dÌa"
+        help_text="Si est√° activo, se consulta autom√°ticamente la tasa oficial "
+                  "del BCV al actualizar la tasa del d√≠a"
     )
     bcv_timeout_segundos = models.PositiveSmallIntegerField(
         default=5,
@@ -868,14 +868,14 @@ class ConfiguracionGlobal(models.Model):
     )
 ```
 
-**Combinaciones v·lidas:**
+**Combinaciones v√°lidas:**
 
 | `registrar_historial_tasas` | `usar_tasa_bcv` | Comportamiento |
 |---|---|---|
 | `False` | `False` | Comportamiento actual (solo `ConfiguracionGlobal`) |
 | `True` | `False` | Historial de tasa del negocio, sin consulta externa |
-| `True` | `True` | Historial + consulta autom·tica BCV (recomendado) |
-| `False` | `True` | Inv·lido ? el sistema fuerza `registrar_historial_tasas=True` |
+| `True` | `True` | Historial + consulta autom√°tica BCV (recomendado) |
+| `False` | `True` | Inv√°lido ? el sistema fuerza `registrar_historial_tasas=True` |
 
 ### B.5 Servicio de consulta (desacoplado)
 
@@ -887,7 +887,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 class ProveedorTasaBCV:
-    """Consulta la tasa BCV con fallback entre m˙ltiples fuentes."""
+    """Consulta la tasa BCV con fallback entre m√∫ltiples fuentes."""
     
     FUENTES = [
         {
@@ -916,7 +916,7 @@ class ProveedorTasaBCV:
                         'obtenida_el': timezone.now(),
                     }
             except Exception as e:
-                print(f"?? Fuente {fuente['nombre']} fallÛ: {e}")
+                print(f"?? Fuente {fuente['nombre']} fall√≥: {e}")
                 continue
         return None  # todas fallaron
 ```
@@ -929,7 +929,7 @@ GET  /api/v1/config/tasa-bcv/actual/
      ? responde: { tasa_bcv, fuente, obtenida_el, cache: bool }
 
 POST /api/v1/config/actualizar-tasa/    
-     ? amplÌa el endpoint existente
+     ? ampl√≠a el endpoint existente
      ? body: { tasa_cambio_actual: "747.00", motivo_diferencia: "spread" }
      ? responde: { tasa_negocio, tasa_bcv, diferencia_pct, alerta: bool }
 
@@ -938,10 +938,10 @@ GET  /api/v1/config/tasas/historico/?desde=&hasta=
      ? para reportes: tendencia, diferencia promedio, etc.
 
 GET  /api/v1/config/tasas/<fecha>/
-     ? detalle de un dÌa especÌfico
+     ? detalle de un d√≠a espec√≠fico
 ```
 
-**ModificaciÛn a `TasaStatusAPIView`:**
+**Modificaci√≥n a `TasaStatusAPIView`:**
 
 ```python
 class TasaStatusAPIView(APIView):
@@ -970,7 +970,7 @@ class TasaStatusAPIView(APIView):
                 data["tasa_bcv_fuente"] = tasa_hoy.tasa_bcv_fuente
                 data["diferencia_pct"] = float(tasa_hoy.diferencia_porcentual or 0)
             else:
-                # Consulta en vivo si a˙n no est· registrada hoy
+                # Consulta en vivo si a√∫n no est√° registrada hoy
                 resultado = ProveedorTasaBCV.consultar(config.bcv_timeout_segundos)
                 if resultado:
                     data["tasa_bcv_hoy"] = float(resultado['tasa'])
@@ -985,7 +985,7 @@ class TasaStatusAPIView(APIView):
         return Response(data)
 ```
 
-**ModificaciÛn a `ActualizarTasaAPIView`:**
+**Modificaci√≥n a `ActualizarTasaAPIView`:**
 
 ```python
 class ActualizarTasaAPIView(APIView):
@@ -994,7 +994,7 @@ class ActualizarTasaAPIView(APIView):
         nueva_tasa = Decimal(str(request.data.get('tasa_cambio_actual')))
         motivo = request.data.get('motivo_diferencia', '').strip()
         
-        # 1. Actualizar configuraciÛn global (siempre)
+        # 1. Actualizar configuraci√≥n global (siempre)
         config.tasa_cambio_actual = nueva_tasa
         config.tasa_actualizada_el = timezone.now()
         config.save()
@@ -1004,7 +1004,7 @@ class ActualizarTasaAPIView(APIView):
         if config.registrar_historial_tasas:
             hoy = timezone.localdate()
             
-            # Consultar BCV si est· activo
+            # Consultar BCV si est√° activo
             if config.usar_tasa_bcv:
                 # Si ya hay una tasa BCV guardada hoy, respetarla
                 existente = TasaCambioDiaria.objects.filter(fecha=hoy).first()
@@ -1056,33 +1056,33 @@ class ActualizarTasaAPIView(APIView):
             "mensaje": "Tasa actualizada correctamente",
             "tasa_cambio_actual": float(config.tasa_cambio_actual),
             "tasa_actualizada_el": config.tasa_actualizada_el.isoformat(),
-            "bcv": respuesta_bcv,  # None si no se consultÛ
+            "bcv": respuesta_bcv,  # None si no se consult√≥
         })
 ```
 
 ### B.7 UI en el modal de tasa
 
-El modal actual se amplÌa. Si `usar_tasa_bcv=True`:
+El modal actual se ampl√≠a. Si `usar_tasa_bcv=True`:
 
 ```
 +---------------------------------------------+
-¶  Actualizar Tasa del DÌa                     ¶
-+---------------------------------------------¶
-¶  La tasa no ha sido actualizada hoy.         ¶
-¶                                              ¶
-¶  ???  Tasa BCV oficial (20/10/2026):          ¶
-¶      745.50 BS/USD                           ¶
-¶      (fuente: dolarapi.com, hace 2h)         ¶
-¶      [?? Actualizar BCV]                     ¶
-¶                                              ¶
-¶  ?? Nuestra tasa de trabajo:                 ¶
-¶      [  747.00  ] BS/USD                     ¶
-¶      Diferencia con BCV: +0.20%              ¶
-¶                                              ¶
-¶  ?? Motivo (opcional):                       ¶
-¶  [spread operativo 0.2%]                     ¶
-¶                                              ¶
-¶  [Salir]              [Guardar y continuar]  ¶
+¬¶  Actualizar Tasa del D√≠a                     ¬¶
++---------------------------------------------¬¶
+¬¶  La tasa no ha sido actualizada hoy.         ¬¶
+¬¶                                              ¬¶
+¬¶  ???  Tasa BCV oficial (20/10/2026):          ¬¶
+¬¶      745.50 BS/USD                           ¬¶
+¬¶      (fuente: dolarapi.com, hace 2h)         ¬¶
+¬¶      [?? Actualizar BCV]                     ¬¶
+¬¶                                              ¬¶
+¬¶  ?? Nuestra tasa de trabajo:                 ¬¶
+¬¶      [  747.00  ] BS/USD                     ¬¶
+¬¶      Diferencia con BCV: +0.20%              ¬¶
+¬¶                                              ¬¶
+¬¶  ?? Motivo (opcional):                       ¬¶
+¬¶  [spread operativo 0.2%]                     ¬¶
+¬¶                                              ¬¶
+¬¶  [Salir]              [Guardar y continuar]  ¬¶
 +---------------------------------------------+
 ```
 
@@ -1091,20 +1091,20 @@ Comportamientos:
 - La tasa BCV se muestra como **referencia informativa** (bloqueada, no editable).
 - La tasa de trabajo es **editable**.
 - La diferencia % se actualiza en vivo al cambiar la tasa de trabajo.
-- Si `alertar_si_diferencia_tasa_supera` est· configurado y se supera, se muestra un banner rojo: "? Diferencia superior al X% permitido".
-- BotÛn "Actualizar BCV" fuerza una nueva consulta (˙til si el cajero cree que la tasa cacheada est· vieja).
+- Si `alertar_si_diferencia_tasa_supera` est√° configurado y se supera, se muestra un banner rojo: "? Diferencia superior al X% permitido".
+- Bot√≥n "Actualizar BCV" fuerza una nueva consulta (√∫til si el cajero cree que la tasa cacheada est√° vieja).
 
 **Si `usar_tasa_bcv=False`** ? el modal se ve exactamente igual que hoy.
 
-### B.8 SincronizaciÛn autom·tica diaria (opcional)
+### B.8 Sincronizaci√≥n autom√°tica diaria (opcional)
 
-Para producciÛn, se recomienda un comando de gestiÛn + cron, asÌ la tasa BCV se captura aunque nadie abra el POS ese dÌa:
+Para producci√≥n, se recomienda un comando de gesti√≥n + cron, as√≠ la tasa BCV se captura aunque nadie abra el POS ese d√≠a:
 
 ```python
 # management/commands/fetch_bcv_rate.py (nuevo)
 
 class Command(BaseCommand):
-    help = "Consulta y registra la tasa BCV del dÌa"
+    help = "Consulta y registra la tasa BCV del d√≠a"
     
     def handle(self, *args, **options):
         config = ConfiguracionGlobal.objects.first()
@@ -1130,14 +1130,14 @@ class Command(BaseCommand):
         self.stdout.write(f"? Tasa BCV del {hoy}: {resultado['tasa']}")
 ```
 
-**Crontab sugerido** (BCV publica ~5pm, asÌ que correr despuÈs):
+**Crontab sugerido** (BCV publica ~5pm, as√≠ que correr despu√©s):
 
 ```cron
 # Captura la tasa BCV a las 6pm de lunes a viernes
 0 18 * * 1-5 cd /ruta/proyecto && python manage.py fetch_bcv_rate
 ```
 
-En Venezuela, BCV **no publica tasa los fines de semana ni feriados**. El comando simplemente no crea fila esos dÌas, y el siguiente dÌa h·bil usa la ˙ltima tasa registrada (comportamiento correcto).
+En Venezuela, BCV **no publica tasa los fines de semana ni feriados**. El comando simplemente no crea fila esos d√≠as, y el siguiente d√≠a h√°bil usa la √∫ltima tasa registrada (comportamiento correcto).
 
 ### B.9 Robustez y manejo de fallos
 
@@ -1146,10 +1146,10 @@ En Venezuela, BCV **no publica tasa los fines de semana ni feriados**. El comand
 | `usar_tasa_bcv=False` | Nunca se llama a APIs externas. Cero riesgo. |
 | API responde lentamente (>5s) | Timeout, se registra `tasa_bcv=null`, se permite manual. |
 | Ambas APIs fallan | Se muestra alerta pero el usuario puede ingresar tasa BCV manual (`tasa_bcv_es_manual=True`). |
-| Sin conexiÛn a internet | Igual que "ambas fallan". |
-| Tasa BCV = 0 o negativa | Se rechaza como inv·lida, se intenta siguiente fuente. |
-| Se cierra un dÌa sin registrar tasa | El cierre usa `tasa_cambio_actual` de `ConfiguracionGlobal` como fallback (comportamiento actual). |
-| Se quiere corregir la tasa BCV de un dÌa pasado | Se puede editar desde el admin (`TasaCambioDiariaAdmin`). |
+| Sin conexi√≥n a internet | Igual que "ambas fallan". |
+| Tasa BCV = 0 o negativa | Se rechaza como inv√°lida, se intenta siguiente fuente. |
+| Se cierra un d√≠a sin registrar tasa | El cierre usa `tasa_cambio_actual` de `ConfiguracionGlobal` como fallback (comportamiento actual). |
+| Se quiere corregir la tasa BCV de un d√≠a pasado | Se puede editar desde el admin (`TasaCambioDiariaAdmin`). |
 
 ### B.10 Admin de `TasaCambioDiaria`
 
@@ -1167,7 +1167,7 @@ class TasaCambioDiariaAdmin(admin.ModelAdmin):
     def diferencia_porcentual_display(self, obj):
         d = obj.diferencia_porcentual
         if d is None:
-            return "ó"
+            return "¬ó"
         color = "??" if abs(d) < 1 else "??" if abs(d) < 3 else "??"
         return f"{color} {d:+.2f}%"
     diferencia_porcentual_display.short_description = "Dif. vs BCV"
@@ -1175,7 +1175,7 @@ class TasaCambioDiariaAdmin(admin.ModelAdmin):
 
 ---
 
-## Anexo C ó Cambios consolidados en `ConfiguracionGlobal`
+## Anexo C ¬ó Cambios consolidados en `ConfiguracionGlobal`
 
 Todos los toggles nuevos, en un solo lugar, con defaults conservadores:
 
@@ -1198,53 +1198,53 @@ class ConfiguracionGlobal(models.Model):
     )
 ```
 
-**Por quÈ estos defaults:**
+**Por qu√© estos defaults:**
 
 - `permitir_vuelto_* = True`: cero ruptura, el feature existe pero el flujo legacy sigue funcionando.
 - `vuelto_obligatorio_efectivo = False`: comportamiento actual.
-- `registrar_historial_tasas = True`: empezar a guardar historial desde el dÌa 1 es siempre valioso.
+- `registrar_historial_tasas = True`: empezar a guardar historial desde el d√≠a 1 es siempre valioso.
 - `usar_tasa_bcv = False`: **opt-in** porque depende de APIs externas. Se activa cuando el negocio lo decida.
 - `alertar_si_diferencia_tasa_supera = 0`: sin alerta por defecto.
 
 ---
 
-## Anexo D ó Impacto en el roadmap
+## Anexo D ¬ó Impacto en el roadmap
 
 Estos anexos **no retrasan** la Fase 1 del plan principal; se ejecutan como sub-fases:
 
-### **Fase 1.5 ó Vuelto configurable (3-5 dÌas)**
+### **Fase 1.5 ¬ó Vuelto configurable (3-5 d√≠as)**
 
-| Tarea | EstimaciÛn |
+| Tarea | Estimaci√≥n |
 |---|---|
-| MigraciÛn: 4 campos en `Venta` + `origen`/`sesion_caja`/`metodo` en `PagoCuentaCobrar` | 0.5 dÌa |
-| Refactor `procesar_venta` con distribuciÛn de vuelto | 1-2 dÌas |
-| Endpoint `/pos/facturar/` acepta `vuelto_distribucion` | 0.5 dÌa |
-| UI POS: panel de distribuciÛn condicional (solo si `vuelto > 0`) | 1 dÌa |
-| IntegraciÛn con cierre de caja (restar `vuelto_entregado` del esperado) | 0.5 dÌa |
-| Tests | 0.5 dÌa |
+| Migraci√≥n: 4 campos en `Venta` + `origen`/`sesion_caja`/`metodo` en `PagoCuentaCobrar` | 0.5 d√≠a |
+| Refactor `procesar_venta` con distribuci√≥n de vuelto | 1-2 d√≠as |
+| Endpoint `/pos/facturar/` acepta `vuelto_distribucion` | 0.5 d√≠a |
+| UI POS: panel de distribuci√≥n condicional (solo si `vuelto > 0`) | 1 d√≠a |
+| Integraci√≥n con cierre de caja (restar `vuelto_entregado` del esperado) | 0.5 d√≠a |
+| Tests | 0.5 d√≠a |
 
-### **Fase 1.6 ó Historial de tasas + BCV (3-5 dÌas)**
+### **Fase 1.6 ¬ó Historial de tasas + BCV (3-5 d√≠as)**
 
-| Tarea | EstimaciÛn |
+| Tarea | Estimaci√≥n |
 |---|---|
-| Modelo `TasaCambioDiaria` + migraciÛn | 0.5 dÌa |
-| Servicio `ProveedorTasaBCV` con fallback | 1 dÌa |
-| 5 campos nuevos en `ConfiguracionGlobal` | 0.25 dÌa |
-| Endpoints `GET /tasa-bcv/actual/`, `GET /tasas/historico/`, `GET /tasas/<fecha>/` | 1 dÌa |
-| Ampliar `TasaStatusAPIView` y `ActualizarTasaAPIView` | 0.5 dÌa |
-| Management command `fetch_bcv_rate` | 0.25 dÌa |
-| Admin `TasaCambioDiariaAdmin` | 0.25 dÌa |
-| UI modal de tasa POS | 1 dÌa |
+| Modelo `TasaCambioDiaria` + migraci√≥n | 0.5 d√≠a |
+| Servicio `ProveedorTasaBCV` con fallback | 1 d√≠a |
+| 5 campos nuevos en `ConfiguracionGlobal` | 0.25 d√≠a |
+| Endpoints `GET /tasa-bcv/actual/`, `GET /tasas/historico/`, `GET /tasas/<fecha>/` | 1 d√≠a |
+| Ampliar `TasaStatusAPIView` y `ActualizarTasaAPIView` | 0.5 d√≠a |
+| Management command `fetch_bcv_rate` | 0.25 d√≠a |
+| Admin `TasaCambioDiariaAdmin` | 0.25 d√≠a |
+| UI modal de tasa POS | 1 d√≠a |
 
-**Total anexos: 6-10 dÌas adicionales, sin bloquear la Fase 1 principal.**
+**Total anexos: 6-10 d√≠as adicionales, sin bloquear la Fase 1 principal.**
 
-### **Fase 2 ó Reportes (se beneficia de ambos anexos)**
+### **Fase 2 ¬ó Reportes (se beneficia de ambos anexos)**
 
-Los reportes ya propuestos se enriquecen autom·ticamente:
+Los reportes ya propuestos se enriquecen autom√°ticamente:
 
-- `GET /reportes/vueltos/` ? an·lisis de "cu·nto vuelto se entrega vs se retiene", ˙til para detectar clientes que abusan del saldo a favor.
-- `GET /reportes/tasas/?desde=&hasta=` ? gr·fico de tasa BCV vs negocio, diferencia acumulada, spread promedio.
-- `GET /reportes/impacto-cambiario/` ? cu·nto se ganÛ/perdiÛ por diferencial de tasa.
+- `GET /reportes/vueltos/` ? an√°lisis de "cu√°nto vuelto se entrega vs se retiene", √∫til para detectar clientes que abusan del saldo a favor.
+- `GET /reportes/tasas/?desde=&hasta=` ? gr√°fico de tasa BCV vs negocio, diferencia acumulada, spread promedio.
+- `GET /reportes/impacto-cambiario/` ? cu√°nto se gan√≥/perdi√≥ por diferencial de tasa.
 
 ---
 
@@ -1253,8 +1253,8 @@ Los reportes ya propuestos se enriquecen autom·ticamente:
 | # | Aporte | Valor de negocio |
 |---|---|---|
 | **A** | Vuelto configurable (entregar / abonar a deuda / saldo a favor / mixto) | Flexibilidad operativa real, mejor experiencia cliente, trazabilidad contable del excedente. |
-| **B** | Registro diario de doble tasa (BCV + negocio) con consulta autom·tica opcional | AuditorÌa cambiaria, detecciÛn de spread, base para an·lisis de impacto cambiario en reportes. |
-| **C** | 8 toggles nuevos en `ConfiguracionGlobal` | Todo controlable por el admin, sin tocar cÛdigo. Compatibilidad total con el comportamiento actual. |
-| **D** | 6-10 dÌas de implementaciÛn incremental | No retrasa la Fase 1, se ejecuta en paralelo o justo despuÈs. |
+| **B** | Registro diario de doble tasa (BCV + negocio) con consulta autom√°tica opcional | Auditor√≠a cambiaria, detecci√≥n de spread, base para an√°lisis de impacto cambiario en reportes. |
+| **C** | 8 toggles nuevos en `ConfiguracionGlobal` | Todo controlable por el admin, sin tocar c√≥digo. Compatibilidad total con el comportamiento actual. |
+| **D** | 6-10 d√≠as de implementaci√≥n incremental | No retrasa la Fase 1, se ejecuta en paralelo o justo despu√©s. |
 
-Ambos anexos son **aditivos** (no rompen nada), **opt-in** (activables por configuraciÛn), y **reutilizan los modelos ya propuestos** (`CierreCaja`, `CierrePorMetodoPago`, `PagoCuentaCobrar` extendido). El cierre de caja del anexo anterior queda **mejorado sin cambios estructurales**: solo suma dos lÌneas nuevas al reporte Z (vuelto entregado y vuelto retenido) y la tasa BCV al encabezado.
+Ambos anexos son **aditivos** (no rompen nada), **opt-in** (activables por configuraci√≥n), y **reutilizan los modelos ya propuestos** (`CierreCaja`, `CierrePorMetodoPago`, `PagoCuentaCobrar` extendido). El cierre de caja del anexo anterior queda **mejorado sin cambios estructurales**: solo suma dos l√≠neas nuevas al reporte Z (vuelto entregado y vuelto retenido) y la tasa BCV al encabezado.

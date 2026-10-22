@@ -675,26 +675,46 @@
         </div>
     </div>
 
-    <!-- Modal Cierre Caja -->
+    <!-- Modal Cierre Caja — FASE 1C: arqueo informado (preview por método) -->
     <div class="modal fade" id="modalCierreCaja" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content">
                 <div class="modal-header bg-dark text-white">
-                    <h5 class="modal-title">Cierre de Turno</h5>
+                    <h5 class="modal-title">Cierre de Turno — Arqueo de Caja</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">Efectivo USD</label>
-                        <input type="number" class="form-control" id="cierre-usd" value="0.00">
+                    <div class="row text-center mb-2" style="font-size: 12px;">
+                        <div class="col">Fondo<br><b>$ <span id="cierre-r-fondo-usd">0.00</span> / Bs <span id="cierre-r-fondo-bs">0.00</span></b></div>
+                        <div class="col">Cobros efectivo<br><b>$ <span id="cierre-r-cobros-usd">0.00</span> / Bs <span id="cierre-r-cobros-bs">0.00</span></b></div>
+                        <div class="col">Egresos<br><b>$ <span id="cierre-r-egresos-usd">0.00</span> / Bs <span id="cierre-r-egresos-bs">0.00</span></b></div>
+                        <div class="col">Vueltos<br><b>$ <span id="cierre-r-vueltos-usd">0.00</span> / Bs <span id="cierre-r-vueltos-bs">0.00</span></b></div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Efectivo BS</label>
-                        <input type="number" class="form-control" id="cierre-bs" value="0.00">
+                    <table class="table table-sm table-bordered" style="font-size: 12px;">
+                        <thead class="table-light">
+                            <tr><th>Método de pago</th><th>Moneda</th><th class="text-end">Esperado</th><th style="width: 160px;">Declarado (conteo)</th></tr>
+                        </thead>
+                        <tbody id="cierre-por-metodo"></tbody>
+                    </table>
+                    <div class="row">
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label fw-bold">Declarado USD en gaveta</label>
+                            <input type="number" step="0.01" class="form-control form-control-lg text-center" id="cierre-usd" value="0.00" oninput="actualizarDescuadreLive()">
+                        </div>
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label fw-bold">Declarado BS en gaveta</label>
+                            <input type="number" step="0.01" class="form-control form-control-lg text-center" id="cierre-bs" value="0.00" oninput="actualizarDescuadreLive()">
+                        </div>
                     </div>
+                    <div class="mb-2">
+                        <label class="form-label">Observación (opcional)</label>
+                        <input type="text" class="form-control" id="cierre-observacion" maxlength="250" placeholder="Ej: cajero cambió $20 de su bolsillo, etc.">
+                    </div>
+                    <div class="alert alert-success text-center mb-0" id="cierre-live-descuadre">Calculando…</div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-danger w-100 fw-bold" onclick="procesarCierreCaja()">CONFIRMAR CIERRE</button>
+                    <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button class="btn btn-danger fw-bold" onclick="procesarCierreCaja()">CONFIRMAR CIERRE</button>
                 </div>
             </div>
         </div>
@@ -802,34 +822,95 @@
     </div>
 
     <!-- ============================================================
-         TICKET CORTE Z - 58mm
+         TICKET CORTE Z - 58mm — FASE 1C (doble moneda, métodos,
+         vueltos, créditos, diferencia cambiaria)
          ============================================================ -->
     <div id="ticket-z-impresion" class="ticket-z-impresion">
         <div class="ticket-encabezado">
-            <h3>ERP Bimonetario</h3>
-            <p style="font-size: 9px; font-weight: bold;">CORTE Z</p>
+            <h3>Valles del Pollo</h3>
+            <p style="font-size: 9px; font-weight: bold;">CIERRE DE CAJA — TURNO #<span id="z-turno">---</span></p>
             <p id="z-fecha-cierre" style="font-size: 8px;"></p>
             <p style="font-size: 9px;">Cajero: <span id="z-cajero"></span></p>
+            <p style="font-size: 8px;">Apertura: <span id="z-fecha-apertura">--</span></p>
+            <p style="font-size: 8px;">Tasa: <span id="z-tasas">--</span></p>
             <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
         </div>
         <div style="font-size: 9px; margin-bottom: 2mm;">
-            <div class="fila-total"><span>Fondo Inicial:</span><span>$ <span id="z-fondo">0.00</span></span></div>
-            <div class="fila-total"><span>Ventas del Turno:</span><span>$ <span id="z-ventas">0.00</span></span></div>
-            <div class="fila-total" style="color: #cc0000;"><span>(-) Gastos:</span><span>$ <span id="z-gastos">0.00</span></span></div>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">RESUMEN DE VENTAS</p>
+            <div class="fila-total"><span>Total facturado:</span><span>$ <span id="z-facturado">0.00</span></span></div>
+            <div class="fila-total"><span>&nbsp;&nbsp;Contado:</span><span>$ <span id="z-contado">0.00</span></span></div>
+            <div class="fila-total"><span>&nbsp;&nbsp;Crédito:</span><span>$ <span id="z-credito-emitido">0.00</span></span></div>
+            <div class="fila-total"><span>Total cobrado:</span><span>$ <span id="z-cobrado">0.00</span></span></div>
+            <div class="fila-total"><span>Crédito nuevo:</span><span>$ <span id="z-credito-generado">0.00</span></span></div>
+            <div class="fila-total"><span>N° facturas:</span><span id="z-num-facturas">0</span></div>
+            <div class="fila-total"><span>Ticket promedio:</span><span>$ <span id="z-ticket-promedio">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">ABONOS A CUENTAS VIEJAS</p>
+            <div class="fila-total"><span>Total abonos CxC:</span><span>$ <span id="z-abonos-total">0.00</span></span></div>
+            <div class="fila-total"><span>N° de abonos:</span><span id="z-abonos-cant">0</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">DESGLOSE POR MÉTODO</p>
+            <div style="font-size: 7px;">(esperado | declarado | dif.)</div>
+            <div id="z-por-metodo" style="font-size: 8px;"></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CAJA FÍSICA USD</p>
+            <div class="fila-total"><span>Fondo inicial:</span><span>$ <span id="z-fondo-usd">0.00</span></span></div>
+            <div class="fila-total"><span>(+) Cobros efectivo:</span><span>$ <span id="z-cobros-usd">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Egresos:</span><span>$ <span id="z-egresos-usd">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Vueltos:</span><span>$ <span id="z-vueltos-usd">0.00</span></span></div>
             <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
-                <span>Total Esperado:</span><span>$ <span id="z-esperado">0.00</span></span>
-            </div>
-            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
-            <div class="fila-total"><span>Declarado (USD):</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
-            <div class="fila-total"><span>Declarado (BS):</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
-            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
-            <div class="fila-total" style="font-size: 9px; font-weight: bold;">
-                <span>DESCUADRE:</span><span id="z-descuadre">CUADRE PERFECTO</span>
-            </div>
+                <span>= ESPERADO:</span><span>$ <span id="z-esperado-usd">0.00</span></span></div>
+            <div class="fila-total"><span>= Declarado:</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>= Descuadre:</span><span id="z-descuadre-usd">0.00</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CAJA FÍSICA BS</p>
+            <div class="fila-total"><span>Fondo inicial:</span><span>BS <span id="z-fondo-bs">0.00</span></span></div>
+            <div class="fila-total"><span>(+) Cobros efectivo:</span><span>BS <span id="z-cobros-bs">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Egresos:</span><span>BS <span id="z-egresos-bs">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Vueltos:</span><span>BS <span id="z-vueltos-bs">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
+                <span>= ESPERADO:</span><span>BS <span id="z-esperado-bs">0.00</span></span></div>
+            <div class="fila-total"><span>= Declarado:</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>= Descuadre:</span><span id="z-descuadre-bs">0.00</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">EGRESOS DEL TURNO</p>
+            <div id="z-egresos-detalle" style="font-size: 8px;"></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL EGRESOS:</span><span id="z-egresos-total">--</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CRÉDITOS OTORGADOS</p>
+            <div id="z-creditos-detalle" style="font-size: 8px;"></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL CxC NUEVAS:</span><span>$ <span id="z-creditos-total">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">VUELTOS DEL TURNO</p>
+            <div class="fila-total"><span>Entregados (salen de caja):</span><span>$ <span id="z-vuelto-entregado">0.00</span></span></div>
+            <div class="fila-total"><span>Aplicados a deudas:</span><span>$ <span id="z-vuelto-aplicado">0.00</span></span></div>
+            <div class="fila-total"><span>Guardados (saldo a favor):</span><span>$ <span id="z-vuelto-saldo">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL VUELTO:</span><span>$ <span id="z-vuelto-total">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <div class="fila-total"><span>Diferencia cambiaria:</span><span id="z-impacto-cambio">--</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <div class="fila-total" style="font-size: 10px; font-weight: bold;"><span>DESCUADRE CONSOLIDADO:</span><span id="z-descuadre-consolidado">--</span></div>
+            <div class="fila-total" style="font-size: 10px; font-weight: bold;"><span>ESTADO:</span><span id="z-estado">--</span></div>
         </div>
         <div style="text-align: center; margin-top: 5mm;">
             <p style="margin: 0;">_______________________</p>
             <p style="margin: 0; font-size: 8px;">Firma del Cajero</p>
+            <p style="margin: 2mm 0 0;">_______________________</p>
+            <p style="margin: 0; font-size: 8px;">Firma del Supervisor</p>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         REPORTE DE CIERRE EN PANTALLA (tras cerrar) — FASE 1C
+         ============================================================ -->
+    <div id="reporte-cierre-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 2100; overflow: auto; padding: 20px;">
+        <div style="max-width: 820px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 24px;">
+            <h4 id="reporte-cierre-titulo">Cierre de Caja</h4>
+            <div id="reporte-cierre-contenido"></div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-outline-secondary" onclick="reimprimirCorteZ()">🖨 Reimprimir ticket Z</button>
+                <button class="btn btn-primary fw-bold" onclick="finalizarCierreSesion()">Cerrar y salir</button>
+            </div>
         </div>
     </div>
 

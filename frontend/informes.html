@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centro de Informes - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; }
+        .card { border: none; box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075); }
+        .modulo-card { cursor: pointer; transition: transform 0.2s; }
+        .modulo-card:hover { transform: translateY(-4px); }
+        .reporte-link { cursor: pointer; }
+        .reporte-link:hover { background-color: #e9ecef; }
+        .reporte-activo { background-color: #0d6efd !important; color: #fff !important; }
+        .tabla-informe td, .tabla-informe th { white-space: nowrap; }
+    </style>
+</head>
+<body>
+
+    <div id="erp-navbar"></div>
+
+    <div class="container-fluid px-4">
+        <!-- Encabezado -->
+        <div class="row mb-3 align-items-center">
+            <div class="col">
+                <h3 class="fw-bold mb-0"><i class="bi bi-clipboard2-data me-2"></i>Centro de Informes</h3>
+                <small class="text-muted">Reportes gerenciales con exportación a Excel</small>
+            </div>
+        </div>
+
+        <!-- Filtros globales -->
+        <div class="card mb-4">
+            <div class="card-body py-3">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold mb-1">Desde</label>
+                        <input type="date" class="form-control" id="filtro-desde">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold mb-1">Hasta</label>
+                        <input type="date" class="form-control" id="filtro-hasta">
+                    </div>
+
+                    <!-- Parámetros extra (se muestran según el informe) -->
+                    <div class="col-md-3" id="cont-producto" style="display:none;">
+                        <label class="form-label small fw-bold mb-1">Producto (kardex)</label>
+                        <select class="form-select" id="filtro-producto">
+                            <option value="">Selecciona un producto...</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2" id="cont-minimo" style="display:none;">
+                        <label class="form-label small fw-bold mb-1">Stock mínimo</label>
+                        <input type="number" class="form-control" id="filtro-minimo" value="10" step="0.01">
+                    </div>
+                    <div class="col-md-2" id="cont-dias" style="display:none;">
+                        <label class="form-label small fw-bold mb-1">Días</label>
+                        <input type="number" class="form-control" id="filtro-dias" value="90" step="1">
+                    </div>
+
+                    <div class="col-md-3 text-end">
+                        <button class="btn btn-primary fw-bold px-4" id="btn-generar" onclick="generarInforme()" disabled>
+                            <i class="bi bi-play-fill me-1"></i> Generar
+                        </button>
+                        <button class="btn btn-success fw-bold px-4" id="btn-exportar" onclick="exportarInforme()" disabled>
+                            <i class="bi bi-file-earmark-excel me-1"></i> Excel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Módulos del centro de informes -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card h-100 border-success">
+                    <div class="card-header bg-success text-white fw-bold">
+                        <i class="bi bi-box-seam me-2"></i>Inventario
+                    </div>
+                    <div class="list-group list-group-flush" id="lista-informes-inventario">
+                        <div class="list-group-item reporte-link" data-informe="valorizacion">📊 Valorización de Inventario</div>
+                        <div class="list-group-item reporte-link" data-informe="kardex">📜 Kardex / Movimientos</div>
+                        <div class="list-group-item reporte-link" data-informe="stock-bajo">⚠️ Stock Bajo Mínimo</div>
+                        <div class="list-group-item reporte-link" data-informe="sin-movimiento">🧊 Productos sin Movimiento</div>
+                        <div class="list-group-item reporte-link" data-informe="rotacion">🔄 Rotación por Categoría</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-9">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-cart3 me-2"></i>Ventas</h6>
+                                <small class="text-muted">Por período, producto, cliente, utilidad bruta, métodos de pago…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-truck me-2"></i>Compras</h6>
+                                <small class="text-muted">Por proveedor, por producto, evolución de costos…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-wallet2 me-2"></i>Cuentas por Cobrar</h6>
+                                <small class="text-muted">Aging de cartera, cobros por período, clientes morosos…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-credit-card me-2"></i>Cuentas por Pagar</h6>
+                                <small class="text-muted">Aging de proveedores, pagos por período, top deudas…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-safe me-2"></i>Caja</h6>
+                                <small class="text-muted">Cuadre por turno, descuadres, histórico de arqueos…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 opacity-50">
+                            <div class="card-body">
+                                <h6 class="fw-bold"><i class="bi bi-geo-alt me-2"></i>Rutas de Mercado</h6>
+                                <small class="text-muted">Rendimiento por ruta, créditos generados…</small>
+                                <div class="mt-2"><span class="badge bg-secondary">Próximamente</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Resultado del informe -->
+        <div class="card mb-5" id="panel-resultado" style="display:none;">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fw-bold" id="titulo-informe">—</h5>
+                <span class="text-muted small" id="total-filas"></span>
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-3 mb-3" id="resumen-informe"></div>
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm align-middle tabla-informe">
+                        <thead class="table-dark" id="thead-informe"></thead>
+                        <tbody id="tbody-informe"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/menu.js"></script>
+    <script src="assets/js/informes.js"></script>
+</body>
+</html>

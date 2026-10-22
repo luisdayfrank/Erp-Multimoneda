@@ -24,13 +24,14 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Sum, Count
 from django.utils import timezone
 
 # ── Import robusto de los modelos (el app se llama "nucleo") ──────────────────
 try:
     from nucleo.models import (
         Venta, RutaMercado, TasaCambioDiaria, Impuesto, PresentacionProducto,
+        PagoVenta, PagoCuentaCobrar, CuentaPorCobrar,
     )
 except Exception:  # pragma: no cover
     from django.apps import apps
@@ -39,6 +40,9 @@ except Exception:  # pragma: no cover
     TasaCambioDiaria = apps.get_model('nucleo', 'TasaCambioDiaria')
     Impuesto = apps.get_model('nucleo', 'Impuesto')
     PresentacionProducto = apps.get_model('nucleo', 'PresentacionProducto')
+    PagoVenta = apps.get_model('nucleo', 'PagoVenta')
+    PagoCuentaCobrar = apps.get_model('nucleo', 'PagoCuentaCobrar')
+    CuentaPorCobrar = apps.get_model('nucleo', 'CuentaPorCobrar')
 
 
 def D(v):
@@ -228,5 +232,42 @@ for r in RutaMercado.objects.filter(fecha__gte=timezone.now() - timedelta(days=9
               "Revisa que el día asignado sea el día real del mercado.")
 if not ambiguas:
     print("  ✅ Todas las rutas de los últimos 90 días están a medianoche local.")
+
+# ═══════════════════════════════════════════════════════════════════════
+titulo("H. ¿CUÁNTO DE ESA 'VENTA' ES DINERO REAL?  (contado vs crédito vs fiado)")
+# ═══════════════════════════════════════════════════════════════════════
+# El KPI del dashboard es INGRESO BRUTO: cuenta lo vendido, no lo cobrado.
+# Aquí se ve la diferencia entre "lo que dice el dashboard" y "lo que entró".
+contado = ventas_mes.filter(tipo='CONTADO').aggregate(t=Sum('total_principal'), n=Count('id'))
+credito = ventas_mes.filter(tipo='CREDITO').aggregate(t=Sum('total_principal'), n=Count('id'))
+
+pagos_pos = PagoVenta.objects.filter(venta__in=ventas_mes).aggregate(
+    t=Sum('monto_equivalente_principal'))
+fiado_pendiente = CuentaPorCobrar.objects.filter(venta__in=ventas_mes).aggregate(
+    t=Sum('saldo_pendiente'))
+
+abonos_modulo = PagoCuentaCobrar.objects.filter(
+    fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy_dt,
+    origen__in=['ABONO_CXC', 'ABONO_MASIVO'],
+).aggregate(t=Sum('monto_abono_principal'), n=Count('id'))
+
+print(f"  Ventas CONTADO del mes .............. ${D(contado['t']):>12,.2f}  ({contado['n']} facturas)")
+print(f"  Ventas CRÉDITO (fiado) del mes ...... ${D(credito['t']):>12,.2f}  ({credito['n']} facturas)")
+print(f"     └ de ese fiado, sigue pendiente .. ${D(fiado_pendiente['t']):>12,.2f}")
+print(f"  Cobrado en el POS por ventas del mes  ${D(pagos_pos['t']):>12,.2f}")
+print(f"  Cobranzas de deudas de otros meses ... ${D(abonos_modulo['t']):>12,.2f}  ({abonos_modulo['n']} abonos)")
+print("  " + "-" * 60)
+print(f"  DASHBOARD (ingreso bruto) ........... ${total_pos + total_rutas:>12,.2f}")
+print(f"  DINERO REALMENTE ENTRADO aprox. ..... ${D(pagos_pos['t']) + D(abonos_modulo['t']) + total_rutas:>12,.2f}")
+print("     (pagos POS + cobranzas de deudas viejas + rutas de mercado)")
+print("\n  👉 Si el primer número es mucho mayor que el segundo, el 'exceso' del")
+print("     dashboard son ventas a CRÉDITO (fiado) que aún no han entrado en caja.")
+
+print("\n  Las 10 facturas más grandes del mes, con su tipo:")
+for v in sorted(ventas_mes, key=lambda x: -x.total_principal)[:10]:
+    cxc = CuentaPorCobrar.objects.filter(venta=v).first()
+    saldo = cxc.saldo_pendiente if cxc else Decimal('0.00')
+    print(f"    #{v.id:>5} {timezone.localtime(v.fecha):%d/%m} {v.tipo:<8} ${v.total_principal:>10,.2f}  "
+          f"fiado aún: ${saldo:>9,.2f}  {v.cliente.nombre}")
 
 titulo("FIN DEL DIAGNÓSTICO — pega esta salida completa para analizarla")

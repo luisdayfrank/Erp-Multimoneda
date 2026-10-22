@@ -283,6 +283,15 @@ let configVuelto = {
     vuelto_obligatorio_efectivo: false
 };
 
+// >>> FASE 1.6: configuración de tasas + BCV (se cargan de /config/tasa-status/) <<<
+let configTasa = {
+    usar_tasa_bcv: false,
+    mostrar_diferencia_tasa_en_pos: true,
+    alertar_si_diferencia_tasa_supera: 0
+};
+// Última tasa BCV conocida: { tasa, fuente, obtenida_el, es_manual } | null
+let tasaBCVReferencia = null;
+
 // Función para cargar configuración (agregar después de cargarDatosIniciales)
 async function cargarConfiguracionStock() {
     try {
@@ -291,6 +300,10 @@ async function cargarConfiguracionStock() {
         configVuelto.permitir_vuelto_a_saldo_favor = config.permitir_vuelto_a_saldo_favor !== false;
         configVuelto.permitir_vuelto_a_cxc = config.permitir_vuelto_a_cxc !== false;
         configVuelto.vuelto_obligatorio_efectivo = config.vuelto_obligatorio_efectivo === true;
+        // FASE 1.6: flags de tasas
+        configTasa.usar_tasa_bcv = config.usar_tasa_bcv === true;
+        configTasa.mostrar_diferencia_tasa_en_pos = config.mostrar_diferencia_tasa_en_pos !== false;
+        configTasa.alertar_si_diferencia_tasa_supera = parseFloat(config.alertar_si_diferencia_tasa_supera) || 0;
     } catch (e) {
         console.warn("No se pudo cargar configuración de stock:", e);
         permitirStockNegativo = false;
@@ -2336,10 +2349,16 @@ async function verificarTasaDiaria() {
         configVuelto.permitir_vuelto_a_saldo_favor = resp.permitir_vuelto_a_saldo_favor !== false;
         configVuelto.permitir_vuelto_a_cxc = resp.permitir_vuelto_a_cxc !== false;
         configVuelto.vuelto_obligatorio_efectivo = resp.vuelto_obligatorio_efectivo === true;
+        // FASE 1.6: configuración de tasas + BCV
+        configTasa.usar_tasa_bcv = resp.usar_tasa_bcv === true;
+        configTasa.mostrar_diferencia_tasa_en_pos = resp.mostrar_diferencia_tasa_en_pos !== false;
+        configTasa.alertar_si_diferencia_tasa_supera = parseFloat(resp.alertar_si_diferencia_tasa_supera) || 0;
         document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
         document.getElementById('tasa-anterior-display').innerText = tasaCambio.toFixed(2);
 
         if (resp.requiere_actualizacion === true) {
+            // FASE 1.6: renderizar bloque BCV antes de mostrar el modal
+            renderizarInfoTasaBCV(resp);
             const modalTasa = new bootstrap.Modal(document.getElementById('modalActualizarTasa'));
             modalTasa.show();
             return false;
@@ -2352,6 +2371,100 @@ async function verificarTasaDiaria() {
     }
 }
 
+// ==============================================================================
+// FASE 1.6 — Modal de tasa: bloque BCV, diferencia en vivo y alertas
+// ==============================================================================
+
+function renderizarInfoTasaBCV(resp) {
+    const seccion = document.getElementById('bcv-seccion');
+    if (!seccion) return; // por si el HTML no está desplegado todavía
+
+    // Si usar_tasa_bcv=False, el modal se ve exactamente igual que antes
+    if (!configTasa.usar_tasa_bcv) {
+        seccion.style.display = 'none';
+        return;
+    }
+    seccion.style.display = '';
+
+    const divError = document.getElementById('bcv-error');
+    const tasaDisplay = document.getElementById('bcv-tasa-display');
+    const fuenteDisplay = document.getElementById('bcv-fuente-display');
+
+    if (resp.tasa_bcv_hoy) {
+        tasaBCVReferencia = {
+            tasa: parseFloat(resp.tasa_bcv_hoy),
+            fuente: resp.tasa_bcv_fuente || '',
+            es_manual: resp.tasa_bcv_es_manual === true
+        };
+        tasaDisplay.innerText = parseFloat(resp.tasa_bcv_hoy).toFixed(2);
+        fuenteDisplay.innerText = (resp.tasa_bcv_fuente ? 'fuente: ' + resp.tasa_bcv_fuente : '') +
+            (resp.tasa_bcv_es_manual ? ' (manual)' : '');
+        divError.style.display = 'none';
+    } else {
+        // No se pudo consultar: se permite ingreso manual (queda como tasa_bcv_es_manual)
+        tasaBCVReferencia = null;
+        tasaDisplay.innerText = '--';
+        fuenteDisplay.innerText = '';
+        divError.style.display = '';
+    }
+
+    actualizarDiferenciaTasa();
+}
+
+// Tasa BCV de referencia para comparar: la cacheada o la ingresada manual en el modal
+function obtenerBCVReferenciaModal() {
+    if (tasaBCVReferencia && tasaBCVReferencia.tasa > 0) return tasaBCVReferencia.tasa;
+    const manual = parseFloat((document.getElementById('tasa-bcv-manual-input') || {}).value);
+    return manual > 0 ? manual : null;
+}
+
+function actualizarDiferenciaTasa() {
+    const divDif = document.getElementById('tasa-diferencia-display');
+    const banner = document.getElementById('tasa-alerta-banner');
+    if (!divDif || !banner) return;
+
+    const bcv = obtenerBCVReferenciaModal();
+    const nueva = parseFloat(document.getElementById('nueva-tasa-input').value);
+
+    if (!configTasa.usar_tasa_bcv || !configTasa.mostrar_diferencia_tasa_en_pos || !bcv || !(nueva > 0)) {
+        divDif.style.display = 'none';
+        banner.style.display = 'none';
+        return;
+    }
+
+    const difPct = ((nueva - bcv) / bcv) * 100;
+    divDif.style.display = '';
+    divDif.className = 'small mt-1 ' + (Math.abs(difPct) < 1 ? 'text-success' : Math.abs(difPct) < 3 ? 'text-warning' : 'text-danger');
+    divDif.innerText = 'Diferencia con BCV: ' + (difPct >= 0 ? '+' : '') + difPct.toFixed(2) + '%';
+
+    const umbral = configTasa.alertar_si_diferencia_tasa_supera;
+    if (umbral > 0 && Math.abs(difPct) > umbral) {
+        banner.style.display = '';
+        banner.innerText = '⚠ Diferencia superior al ' + umbral.toFixed(2) + '% permitido';
+    } else {
+        banner.style.display = 'none';
+    }
+}
+
+async function recargarTasaBCV() {
+    const btn = document.getElementById('btn-recargar-bcv');
+    if (btn) btn.disabled = true;
+    try {
+        const resp = await apiFetch('/config/tasa-bcv/actual/?force=1', 'GET');
+        renderizarInfoTasaBCV({
+            tasa_bcv_hoy: resp.tasa_bcv,
+            tasa_bcv_fuente: resp.fuente,
+            tasa_bcv_es_manual: false
+        });
+    } catch (e) {
+        const divError = document.getElementById('bcv-error');
+        if (divError) divError.style.display = '';
+        console.warn('No se pudo actualizar la tasa BCV:', e);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 async function procesarActualizacionTasa() {
     const nuevaTasa = parseFloat(document.getElementById('nueva-tasa-input').value);
     if (isNaN(nuevaTasa) || nuevaTasa <= 0) {
@@ -2359,10 +2472,35 @@ async function procesarActualizacionTasa() {
         return;
     }
 
+    // FASE 1.6: payload ampliado (campos opcionales; el backend los ignora si no aplican)
+    const payload = { tasa_cambio_actual: nuevaTasa.toFixed(2) };
+    const motivo = (document.getElementById('tasa-motivo-input') || {}).value;
+    if (motivo && motivo.trim()) payload.motivo_diferencia = motivo.trim();
+    const bcvModal = obtenerBCVReferenciaModal();
+    const bcvManual = parseFloat((document.getElementById('tasa-bcv-manual-input') || {}).value);
+    if (configTasa.usar_tasa_bcv && bcvManual > 0) payload.tasa_bcv_manual = bcvManual.toFixed(4);
+
+    // FASE 1.6: la alerta de diferencia se valida ANTES de guardar (si se cancela,
+    // no se envía nada y el modal queda abierto para corregir la tasa).
+    const umbral = configTasa.alertar_si_diferencia_tasa_supera;
+    if (configTasa.usar_tasa_bcv && umbral > 0 && bcvModal && bcvModal > 0) {
+        const difPct = ((nuevaTasa - bcvModal) / bcvModal) * 100;
+        if (Math.abs(difPct) > umbral) {
+            const ok = confirm(
+                '⚠ La diferencia con la tasa BCV es de ' + difPct.toFixed(2) +
+                '% (umbral: ' + umbral.toFixed(2) + '%).\n\n¿Deseas guardar la tasa de todos modos?'
+            );
+            if (!ok) return;
+        }
+    }
+
     try {
-        await apiFetch('/config/actualizar-tasa/', 'PUT', { tasa_cambio_actual: nuevaTasa.toFixed(2) });
+        const resp = await apiFetch('/config/actualizar-tasa/', 'PUT', payload);
         tasaCambio = nuevaTasa;
         document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
+        if (resp && resp.bcv && resp.bcv.alerta === true) {
+            console.warn('Tasa guardada con diferencia vs BCV:', resp.bcv.diferencia_pct, '%');
+        }
 
         const modalEl = document.getElementById('modalActualizarTasa');
         const modalInst = bootstrap.Modal.getInstance(modalEl);

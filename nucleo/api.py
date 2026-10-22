@@ -28,7 +28,7 @@ from .models import (
     RutaMercadoGasto,
     TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
     InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto, ReciboAbono,
-    CierreCaja
+    CierreCaja, TasaCambioDiaria
 )
 from .serializers import (
     PresentacionProductoSerializer, VentaSerializer, CompraSerializer, 
@@ -43,6 +43,7 @@ from .serializers import (
     CierreCajaSerializer
 )
 from . import cierre_service
+from .services.tasas import ProveedorTasaBCV  # FASE 1.6
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
 
@@ -1056,7 +1057,7 @@ class TasaStatusAPIView(APIView):
         if config.tasa_actualizada_el:
             requiere = timezone.localdate(config.tasa_actualizada_el) != hoy
 
-        return Response({
+        data = {
             "tasa_cambio_actual": float(config.tasa_cambio_actual),
             "tasa_actualizada_el": config.tasa_actualizada_el.isoformat() if config.tasa_actualizada_el else None,
             "requiere_actualizacion": requiere,
@@ -1068,7 +1069,39 @@ class TasaStatusAPIView(APIView):
             "permitir_vuelto_a_saldo_favor": config.permitir_vuelto_a_saldo_favor,
             "permitir_vuelto_a_cxc": config.permitir_vuelto_a_cxc,
             "vuelto_obligatorio_efectivo": config.vuelto_obligatorio_efectivo,
-        })
+            # >>> FASE 1.6: configuración de tasas (para el POS) <<<
+            "usar_tasa_bcv": config.usar_tasa_bcv,
+            "mostrar_diferencia_tasa_en_pos": config.mostrar_diferencia_tasa_en_pos,
+            "alertar_si_diferencia_tasa_supera": float(config.alertar_si_diferencia_tasa_supera),
+        }
+
+        # FASE 1.6: bloque informativo de la tasa BCV del día.
+        # Solo se consulta si usar_tasa_bcv=True (cero llamadas externas si está apagado).
+        if config.usar_tasa_bcv:
+            tasa_hoy = TasaCambioDiaria.objects.filter(fecha=hoy).first()
+            if tasa_hoy and tasa_hoy.tasa_bcv:
+                data["tasa_bcv_hoy"] = float(tasa_hoy.tasa_bcv)
+                data["tasa_bcv_fuente"] = tasa_hoy.tasa_bcv_fuente
+                data["tasa_bcv_obtenida_el"] = tasa_hoy.tasa_bcv_obtenida_el.isoformat() if tasa_hoy.tasa_bcv_obtenida_el else None
+                data["tasa_bcv_es_manual"] = tasa_hoy.tasa_bcv_es_manual
+                data["diferencia_pct"] = float(tasa_hoy.diferencia_porcentual or 0)
+            else:
+                # Consulta en vivo (con cache de 1h) si aún no está registrada hoy
+                resultado = ProveedorTasaBCV.consultar(config.bcv_timeout_segundos)
+                if resultado:
+                    tasa_bcv = resultado['tasa']
+                    data["tasa_bcv_hoy"] = float(tasa_bcv)
+                    data["tasa_bcv_fuente"] = resultado['fuente']
+                    data["tasa_bcv_obtenida_el"] = resultado['obtenida_el'].isoformat()
+                    data["tasa_bcv_es_manual"] = False
+                    data["diferencia_pct"] = float(
+                        ((config.tasa_cambio_actual - tasa_bcv) / tasa_bcv) * 100
+                    )
+                else:
+                    data["tasa_bcv_hoy"] = None
+                    data["tasa_bcv_error"] = "No se pudo consultar la tasa BCV"
+
+        return Response(data)
 
 class ActualizarTasaAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
@@ -1083,16 +1116,209 @@ class ActualizarTasaAPIView(APIView):
             return Response({"error": "Debes enviar tasa_cambio_actual"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            config.tasa_cambio_actual = Decimal(str(nueva_tasa))
-            config.tasa_actualizada_el = timezone.now()
-            config.save()
+            nueva_tasa = Decimal(str(nueva_tasa))
+        except Exception:
+            return Response({"error": "tasa_cambio_actual inválida"}, status=status.HTTP_400_BAD_REQUEST)
+        if nueva_tasa <= 0:
+            return Response({"error": "La tasa debe ser mayor a 0"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # FASE 1.6: campos opcionales (retrocompatibles: el POS viejo no los envía)
+        motivo = str(request.data.get('motivo_diferencia', '') or '').strip()
+        tasa_bcv_manual = request.data.get('tasa_bcv_manual')
+        if tasa_bcv_manual not in (None, ''):
+            try:
+                tasa_bcv_manual = Decimal(str(tasa_bcv_manual))
+            except Exception:
+                return Response({"error": "tasa_bcv_manual inválida"}, status=status.HTTP_400_BAD_REQUEST)
+            if tasa_bcv_manual <= 0:
+                return Response({"error": "tasa_bcv_manual debe ser mayor a 0"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            tasa_bcv_manual = None
+
+        try:
+            with transaction.atomic():
+                # 1. Actualizar configuración global (siempre, igual que antes)
+                config.tasa_cambio_actual = nueva_tasa
+                config.tasa_actualizada_el = timezone.now()
+                config.save()
+
+                # 2. FASE 1.6: registrar en el historial diario de tasas
+                respuesta_bcv = None
+                if config.registrar_historial_tasas:
+                    hoy = timezone.localdate()
+                    existente = TasaCambioDiaria.objects.filter(fecha=hoy).first()
+
+                    if tasa_bcv_manual is not None:
+                        # Entrada explícita del usuario: siempre gana (queda como manual)
+                        tasa_bcv = tasa_bcv_manual
+                        fuente = 'manual'
+                        obtenida_el = timezone.now()
+                        es_manual = True
+                    elif config.usar_tasa_bcv:
+                        # Si ya hay una tasa BCV guardada hoy, se respeta
+                        if existente and existente.tasa_bcv:
+                            tasa_bcv = existente.tasa_bcv
+                            fuente = existente.tasa_bcv_fuente
+                            obtenida_el = existente.tasa_bcv_obtenida_el
+                            es_manual = existente.tasa_bcv_es_manual
+                        else:
+                            resultado = ProveedorTasaBCV.consultar(config.bcv_timeout_segundos)
+                            if resultado:
+                                tasa_bcv = resultado['tasa']
+                                fuente = resultado['fuente']
+                                obtenida_el = resultado['obtenida_el']
+                                es_manual = False
+                            else:
+                                tasa_bcv = None
+                                fuente = ''
+                                obtenida_el = None
+                                es_manual = False
+                    else:
+                        tasa_bcv = None
+                        fuente = ''
+                        obtenida_el = None
+                        es_manual = False
+
+                    TasaCambioDiaria.objects.update_or_create(
+                        fecha=hoy,
+                        defaults={
+                            'tasa_bcv': tasa_bcv,
+                            'tasa_bcv_fuente': fuente or '',
+                            'tasa_bcv_obtenida_el': obtenida_el,
+                            'tasa_bcv_es_manual': es_manual,
+                            'tasa_negocio': nueva_tasa,
+                            'tasa_negocio_motivo': motivo,
+                            'usuario_actualizo': request.user,
+                        }
+                    )
+
+                    if tasa_bcv:
+                        diferencia_pct = ((nueva_tasa - tasa_bcv) / tasa_bcv) * 100
+                        umbral = config.alertar_si_diferencia_tasa_supera
+                        respuesta_bcv = {
+                            'tasa_bcv': float(tasa_bcv),
+                            'fuente': fuente,
+                            'es_manual': es_manual,
+                            'diferencia_pct': float(diferencia_pct),
+                            'alerta': bool(umbral > 0 and abs(diferencia_pct) > umbral),
+                        }
+
             return Response({
                 "mensaje": "Tasa actualizada correctamente",
                 "tasa_cambio_actual": float(config.tasa_cambio_actual),
-                "tasa_actualizada_el": config.tasa_actualizada_el.isoformat()
+                "tasa_actualizada_el": config.tasa_actualizada_el.isoformat(),
+                "bcv": respuesta_bcv,  # None si no se consultó / no hubo tasa BCV
             })
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ==============================================================================
+# FASE 1.6 — Historial de tasas + consulta BCV (Anexo B.6)
+# ==============================================================================
+class TasaBCVActualAPIView(APIView):
+    """GET /config/tasa-bcv/actual/?force=1 — consulta en vivo (cache 1h)."""
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        config = ConfiguracionGlobal.objects.first()
+        if not config:
+            return Response({"error": "No existe configuración global"}, status=status.HTTP_400_BAD_REQUEST)
+        if not config.usar_tasa_bcv:
+            return Response(
+                {"error": "La consulta BCV está desactivada (usar_tasa_bcv=False)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        force = str(request.query_params.get('force', '')).lower() in ('1', 'true', 'yes')
+        resultado = ProveedorTasaBCV.consultar(config.bcv_timeout_segundos, force=force)
+        if not resultado:
+            return Response(
+                {"error": "No se pudo consultar la tasa BCV"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        tasa_bcv = resultado['tasa']
+        diferencia = None
+        if tasa_bcv > 0:
+            diferencia = ((config.tasa_cambio_actual - tasa_bcv) / tasa_bcv) * 100
+
+        return Response({
+            "tasa_bcv": float(tasa_bcv),
+            "fuente": resultado['fuente'],
+            "obtenida_el": resultado['obtenida_el'].isoformat(),
+            "cache": resultado.get('cache', False),
+            "tasa_negocio": float(config.tasa_cambio_actual),
+            "diferencia_pct": float(diferencia) if diferencia is not None else None,
+        })
+
+
+class TasaHistoricoAPIView(APIView):
+    """GET /config/tasas/historico/?desde=YYYY-MM-DD&hasta=YYYY-MM-DD"""
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        queryset = TasaCambioDiaria.objects.all().order_by('-fecha')
+
+        desde = request.query_params.get('desde')
+        hasta = request.query_params.get('hasta')
+        try:
+            if desde:
+                queryset = queryset.filter(fecha__gte=datetime.strptime(desde, '%Y-%m-%d').date())
+            if hasta:
+                queryset = queryset.filter(fecha__lte=datetime.strptime(hasta, '%Y-%m-%d').date())
+        except ValueError:
+            return Response(
+                {"error": "Formato de fecha inválido (usa YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = [{
+            "fecha": fila.fecha.isoformat(),
+            "tasa_bcv": float(fila.tasa_bcv) if fila.tasa_bcv is not None else None,
+            "tasa_bcv_fuente": fila.tasa_bcv_fuente,
+            "tasa_bcv_es_manual": fila.tasa_bcv_es_manual,
+            "tasa_negocio": float(fila.tasa_negocio),
+            "tasa_negocio_motivo": fila.tasa_negocio_motivo,
+            "diferencia_pct": float(fila.diferencia_porcentual) if fila.diferencia_porcentual is not None else None,
+            "usuario_actualizo": fila.usuario_actualizo.username if fila.usuario_actualizo else None,
+        } for fila in queryset]
+
+        return Response({"resultados": data, "total": len(data)})
+
+
+class TasaDiaDetalleAPIView(APIView):
+    """GET /config/tasas/<fecha>/ — detalle de un día específico (YYYY-MM-DD)."""
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, fecha):
+        try:
+            fecha_dt = datetime.strptime(fecha, '%Y-%m-%d').date()
+        except ValueError:
+            return Response(
+                {"error": "Formato de fecha inválido (usa YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fila = TasaCambioDiaria.objects.filter(fecha=fecha_dt).first()
+        if not fila:
+            return Response({"error": "No hay tasa registrada para esa fecha"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            "fecha": fila.fecha.isoformat(),
+            "tasa_bcv": float(fila.tasa_bcv) if fila.tasa_bcv is not None else None,
+            "tasa_bcv_fuente": fila.tasa_bcv_fuente,
+            "tasa_bcv_obtenida_el": fila.tasa_bcv_obtenida_el.isoformat() if fila.tasa_bcv_obtenida_el else None,
+            "tasa_bcv_es_manual": fila.tasa_bcv_es_manual,
+            "tasa_negocio": float(fila.tasa_negocio),
+            "tasa_negocio_motivo": fila.tasa_negocio_motivo,
+            "diferencia_pct": float(fila.diferencia_porcentual) if fila.diferencia_porcentual is not None else None,
+            "diferencia_absoluta": float(fila.diferencia_absoluta) if fila.diferencia_absoluta is not None else None,
+            "usuario_actualizo": fila.usuario_actualizo.username if fila.usuario_actualizo else None,
+            "creado_el": fila.creado_el.isoformat(),
+            "actualizado_el": fila.actualizado_el.isoformat(),
+        })
+
 
 class BorradorFacturaListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]

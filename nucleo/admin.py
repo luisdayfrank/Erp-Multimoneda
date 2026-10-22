@@ -40,7 +40,8 @@ from .models import (
     BorradorFactura,
     TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
     ReciboAbono, ReciboAbonoAplicacion,
-    CierreCaja, CierrePorMetodoPago
+    CierreCaja, CierrePorMetodoPago,
+    TasaCambioDiaria  # FASE 1.6
 )
 
 # ==============================================================================
@@ -52,7 +53,9 @@ class ConfiguracionGlobalAdmin(admin.ModelAdmin):
     list_display = (
         'moneda_principal', 'moneda_secundaria', 'tasa_cambio_actual', 'permitir_stock_negativo',
         # FASE 1.5: políticas de vuelto visibles de un vistazo
-        'permitir_vuelto_a_cxc', 'permitir_vuelto_a_saldo_favor', 'vuelto_obligatorio_efectivo'
+        'permitir_vuelto_a_cxc', 'permitir_vuelto_a_saldo_favor', 'vuelto_obligatorio_efectivo',
+        # FASE 1.6: tasas
+        'registrar_historial_tasas', 'usar_tasa_bcv'
     )
     list_editable = ('permitir_stock_negativo',)
 
@@ -81,6 +84,30 @@ class MetodoPagoAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'moneda_referencia', 'activo', 'es_efectivo')
     list_filter = ('moneda_referencia', 'activo', 'es_efectivo')
     search_fields = ('nombre',)
+
+# ==============================================================================
+# FASE 1.6 (Anexo B.10) — Historial diario de tasas
+# ==============================================================================
+
+@admin.register(TasaCambioDiaria)
+class TasaCambioDiariaAdmin(admin.ModelAdmin):
+    list_display = (
+        'fecha', 'tasa_bcv', 'tasa_negocio', 'diferencia_porcentual_display',
+        'tasa_bcv_fuente', 'usuario_actualizo'
+    )
+    list_filter = ('tasa_bcv_es_manual', 'tasa_bcv_fuente', 'fecha')
+    date_hierarchy = 'fecha'
+    readonly_fields = ('creado_el', 'actualizado_el', 'tasa_bcv_obtenida_el')
+    search_fields = ('tasa_negocio_motivo', 'tasa_bcv_fuente')
+    ordering = ('-fecha',)
+
+    def diferencia_porcentual_display(self, obj):
+        d = obj.diferencia_porcentual
+        if d is None:
+            return "—"
+        color = "🟢" if abs(d) < 1 else "🟡" if abs(d) < 3 else "🔴"
+        return f"{color} {d:+.2f}%"
+    diferencia_porcentual_display.short_description = "Dif. vs BCV"
 
 # ==============================================================================
 # 2. USUARIOS Y ENTIDADES

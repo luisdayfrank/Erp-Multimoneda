@@ -6,6 +6,9 @@ from rest_framework_simplejwt.views import (
 from .api import (
     TasaStatusAPIView,
     ActualizarTasaAPIView,
+    TasaBCVActualAPIView,      # FASE 1.6
+    TasaHistoricoAPIView,      # FASE 1.6
+    TasaDiaDetalleAPIView,     # FASE 1.6
     CatalogoPosAPIView, 
     ProcesarVentaAPIView,
     VentasTurnoAPIView,  # <<< NUEVO
@@ -108,6 +111,11 @@ urlpatterns = [
     # tasa
     path('api/v1/config/tasa-status/', TasaStatusAPIView.as_view(), name='api_tasa_status'),
     path('api/v1/config/actualizar-tasa/', ActualizarTasaAPIView.as_view(), name='api_actualizar_tasa'),
+    # FASE 1.6: historial de tasas + BCV
+    # OJO: 'tasas/historico/' debe ir ANTES que 'tasas/<str:fecha>/'
+    path('api/v1/config/tasa-bcv/actual/', TasaBCVActualAPIView.as_view(), name='api_tasa_bcv_actual'),
+    path('api/v1/config/tasas/historico/', TasaHistoricoAPIView.as_view(), name='api_tasas_historico'),
+    path('api/v1/config/tasas/<str:fecha>/', TasaDiaDetalleAPIView.as_view(), name='api_tasa_dia'),
 
     # borradores
     path('api/v1/borradores/', BorradorFacturaListCreateAPIView.as_view(), name='api_borradores'),

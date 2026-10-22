@@ -41,6 +41,31 @@ class ConfiguracionGlobal(models.Model):
                   "(el backend rechaza distribuciones a deuda o saldo a favor)"
     )
 
+    # >>> FASE 1.6 (Anexo B/C): Historial de tasas + consulta BCV <<<
+    registrar_historial_tasas = models.BooleanField(
+        default=True,
+        help_text="Si está activo, cada actualización de tasa crea/actualiza "
+                  "una fila en TasaCambioDiaria"
+    )
+    usar_tasa_bcv = models.BooleanField(
+        default=False,
+        help_text="Si está activo, se consulta automáticamente la tasa oficial "
+                  "del BCV al actualizar la tasa del día (requiere internet)"
+    )
+    bcv_timeout_segundos = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Timeout (segundos) para cada intento de consulta al API del BCV"
+    )
+    mostrar_diferencia_tasa_en_pos = models.BooleanField(
+        default=True,
+        help_text="El modal de tasa del POS muestra la tasa BCV y la diferencia %"
+    )
+    alertar_si_diferencia_tasa_supera = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.00'),
+        help_text="Si la diferencia porcentual BCV vs negocio supera este valor, "
+                  "el POS muestra una alerta. 0 = desactivado."
+    )
+
 
     class Meta:
         verbose_name = "Configuración Global"
@@ -49,10 +74,73 @@ class ConfiguracionGlobal(models.Model):
     def save(self, *args, **kwargs):
         if self.__class__.objects.count() > 0 and not self.pk:
             raise ValidationError("Solo puede existir una instancia de ConfiguracionGlobal")
+        # FASE 1.6: combinación inválida del Anexo B -> usar BCV exige historial.
+        if self.usar_tasa_bcv and not self.registrar_historial_tasas:
+            self.registrar_historial_tasas = True
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Configuración Tasa: {self.tasa_cambio_actual} {self.moneda_secundaria}/{self.moneda_principal}"
+
+
+class TasaCambioDiaria(models.Model):
+    """
+    FASE 1.6 (Anexo B) — Una fila por día. Inmutable una vez usado en cierre.
+    Registra la tasa oficial BCV y la tasa que aplicó el negocio, para auditoría
+    cambiaria, detección de spread y reconstrucción de cálculos históricos.
+    """
+
+    fecha = models.DateField(unique=True, db_index=True)
+
+    # --- Tasa oficial BCV ---
+    tasa_bcv = models.DecimalField(
+        max_digits=15, decimal_places=4, null=True, blank=True,
+        help_text="Tasa oficial publicada por el BCV (BS/USD)"
+    )
+    tasa_bcv_fuente = models.CharField(
+        max_length=100, blank=True,
+        help_text="Ej: 'dolarapi.com', 'pydolarve.org', 'manual'"
+    )
+    tasa_bcv_obtenida_el = models.DateTimeField(null=True, blank=True)
+    tasa_bcv_es_manual = models.BooleanField(default=False)
+
+    # --- Tasa aplicada por el negocio ---
+    tasa_negocio = models.DecimalField(
+        max_digits=15, decimal_places=4,
+        help_text="Tasa que usa el negocio en POS y compras"
+    )
+    tasa_negocio_motivo = models.CharField(
+        max_length=250, blank=True,
+        help_text="Opcional: motivo de diferencia con BCV (comisión, spread, etc.)"
+    )
+
+    # --- Metadatos ---
+    usuario_actualizo = models.ForeignKey(
+        'Usuario', on_delete=models.RESTRICT, null=True, blank=True
+    )
+    creado_el = models.DateTimeField(auto_now_add=True)
+    actualizado_el = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-fecha']
+        verbose_name = "Tasa de Cambio Diaria"
+        verbose_name_plural = "Tasas de Cambio Diarias"
+
+    @property
+    def diferencia_porcentual(self):
+        if self.tasa_bcv and self.tasa_bcv > 0:
+            return ((self.tasa_negocio - self.tasa_bcv) / self.tasa_bcv) * 100
+        return None
+
+    @property
+    def diferencia_absoluta(self):
+        if self.tasa_bcv:
+            return self.tasa_negocio - self.tasa_bcv
+        return None
+
+    def __str__(self):
+        return f"{self.fecha}: negocio {self.tasa_negocio} / BCV {self.tasa_bcv or '—'}"
+
 
 class Impuesto(models.Model):
     nombre = models.CharField(max_length=50, unique=True, help_text="Ej. IVA, Exento")

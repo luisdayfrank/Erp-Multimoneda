@@ -26,6 +26,21 @@ class ConfiguracionGlobal(models.Model):
         help_text="Fecha y hora de la última actualización de la tasa"
     )
 
+    # >>> FASE 1.5 (Anexo A/C): Vuelto configurable <<<
+    permitir_vuelto_a_saldo_favor = models.BooleanField(
+        default=True,
+        help_text="Permite guardar el excedente (vuelto) como saldo a favor del cliente"
+    )
+    permitir_vuelto_a_cxc = models.BooleanField(
+        default=True,
+        help_text="Permite aplicar el excedente (vuelto) a deudas pendientes del cliente"
+    )
+    vuelto_obligatorio_efectivo = models.BooleanField(
+        default=False,
+        help_text="Si está activo, el vuelto solo puede entregarse en efectivo "
+                  "(el backend rechaza distribuciones a deuda o saldo a favor)"
+    )
+
 
     class Meta:
         verbose_name = "Configuración Global"
@@ -551,8 +566,21 @@ class Venta(TransaccionBase):
                 inventario.stock_actual_unidades_base -= cantidad_descontar_base
                 inventario.save()
 
+            # >>> FASE 1.5 (Anexo A): distribución del vuelto <<<
+            # Solo aplica si el payload envió 'vuelto_distribucion' Y hay
+            # excedente real (pagos > total). Sin eso, comportamiento legacy.
+            distribucion_vuelto = getattr(self, '_vuelto_distribucion', None)
+            total_pagado_proc = sum(p.monto_equivalente_principal for p in self.pagos.all())
+            vuelto_total_proc = max(Decimal('0.00'), total_pagado_proc - self.total_principal)
+            usar_distribucion_vuelto = bool(distribucion_vuelto) and vuelto_total_proc > Decimal('0.00')
+
+            if usar_distribucion_vuelto:
+                resultado.update(
+                    self._procesar_distribucion_vuelto(distribucion_vuelto, vuelto_total_proc)
+                )
+
             # 2. Procesar pagos y CxC si es crédito
-            if self.tipo == 'CREDITO':
+            if self.tipo == 'CREDITO' and not usar_distribucion_vuelto:
                 cliente = self.cliente
                 dinero_fisico = sum(pago.monto_equivalente_principal for pago in self.pagos.all())
                 
@@ -789,12 +817,12 @@ class Venta(TransaccionBase):
                         referencia=f"Recibo desde Venta #{self.id}"
                     )
             
-            # >>> FASE 1B: registrar el vuelto de la venta CONTADO <<<
+            # >>> FASE 1B/1.5: registrar el vuelto de la venta CONTADO <<<
             # Antes el excedente (pagos - total) NO se registraba en ningún lado:
             # el POS mostraba "VUELTO" pero el backend lo ignoraba y el cierre
             # daba faltante falso. Se asume que todo el excedente se entrega
-            # físicamente en USD equivalente (la Fase 1.5 permitirá distribuirlo).
-            if self.tipo == 'CONTADO':
+            # físicamente en USD equivalente salvo que se envíe distribución.
+            if self.tipo == 'CONTADO' and not usar_distribucion_vuelto:
                 total_pagado_contado = sum(
                     pago.monto_equivalente_principal for pago in self.pagos.all()
                 )
@@ -808,6 +836,225 @@ class Venta(TransaccionBase):
             # 3. Cambiar estado
             self.estado = 'PROCESADA'
             self.save()
+
+        return resultado
+
+    def _procesar_distribucion_vuelto(self, distribucion, vuelto_total):
+        """
+        FASE 1.5 (Anexo A): el pago cubre la venta y el EXCEDENTE (vuelto) se
+        distribuye según elección del cajero:
+            ENTREGAR   → cambio físico (sale de la gaveta)
+            CXC        → se aplica FIFO a deudas viejas (no sale de la gaveta)
+            SALDO      → saldo a favor del cliente (no sale de la gaveta)
+            MIXTO      → combinación
+
+        Reglas:
+        - La distribución asignada no puede exceder el vuelto_total (±$0.01).
+        - Lo no asignado se aplica por defecto: CxC vieja → saldo a favor → efectivo.
+        - Si el vuelto aplicable a CxC no encuentra deuda suficiente, el resto
+          pasa a saldo a favor (o efectivo si la política no lo permite).
+        - En este modo NO se usa el saldo a favor existente del cliente (quedan
+          intactos) y NO se aplica el dinero a deudas viejas salvo el vuelto
+          elegido: el pago cubre la venta nueva primero.
+        - Respeta los toggles de ConfiguracionGlobal (Anexo C).
+
+        Devuelve un dict con los campos extra para la respuesta de la API.
+        """
+        config = ConfiguracionGlobal.objects.first()
+        permitir_cxc = config.permitir_vuelto_a_cxc if config else True
+        permitir_saldo = config.permitir_vuelto_a_saldo_favor if config else True
+        obligatorio_efectivo = config.vuelto_obligatorio_efectivo if config else False
+
+        def D(valor):
+            try:
+                return Decimal(str(valor or '0'))
+            except Exception:
+                return Decimal('0.00')
+
+        entregado_p = max(D(distribucion.get('entregado_principal')), Decimal('0.00'))
+        entregado_s = max(D(distribucion.get('entregado_secundaria')), Decimal('0.00'))
+        aplicado_cxc = max(D(distribucion.get('aplicado_cxc_principal')), Decimal('0.00'))
+        saldo_favor = max(D(distribucion.get('saldo_favor_principal')), Decimal('0.00'))
+
+        # --- Validaciones de política ---
+        if obligatorio_efectivo and (aplicado_cxc > Decimal('0.00') or saldo_favor > Decimal('0.00')):
+            raise ValueError("La política de la empresa exige que el vuelto se entregue solo en efectivo.")
+        if aplicado_cxc > Decimal('0.00') and not permitir_cxc:
+            raise ValueError("La política de la empresa no permite aplicar el vuelto a deudas (CxC).")
+        if saldo_favor > Decimal('0.00') and not permitir_saldo:
+            raise ValueError("La política de la empresa no permite guardar el vuelto como saldo a favor.")
+
+        tasa = self.tasa_cambio_historica or Decimal('1')
+        entregado_equiv = entregado_p + (entregado_s / tasa if tasa > 0 else Decimal('0'))
+        asignado = entregado_equiv + aplicado_cxc + saldo_favor
+
+        if asignado > vuelto_total + Decimal('0.01'):
+            raise ValueError(
+                f"La distribución del vuelto (${asignado:.2f}) excede el excedente real (${vuelto_total:.2f})."
+            )
+
+        # --- Lo no asignado → fallback: CxC vieja → saldo a favor → efectivo ---
+        restante = vuelto_total - asignado
+        if restante > Decimal('0.01'):
+            hay_deudas = CuentaPorCobrar.objects.filter(
+                cliente=self.cliente, estado__in=['PENDIENTE', 'VENCIDA']
+            ).exclude(venta=self).exists()
+            if permitir_cxc and hay_deudas:
+                aplicado_cxc += restante
+            elif permitir_saldo:
+                saldo_favor += restante
+            else:
+                entregado_p += restante
+
+        # --- Registrar en la venta ---
+        self.vuelto_total_principal = vuelto_total
+        self.vuelto_entregado_principal = entregado_p
+        self.vuelto_entregado_secundaria = entregado_s
+        self.vuelto_aplicado_cxc_principal = Decimal('0.00')
+        self.vuelto_a_saldo_favor_principal = saldo_favor
+
+        metodo_unico = self.pagos.first().metodo if self.pagos.count() == 1 else None
+        abonos_viejas = []
+
+        # --- 1) Vuelto aplicado a deudas viejas (FIFO) ---
+        if aplicado_cxc > Decimal('0.00'):
+            restante_cxc = aplicado_cxc
+            viejas = CuentaPorCobrar.objects.filter(
+                cliente=self.cliente, estado__in=['PENDIENTE', 'VENCIDA']
+            ).exclude(venta=self).order_by('fecha_creacion', 'id')
+
+            for cxc_vieja in viejas:
+                if restante_cxc <= Decimal('0.00'):
+                    break
+                monto_aplicar = min(restante_cxc, cxc_vieja.saldo_pendiente)
+                if monto_aplicar <= 0:
+                    continue
+                PagoCuentaCobrar.objects.create(
+                    cuenta=cxc_vieja,
+                    usuario=self.usuario,
+                    monto_abono_principal=monto_aplicar,
+                    tasa_cambio_pago=self.tasa_cambio_historica,
+                    metodo=metodo_unico,
+                    sesion_caja=self.sesion_caja,
+                    origen='VUELTO_VENTA',
+                    referencia=f"Vuelto Venta #{self.id}"
+                )
+                cxc_vieja.saldo_pendiente -= monto_aplicar
+                if cxc_vieja.saldo_pendiente <= Decimal('0.00'):
+                    cxc_vieja.saldo_pendiente = Decimal('0.00')
+                    cxc_vieja.estado = 'PAGADA'
+                cxc_vieja.save()
+                restante_cxc -= monto_aplicar
+                abonos_viejas.append({
+                    'cxc_id': cxc_vieja.id,
+                    'venta_id': cxc_vieja.venta.id if cxc_vieja.venta else None,
+                    'monto_aplicado': monto_aplicar,
+                    'saldo_restante': cxc_vieja.saldo_pendiente,
+                    'estado': cxc_vieja.estado,
+                    'origen': 'VUELTO_VENTA'
+                })
+
+            aplicado_real = aplicado_cxc - restante_cxc
+            self.vuelto_aplicado_cxc_principal = aplicado_real
+
+            if restante_cxc > Decimal('0.01'):
+                # No había deuda vieja suficiente → saldo a favor (o efectivo)
+                if permitir_saldo:
+                    saldo_favor += restante_cxc
+                    self.vuelto_a_saldo_favor_principal = saldo_favor
+                else:
+                    entregado_p += restante_cxc
+                    self.vuelto_entregado_principal = entregado_p
+
+        # --- 2) Saldo a favor ---
+        if saldo_favor > Decimal('0.00'):
+            self.cliente.saldo_a_favor += saldo_favor
+            self.cliente.save(update_fields=['saldo_a_favor'])
+
+        # --- 3) CxC nueva + recibo (solo crédito) ---
+        resultado = {
+            'abonos_cxc_viejas': abonos_viejas,
+            'saldo_favor_usado': Decimal('0.00'),
+            'saldo_favor_a_nueva': Decimal('0.00'),
+            'sobrante_abono': saldo_favor,
+            'saldo_restante': Decimal('0.00'),
+            'estado_cxc': 'PAGADA',
+            'vuelto_distribuido': True,
+        }
+
+        if self.tipo == 'CREDITO':
+            cxc = CuentaPorCobrar.objects.create(
+                venta=self,
+                cliente=self.cliente,
+                monto_total=self.total_principal,
+                saldo_pendiente=Decimal('0.00'),
+                estado='PAGADA',
+                fecha_creacion=timezone.localtime(self.fecha).date()
+            )
+            PagoCuentaCobrar.objects.create(
+                cuenta=cxc,
+                usuario=self.usuario,
+                monto_abono_principal=self.total_principal,
+                tasa_cambio_pago=self.tasa_cambio_historica,
+                metodo=metodo_unico,
+                sesion_caja=self.sesion_caja,
+                origen='COBRO_POS',
+                referencia=f"Pago completo (con distribución de vuelto) - Venta #{self.id}"
+            )
+
+            abonos_para_recibo = []
+            for ab in abonos_viejas:
+                try:
+                    cxc_vieja = CuentaPorCobrar.objects.get(pk=ab['cxc_id'])
+                    abonos_para_recibo.append({
+                        'cxc': cxc_vieja,
+                        'monto_aplicado': ab['monto_aplicado'],
+                        'saldo_antes': ab['monto_aplicado'] + ab['saldo_restante'],
+                        'saldo_despues': ab['saldo_restante'],
+                        'origen_dinero': 'EFECTIVO'
+                    })
+                except CuentaPorCobrar.DoesNotExist:
+                    pass
+            abonos_para_recibo.append({
+                'cxc': cxc,
+                'monto_aplicado': self.total_principal,
+                'saldo_antes': self.total_principal,
+                'saldo_despues': Decimal('0.00'),
+                'origen_dinero': 'EFECTIVO'
+            })
+
+            desglose = []
+            for pago in self.pagos.all():
+                desglose.append({
+                    'metodo_id': pago.metodo.id,
+                    'metodo_nombre': pago.metodo.nombre,
+                    'monto_pagado': float(pago.monto_pagado),
+                    'monto_equivalente_principal': float(pago.monto_equivalente_principal),
+                    'referencia': pago.referencia or ''
+                })
+
+            ReciboAbono.crear_desde_abonos(
+                cliente=self.cliente,
+                usuario=self.usuario,
+                tasa_cambio=self.tasa_cambio_historica,
+                monto_total=sum(p.monto_equivalente_principal for p in self.pagos.all()),
+                desglose_metodos=desglose,
+                origen='POS_VENTA',
+                abonos_list=abonos_para_recibo,
+                venta_origen=self,
+                sobrante=saldo_favor,
+                sesion_caja=self.sesion_caja,
+                referencia=f"Recibo desde Venta #{self.id} (vuelto distribuido)"
+            )
+
+            deuda_total = CuentaPorCobrar.objects.filter(
+                cliente=self.cliente, estado__in=['PENDIENTE', 'VENCIDA']
+            ).exclude(venta=self).aggregate(total=models.Sum('saldo_pendiente'))['total'] or Decimal('0.00')
+            resultado['deuda_total_cliente'] = deuda_total
+            resultado['abono_nueva_cxc'] = self.total_principal
+        else:
+            resultado['abono_nueva_cxc'] = Decimal('0.00')
+            resultado['deuda_total_cliente'] = Decimal('0.00')
 
         return resultado
 

@@ -170,6 +170,13 @@ class ProcesarVentaAPIView(APIView):
                     "estado_cxc": resultado_proceso['estado_cxc'],
                     "saldo_favor_cliente": float(cliente.saldo_a_favor),
                     "saldo_favor_a_nueva": float(resultado_proceso.get('saldo_favor_a_nueva', Decimal('0'))),
+                    # >>> FASE 1.5: vuelto registrado y distribuido <<<
+                    "vuelto_total_principal": float(venta.vuelto_total_principal),
+                    "vuelto_entregado_principal": float(venta.vuelto_entregado_principal),
+                    "vuelto_entregado_secundaria": float(venta.vuelto_entregado_secundaria),
+                    "vuelto_aplicado_cxc_principal": float(venta.vuelto_aplicado_cxc_principal),
+                    "vuelto_a_saldo_favor_principal": float(venta.vuelto_a_saldo_favor_principal),
+                    "vuelto_distribuido": bool(resultado_proceso.get('vuelto_distribuido', False)),
                     "abonos_cxc_viejas": [
                         {
                             "cxc_id": a['cxc_id'],
@@ -1057,6 +1064,10 @@ class TasaStatusAPIView(APIView):
             "moneda_secundaria": config.moneda_secundaria,
             "permitir_stock_negativo": config.permitir_stock_negativo,
             "cajero_puede_cambiar_precio": config.cajero_puede_cambiar_precio,
+            # >>> FASE 1.5: políticas de vuelto (para el POS) <<<
+            "permitir_vuelto_a_saldo_favor": config.permitir_vuelto_a_saldo_favor,
+            "permitir_vuelto_a_cxc": config.permitir_vuelto_a_cxc,
+            "vuelto_obligatorio_efectivo": config.vuelto_obligatorio_efectivo,
         })
 
 class ActualizarTasaAPIView(APIView):

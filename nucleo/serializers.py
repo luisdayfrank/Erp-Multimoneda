@@ -163,6 +163,10 @@ class VentaSerializer(serializers.ModelSerializer):
     pagos = PagoVentaSerializer(many=True, write_only=True, required=False)
     cliente_id = serializers.IntegerField(write_only=True)
     almacen_id = serializers.IntegerField(write_only=True)
+    # >>> FASE 1.5 (Anexo A): distribución del vuelto (opcional) <<<
+    # {entregado_principal, entregado_secundaria, aplicado_cxc_principal, saldo_favor_principal}
+    # Si no se envía (o no hay excedente), el sistema usa el comportamiento legacy.
+    vuelto_distribucion = serializers.DictField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Venta
@@ -176,7 +180,8 @@ class VentaSerializer(serializers.ModelSerializer):
             'total_principal', 
             'total_secundaria', 
             'detalles', 
-            'pagos'
+            'pagos',
+            'vuelto_distribucion'
         ]
 
     def create(self, validated_data):
@@ -184,6 +189,7 @@ class VentaSerializer(serializers.ModelSerializer):
         pagos_data = validated_data.pop('pagos', [])
         cliente_id = validated_data.pop('cliente_id')
         almacen_id = validated_data.pop('almacen_id')
+        vuelto_distribucion = validated_data.pop('vuelto_distribucion', None)
         usuario = self.context['request'].user
 
         sesion_activa = SesionCaja.objects.filter(usuario=usuario, estado='ABIERTA').first()
@@ -206,6 +212,10 @@ class VentaSerializer(serializers.ModelSerializer):
             sesion_caja=sesion_activa,
             **validated_data
         )
+
+        # FASE 1.5: pasar la distribución del vuelto a procesar_venta (transiente,
+        # no es campo del modelo; se consume en Venta.procesar_venta).
+        venta._vuelto_distribucion = vuelto_distribucion or None
 
         for detalle_data in detalles_data:
             DetalleVenta.objects.create(

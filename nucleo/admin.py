@@ -49,7 +49,11 @@ from .models import (
 
 @admin.register(ConfiguracionGlobal)
 class ConfiguracionGlobalAdmin(admin.ModelAdmin):
-    list_display = ('moneda_principal', 'moneda_secundaria', 'tasa_cambio_actual', 'permitir_stock_negativo')
+    list_display = (
+        'moneda_principal', 'moneda_secundaria', 'tasa_cambio_actual', 'permitir_stock_negativo',
+        # FASE 1.5: políticas de vuelto visibles de un vistazo
+        'permitir_vuelto_a_cxc', 'permitir_vuelto_a_saldo_favor', 'vuelto_obligatorio_efectivo'
+    )
     list_editable = ('permitir_stock_negativo',)
 
     def has_add_permission(self, request):

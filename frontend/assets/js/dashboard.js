@@ -1,17 +1,17 @@
 // assets/js/dashboard.js
 
 // ==============================================================================
-// 1. INICIALIZACI”N DEL DASHBOARD
+// 1. INICIALIZACI√ìN DEL DASHBOARD
 // ==============================================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
     const container = document.querySelector('.container');
-    // Ocultamos el contenedor principal para evitar que se vea la estructura vacÌa mientras carga
+    // Ocultamos el contenedor principal para evitar que se vea la estructura vac√≠a mientras carga
     container.style.display = 'none';
 
     try {
         // Solicitamos la data a nuestro endpoint optimizado en MariaDB
-        // NOTA: Si el usuario es un CAJERO, esta peticiÛn fallar· con un 403 Forbidden
+        // NOTA: Si el usuario es un CAJERO, esta petici√≥n fallar√° con un 403 Forbidden
         const data = await apiFetch('/dashboard/resumen/', 'GET');
         
         // Si obtenemos la data, pintamos la pantalla y mostramos el contenedor
@@ -34,18 +34,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <h4 class="alert-heading">?? Acceso Denegado</h4>
                     <p>Tu rol de usuario no tiene los permisos necesarios para visualizar el panel gerencial.</p>
                     <hr>
-                    <p class="mb-0">Esta secciÛn es solo para personal autorizado (Gerentes o Administradores).</p>
+                    <p class="mb-0">Esta secci√≥n es solo para personal autorizado (Gerentes o Administradores).</p>
                     <button class="btn btn-primary mt-3" onclick="window.location.href='pos.html'">Ir al Punto de Venta</button>
                 </div>
             `;
         } else {
-            // Para cualquier otro error (red, servidor caÌdo, etc.)
+            // Para cualquier otro error (red, servidor ca√≠do, etc.)
             errorMessageHTML = `
                 <div class="alert alert-warning text-center" role="alert">
-                    <h4 class="alert-heading">?? °Ups! No se pudo conectar</h4>
-                    <p>No fue posible cargar la informaciÛn del Dashboard en este momento.</p>
+                    <h4 class="alert-heading">?? ¬°Ups! No se pudo conectar</h4>
+                    <p>No fue posible cargar la informaci√≥n del Dashboard en este momento.</p>
                     <hr>
-                    <p class="mb-0">Por favor, revisa que el servidor del ERP estÈ funcionando y que tengas conexiÛn de red.</p>
+                    <p class="mb-0">Por favor, revisa que el servidor del ERP est√© funcionando y que tengas conexi√≥n de red.</p>
                 </div>
             `;
         }
@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // ==============================================================================
-// 2. MANIPULACI”N DEL DOM (Actualizar n˙meros y tablas)
+// 2. MANIPULACI√ìN DEL DOM (Actualizar n√∫meros y tablas)
 // ==============================================================================
 
 function actualizarKPIs(data) {
@@ -69,6 +69,17 @@ function actualizarKPIs(data) {
     document.getElementById('kpi-cxc').innerText = `$ ${parseFloat(data.finanzas.por_cobrar_total).toFixed(2)}`;
     document.getElementById('kpi-clientes-cxc').innerText = `${data.finanzas.clientes_con_deuda} Clientes con deuda`;
     document.getElementById('kpi-cxp').innerText = `$ ${parseFloat(data.finanzas.por_pagar_total).toFixed(2)}`;
+
+    // MEJORA INVENTARIO: capital inmovilizado (defensivo por si el backend es viejo)
+    const kpiInv = document.getElementById('kpi-inventario');
+    const kpiInvDetalle = document.getElementById('kpi-inventario-detalle');
+    if (kpiInv && data.inventario) {
+        kpiInv.innerText = `$ ${parseFloat(data.inventario.valor_total_usd).toFixed(2)}`;
+        kpiInvDetalle.innerText = `${data.inventario.productos_con_stock} productos con stock`;
+    } else if (kpiInv) {
+        kpiInv.innerText = '‚Äî';
+        kpiInvDetalle.innerText = 'Actualiza el backend para ver este dato';
+    }
 }
 
 function renderizarAlertasInventario(alertas) {
@@ -101,7 +112,7 @@ function renderizarAlertasInventario(alertas) {
 }
 
 // ==============================================================================
-// 3. GENERACI”N DEL GR¡FICO CON CHART.JS
+// 3. GENERACI√ìN DEL GR√ÅFICO CON CHART.JS
 // ==============================================================================
 
 function renderizarGrafico(data) {
@@ -110,8 +121,10 @@ function renderizarGrafico(data) {
     const ventasMes = parseFloat(data.ventas.mes_total);
     const cuentasPorCobrar = parseFloat(data.finanzas.por_cobrar_total);
     const cuentasPorPagar = parseFloat(data.finanzas.por_pagar_total);
+    // MEJORA INVENTARIO: 4ta barra (capital en inventario)
+    const inventarioValor = data.inventario ? parseFloat(data.inventario.valor_total_usd) : 0;
 
-    // Si ya existe una instancia del gr·fico, la destruimos para evitar conflictos al re-renderizar
+    // Si ya existe una instancia del gr√°fico, la destruimos para evitar conflictos al re-renderizar
     if (window.myChart instanceof Chart) {
         window.myChart.destroy();
     }
@@ -119,19 +132,21 @@ function renderizarGrafico(data) {
     window.myChart = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: ['Ventas del Mes', 'Dinero en la Calle (CxC)', 'Deudas a Proveedores (CxP)'],
+            labels: ['Ventas del Mes', 'Dinero en la Calle (CxC)', 'Deudas a Proveedores (CxP)', 'Capital en Inventario'],
             datasets: [{
                 label: 'Monto en USD ($)',
-                data: [ventasMes, cuentasPorCobrar, cuentasPorPagar],
+                data: [ventasMes, cuentasPorCobrar, cuentasPorPagar, inventarioValor],
                 backgroundColor: [
                     'rgba(25, 135, 84, 0.7)',
                     'rgba(255, 193, 7, 0.7)',
-                    'rgba(220, 53, 69, 0.7)'
+                    'rgba(220, 53, 69, 0.7)',
+                    'rgba(111, 66, 193, 0.7)'
                 ],
                 borderColor: [
                     'rgb(25, 135, 84)',
                     'rgb(255, 193, 7)',
-                    'rgb(220, 53, 69)'
+                    'rgb(220, 53, 69)',
+                    'rgb(111, 66, 193)'
                 ],
                 borderWidth: 1
             }]
@@ -157,7 +172,7 @@ function renderizarGrafico(data) {
 }
 
 function cerrarSesion() {
-    if(confirm("øSeguro que deseas cerrar la sesiÛn gerencial?")) {
+    if(confirm("¬øSeguro que deseas cerrar la sesi√≥n gerencial?")) {
         localStorage.clear();
         window.location.href = 'index.html';
     }

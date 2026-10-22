@@ -209,6 +209,19 @@ def calcular_preview(sesion):
         venta__sesion_caja=sesion
     ).aggregate(total=Sum('saldo_pendiente'), n=Count('id'))
     total_credito_generado = agg_cxc_nuevas['total'] or CERO
+    # Detalle de créditos otorgados (para el ticket Z / reporte)
+    creditos_detalle = [
+        {
+            'venta_id': c.venta_id,
+            'cliente': c.cliente.nombre if c.cliente else '',
+            'monto_total': float(c.monto_total),
+            'saldo': float(c.saldo_pendiente),
+            'estado': c.estado,
+        }
+        for c in CuentaPorCobrar.objects.filter(
+            venta__sesion_caja=sesion
+        ).select_related('cliente', 'venta')
+    ]
 
     # ------------------------------------------------------------------
     # 6. EGRESOS DE EFECTIVO (por moneda extraída)
@@ -355,6 +368,10 @@ def calcular_preview(sesion):
             'detalle': egresos_detalle,
             'total_principal': float(egresos_principal),
             'total_secundaria': float(egresos_secundaria),
+        },
+        'creditos_generados': {
+            'detalle': creditos_detalle,
+            'total_principal': float(total_credito_generado),
         },
         'diferencia_cambiaria': {
             'ventas_bs_tasa_historica_principal': float(ventas_bs_hist),

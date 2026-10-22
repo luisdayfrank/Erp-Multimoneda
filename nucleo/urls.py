@@ -50,7 +50,11 @@ from .api import (
     AjusteInventarioListAPIView, 
     AjusteInventarioDetalleAPIView, 
     InformeTomaAPIView,
-    ReciboAbonoDetalleAPIView
+    ReciboAbonoDetalleAPIView,
+    CierrePreviewAPIView,
+    CierreCajaAPIView,
+    CierreCajaListAPIView,
+    CierreCajaDetalleAPIView
 )
 
 urlpatterns = [
@@ -69,6 +73,12 @@ urlpatterns = [
     path('api/v1/pos/facturar/', ProcesarVentaAPIView.as_view(), name='api_pos_facturar'),
     path('api/v1/ventas/<int:pk>/detalle/', DetalleVentaFacturaAPIView.as_view(), name='api_venta_detalle'),
     path('api/v1/pos/ventas-turno/', VentasTurnoAPIView.as_view(), name='api_pos_ventas_turno'),
+
+    # Cierre de caja (FASE 1B)
+    path('api/v1/caja/cierre/preview/', CierrePreviewAPIView.as_view(), name='api_cierre_preview'),
+    path('api/v1/caja/cierre/', CierreCajaAPIView.as_view(), name='api_cierre_crear'),
+    path('api/v1/caja/cierre/<int:pk>/', CierreCajaDetalleAPIView.as_view(), name='api_cierre_detalle'),
+    path('api/v1/caja/cierres/', CierreCajaListAPIView.as_view(), name='api_cierre_lista'),
 
     # Cuentas por Cobrar (CxC)
     path('api/v1/cxc/abonar/', RegistrarAbonoCxCAPIView.as_view(), name='api_cxc_abonar'),

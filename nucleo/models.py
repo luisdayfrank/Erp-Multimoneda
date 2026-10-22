@@ -337,10 +337,14 @@ class SesionCaja(models.Model):
 
     @property
     def total_ventas_principal(self):
-        """Calcula el total vendido en moneda principal durante esta sesión."""
-        ventas = self.ventas.filter(estado='PROCESADA')
-        total = sum(venta.total_principal for venta in ventas)
-        return total
+        """Calcula el total vendido en moneda principal durante esta sesión.
+
+        FASE 1B: cálculo en BD con aggregate (evita el N+1 de sum() en Python).
+        Semántica idéntica al comportamiento anterior.
+        """
+        return self.ventas.filter(estado='PROCESADA').aggregate(
+            total=models.Sum('total_principal')
+        )['total'] or Decimal('0.00')
 
     # ==============================================================================
     # UBICACIÓN CORRECTA: ESTAS PROPERTIES DEBEN IR AQUÍ ADENTRO
@@ -566,11 +570,20 @@ class Venta(TransaccionBase):
                         break
                     monto_aplicar = min(abono_restante, cxc_vieja.saldo_pendiente)
                     if monto_aplicar > 0:
+                        # FASE 1B: sesion_caja + origen='COBRO_POS' (este dinero ya
+                        # está contado como PagoVenta → el cierre lo excluye para no
+                        # doble contarlo) y método si el pago fue con un solo método.
+                        metodo_unico = None
+                        if self.pagos.count() == 1:
+                            metodo_unico = self.pagos.first().metodo
                         PagoCuentaCobrar.objects.create(
                             cuenta=cxc_vieja,
                             usuario=self.usuario,
                             monto_abono_principal=monto_aplicar,
                             tasa_cambio_pago=self.tasa_cambio_historica,
+                            metodo=metodo_unico,
+                            sesion_caja=self.sesion_caja,
+                            origen='COBRO_POS',
                             referencia=f"Abono desde POS - Venta #{self.id}"
                         )
                         cxc_vieja.saldo_pendiente -= monto_aplicar
@@ -603,11 +616,14 @@ class Venta(TransaccionBase):
                             continue
                         
                         monto_aplicar = min(cliente.saldo_a_favor, cxc_vieja.saldo_pendiente)
+                        # FASE 1B: origen='SALDO_FAVOR' (no hubo dinero entrante)
                         PagoCuentaCobrar.objects.create(
                             cuenta=cxc_vieja,
                             usuario=self.usuario,
                             monto_abono_principal=monto_aplicar,
                             tasa_cambio_pago=self.tasa_cambio_historica,
+                            sesion_caja=self.sesion_caja,
+                            origen='SALDO_FAVOR',
                             referencia=f"Abono desde saldo a favor - Venta #{self.id}"
                         )
                         cxc_vieja.saldo_pendiente -= monto_aplicar
@@ -665,6 +681,20 @@ class Venta(TransaccionBase):
                 resultado['estado_cxc'] = estado_cxc
                 resultado['abono_nueva_cxc'] = min(abono_nueva_cxc, self.total_principal)
 
+                # >>> FASE 1B: registrar el excedente/vuelto de la venta a CRÉDITO <<<
+                # Dinero de ESTA venta aplicado a deudas viejas (no salió de gaveta)
+                # y sobrante guardado como saldo a favor. El vuelto entregado en
+                # efectivo es 0: en crédito no se da cambio.
+                vuelto_total_credito = max(Decimal('0.00'), dinero_fisico - self.total_principal)
+                paso1_efectivo = sum(
+                    ab['monto_aplicado'] for ab in abonos_viejas if ab.get('origen') == 'EFECTIVO'
+                )
+                self.vuelto_total_principal = vuelto_total_credito
+                self.vuelto_aplicado_cxc_principal = min(paso1_efectivo, vuelto_total_credito)
+                self.vuelto_a_saldo_favor_principal = sobrante
+                self.vuelto_entregado_principal = Decimal('0.00')
+                self.vuelto_entregado_secundaria = Decimal('0.00')
+
                 # PASO 4: Calcular deuda total
                 deuda_viejas_pendientes = CuentaPorCobrar.objects.filter(
                     cliente=cliente,
@@ -694,11 +724,17 @@ class Venta(TransaccionBase):
                     if sobrante > 0:
                         ref_parts.append(f"Sobrante a favor: ${sobrante:.2f}")
 
+                    metodo_unico = None
+                    if self.pagos.count() == 1:
+                        metodo_unico = self.pagos.first().metodo
                     PagoCuentaCobrar.objects.create(
                         cuenta=cxc,
                         usuario=self.usuario,
                         monto_abono_principal=monto_abono_registrado,
                         tasa_cambio_pago=self.tasa_cambio_historica,
+                        metodo=metodo_unico,
+                        sesion_caja=self.sesion_caja,
+                        origen='COBRO_POS',
                         referencia=" | ".join(ref_parts)
                     )
 
@@ -749,9 +785,26 @@ class Venta(TransaccionBase):
                         abonos_list=abonos_para_recibo,
                         venta_origen=self,
                         sobrante=sobrante,
+                        sesion_caja=self.sesion_caja,
                         referencia=f"Recibo desde Venta #{self.id}"
                     )
             
+            # >>> FASE 1B: registrar el vuelto de la venta CONTADO <<<
+            # Antes el excedente (pagos - total) NO se registraba en ningún lado:
+            # el POS mostraba "VUELTO" pero el backend lo ignoraba y el cierre
+            # daba faltante falso. Se asume que todo el excedente se entrega
+            # físicamente en USD equivalente (la Fase 1.5 permitirá distribuirlo).
+            if self.tipo == 'CONTADO':
+                total_pagado_contado = sum(
+                    pago.monto_equivalente_principal for pago in self.pagos.all()
+                )
+                vuelto_contado = max(Decimal('0.00'), total_pagado_contado - self.total_principal)
+                self.vuelto_total_principal = vuelto_contado
+                self.vuelto_entregado_principal = vuelto_contado
+                self.vuelto_entregado_secundaria = Decimal('0.00')
+                self.vuelto_aplicado_cxc_principal = Decimal('0.00')
+                self.vuelto_a_saldo_favor_principal = Decimal('0.00')
+
             # 3. Cambiar estado
             self.estado = 'PROCESADA'
             self.save()
@@ -1690,7 +1743,7 @@ class ReciboAbono(models.Model):
     @classmethod
     def crear_desde_abonos(cls, cliente, usuario, tasa_cambio, monto_total, 
                            desglose_metodos, origen, abonos_list, venta_origen=None, 
-                           sobrante=Decimal('0.00'), referencia=''):
+                           sobrante=Decimal('0.00'), referencia='', sesion_caja=None):
         """
         Crea un ReciboAbono + sus aplicaciones a partir de una lista de abonos ya ejecutados.
         Cada item de abonos_list debe ser: {
@@ -1700,6 +1753,7 @@ class ReciboAbono(models.Model):
             'saldo_despues': Decimal,
             'origen_dinero': 'EFECTIVO' | 'SALDO_FAVOR'
         }
+        FASE 1B: sesion_caja vincula el recibo al turno donde se recibió el dinero.
         Retorna el ReciboAbono creado.
         """
         with transaction.atomic():
@@ -1712,7 +1766,8 @@ class ReciboAbono(models.Model):
                 sobrante_a_favor=sobrante,
                 referencia=referencia,
                 origen=origen,
-                venta_origen=venta_origen
+                venta_origen=venta_origen,
+                sesion_caja=sesion_caja
             )
 
             for ab in abonos_list:

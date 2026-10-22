@@ -14,7 +14,8 @@ from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, Sesion
     DetalleTomaFisica,
     AjusteInventario,
     DetalleAjusteInventario,
-    ReciboAbono, ReciboAbonoAplicacion
+    ReciboAbono, ReciboAbonoAplicacion,
+    CierreCaja, CierrePorMetodoPago
     )
 from django.utils import timezone
 
@@ -279,20 +280,71 @@ class CompraSerializer(serializers.ModelSerializer):
         return compra
 
 class PagoCuentaCobrarSerializer(serializers.ModelSerializer):
+    # FASE 1B: 'metodo' opcional (nullable en históricos). Se recomienda enviarlo
+    # para que el cierre pueda cuadrar por método de pago.
+    metodo = serializers.PrimaryKeyRelatedField(
+        queryset=MetodoPago.objects.all(), required=False, allow_null=True
+    )
+
     class Meta:
         model = PagoCuentaCobrar
         fields = [
             'cuenta', 'monto_abono_principal', 'monto_entregado_secundaria', 
-            'tasa_cambio_pago', 'referencia'
+            'tasa_cambio_pago', 'referencia', 'metodo'
         ]
 
     def create(self, validated_data):
         usuario = self.context['request'].user
+        # FASE 1B: abono directo → origen='ABONO_CXC' y sesión abierta del usuario
+        # (null si no hay turno abierto: se marca como offline, no suma al arqueo).
+        sesion = SesionCaja.objects.filter(usuario=usuario, estado='ABIERTA').first()
         pago = PagoCuentaCobrar.objects.create(
             usuario=usuario,
+            origen='ABONO_CXC',
+            sesion_caja=sesion,
             **validated_data
         )
         return pago
+
+
+# --- SERIALIZADORES DE CIERRE DE CAJA (FASE 1B) ---
+
+class CierrePorMetodoPagoSerializer(serializers.ModelSerializer):
+    metodo_nombre = serializers.CharField(source='metodo.nombre', read_only=True)
+    es_efectivo = serializers.BooleanField(source='metodo.es_efectivo', read_only=True)
+
+    class Meta:
+        model = CierrePorMetodoPago
+        fields = [
+            'id', 'metodo', 'metodo_nombre', 'es_efectivo', 'moneda',
+            'esperado_en_moneda', 'esperado_equivalente_principal',
+            'declarado_en_moneda', 'declarado_equivalente_principal',
+            'descuadre_en_moneda', 'descuadre_equivalente_principal',
+            'observacion',
+        ]
+
+
+class CierreCajaSerializer(serializers.ModelSerializer):
+    por_metodo = CierrePorMetodoPagoSerializer(many=True, read_only=True)
+    cajero = serializers.CharField(source='usuario_cierre.username', read_only=True)
+    sesion_id = serializers.IntegerField(source='sesion.id', read_only=True)
+    requiere_revision = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CierreCaja
+        fields = [
+            'id', 'sesion_id', 'fecha_cierre', 'cajero', 'usuario_cierre',
+            'total_facturado_principal', 'total_cobrado_principal',
+            'total_credito_generado_principal', 'total_abonos_cxc_principal',
+            'fondo_inicial_principal', 'fondo_inicial_secundaria',
+            'efectivo_esperado_principal', 'efectivo_esperado_secundaria',
+            'efectivo_declarado_principal', 'efectivo_declarado_secundaria',
+            'descuadre_principal', 'descuadre_secundaria', 'descuadre_total_principal',
+            'vuelto_entregado_principal', 'vuelto_entregado_secundaria', 'vuelto_retenido_principal',
+            'tasa_apertura', 'tasa_cierre', 'diferencia_cambiaria_estimada_principal',
+            'observacion', 'firma_cajero', 'requiere_revision', 'por_metodo',
+        ]
+        read_only_fields = fields
 
 class AbonoMasivoSerializer(serializers.Serializer):
     cliente_id = serializers.IntegerField(required=True)

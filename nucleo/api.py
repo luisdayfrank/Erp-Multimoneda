@@ -27,7 +27,8 @@ from .models import (
     RutaMercadoPago,
     RutaMercadoGasto,
     TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
-    InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto, ReciboAbono
+    InventarioAlmacen, Almacen, ConfiguracionGlobal, Producto, ReciboAbono,
+    CierreCaja
 )
 from .serializers import (
     PresentacionProductoSerializer, VentaSerializer, CompraSerializer, 
@@ -38,8 +39,10 @@ from .serializers import (
     RutaMercadoSerializer,
     ImportarExcelRutaSerializer,
     TomaFisicaListSerializer, TomaFisicaDetalleSerializer, CrearTomaFisicaSerializer,
-    ActualizarConteoSerializer, AjusteInventarioSerializer
+    ActualizarConteoSerializer, AjusteInventarioSerializer,
+    CierreCajaSerializer
 )
+from . import cierre_service
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
 
@@ -100,6 +103,13 @@ class GestionCajaAPIView(APIView):
         serializer = SesionCajaSerializer(sesion, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save(estado='CERRADA', fecha_cierre=timezone.now())
+            # FASE 1B: crear el snapshot de cierre aunque el flujo legacy cierre
+            # "a ciegas". Nunca rompe el cierre; si algo falla, se ignora.
+            cierre_service.cierre_minimo_para_legacy(
+                sesion, request.user,
+                sesion.reporte_cierre_principal,
+                sesion.reporte_cierre_secundaria,
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -234,9 +244,13 @@ class RegistrarAbonoMasivoAPIView(APIView):
         # Calcular total del abono en USD
         total_abono_usd = Decimal('0.00')
         desglose_metodos = []
+        metodos_usados = []
+        # FASE 1B: sesión abierta del cajero (null = offline, no suma al arqueo)
+        sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
         for pago in pagos_data:
             monto = Decimal(str(pago['monto_pagado']))
             metodo = MetodoPago.objects.get(pk=pago['metodo_id'])
+            metodos_usados.append(metodo)
 
             if metodo.moneda_referencia == 'SECUNDARIA' and tasa_cambio > 0:
                 # CORRECCIÓN PASO 1: Redondear después de la conversión
@@ -278,6 +292,7 @@ class RegistrarAbonoMasivoAPIView(APIView):
                     tasa_cambio=tasa_cambio,
                     sobrante_a_favor=total_abono_usd,
                     origen='ABONO_MASIVO',
+                    sesion_caja=sesion,
                     referencia="Saldo a favor - Cliente sin facturas pendientes"
                 )
                 
@@ -306,6 +321,10 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 monto_abono_principal=monto_aplicar,
                 monto_entregado_secundaria=Decimal('0.00'),
                 tasa_cambio_pago=tasa_cambio,
+                # FASE 1B: método (si fue un solo método), sesión y origen
+                metodo=(metodos_usados[0] if len(metodos_usados) == 1 else None),
+                sesion_caja=sesion,
+                origen='ABONO_MASIVO',
                 referencia=f"Abono distribuido automáticamente"
             )
 
@@ -364,6 +383,7 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 origen='ABONO_MASIVO',
                 abonos_list=abonos_para_recibo,
                 sobrante=saldo_sobrante,
+                sesion_caja=sesion,
                 referencia=f"Abono masivo - {len(facturas_pagadas)} facturas afectadas"
             )
 
@@ -387,9 +407,54 @@ class RegistrarAbonoCxCAPIView(APIView):
                 pago = serializer.save()
                 pago.procesar_pago()
 
+                # FASE 1B: todo abono directo genera ReciboAbono vinculado a la
+                # sesión abierta (antes había pagos sin recibo y sin turno).
+                sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
+                if pago.metodo:
+                    desglose = [{
+                        'metodo_id': pago.metodo.id,
+                        'metodo_nombre': pago.metodo.nombre,
+                        'monto_pagado': float(
+                            pago.monto_entregado_secundaria
+                            if pago.metodo.moneda_referencia == 'SECUNDARIA'
+                            else pago.monto_abono_principal
+                        ),
+                        'monto_equivalente_usd': float(pago.monto_abono_principal),
+                        'referencia': pago.referencia or '',
+                    }]
+                else:
+                    es_bs = pago.monto_entregado_secundaria > 0
+                    desglose = [{
+                        'metodo_id': None,
+                        'moneda': 'SECUNDARIA' if es_bs else 'PRINCIPAL',
+                        'monto_pagado': float(
+                            pago.monto_entregado_secundaria if es_bs else pago.monto_abono_principal
+                        ),
+                        'monto_equivalente_usd': float(pago.monto_abono_principal),
+                        'referencia': pago.referencia or '',
+                    }]
+                recibo = ReciboAbono.crear_desde_abonos(
+                    cliente=pago.cuenta.cliente,
+                    usuario=request.user,
+                    tasa_cambio=pago.tasa_cambio_pago,
+                    monto_total=pago.monto_abono_principal,
+                    desglose_metodos=desglose,
+                    origen='ABONO_CXC',
+                    abonos_list=[{
+                        'cxc': pago.cuenta,
+                        'monto_aplicado': pago.monto_abono_principal,
+                        'saldo_antes': pago.cuenta.saldo_pendiente + pago.monto_abono_principal,
+                        'saldo_despues': pago.cuenta.saldo_pendiente,
+                        'origen_dinero': 'EFECTIVO',
+                    }],
+                    sesion_caja=sesion,
+                    referencia=pago.referencia or f"Abono directo a CxC #{pago.cuenta_id}",
+                )
+
                 return Response({
                     "mensaje": "Abono registrado exitosamente",
                     "pago_id": pago.id,
+                    "recibo_id": recibo.id,
                     "nuevo_saldo_pendiente": pago.cuenta.saldo_pendiente,
                     "estado_cuenta": pago.cuenta.estado
                 }, status=status.HTTP_201_CREATED)
@@ -1942,3 +2007,129 @@ class InformeTomaAPIView(APIView):
             "sobrantes": sobrantes,
             "cuadrados": cuadrados
         })
+
+
+# ==============================================================================
+# CIERRE DE CAJA (FASE 1B)
+# ==============================================================================
+
+class CierrePreviewAPIView(APIView):
+    """
+    GET /api/v1/caja/cierre/preview/
+    Devuelve TODOS los cálculos del turno ANTES de cerrar: desglose por método ×
+    moneda, efectivo esperado (USD/BS), vueltos, egresos, crédito generado,
+    diferencia cambiaria y advertencias. El cajero declara con información.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
+        if not sesion:
+            return Response({"error": "No tienes una caja abierta."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(cierre_service.calcular_preview(sesion), status=status.HTTP_200_OK)
+
+
+class CierreCajaAPIView(APIView):
+    """
+    POST /api/v1/caja/cierre/
+    Cierra la sesión y crea la foto inmutable (CierreCaja + CierrePorMetodoPago).
+    Body:
+      - declarado_efectivo_principal  (requerido, USD contado en gaveta)
+      - declarado_efectivo_secundaria (requerido, BS contado en gaveta)
+      - declarado_por_metodo          (opcional: [{metodo_id, declarado_en_moneda}])
+      - observacion, firma_cajero     (opcionales)
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def post(self, request):
+        sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
+        if not sesion:
+            return Response({"error": "No tienes una caja abierta para cerrar."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            declarado_p = Decimal(str(request.data.get('declarado_efectivo_principal', '0')))
+            declarado_s = Decimal(str(request.data.get('declarado_efectivo_secundaria', '0')))
+        except Exception:
+            return Response({"error": "Los montos declarados deben ser numéricos."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            cierre = cierre_service.crear_cierre(
+                sesion,
+                request.user,
+                declarado_efectivo_principal=declarado_p,
+                declarado_efectivo_secundaria=declarado_s,
+                declarado_por_metodo=request.data.get('declarado_por_metodo'),
+                observacion=str(request.data.get('observacion', '') or ''),
+                firma_cajero=str(request.data.get('firma_cajero', '') or ''),
+            )
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "mensaje": "Cierre de caja registrado exitosamente.",
+            "cierre_id": cierre.id,
+            "descuadre_principal": float(cierre.descuadre_principal),
+            "descuadre_secundaria": float(cierre.descuadre_secundaria),
+            "descuadre_total_principal": float(cierre.descuadre_total_principal),
+            "requiere_revision": cierre.requiere_revision,
+        }, status=status.HTTP_201_CREATED)
+
+
+class CierreCajaListAPIView(APIView):
+    """
+    GET /api/v1/caja/cierres/?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&usuario=xxx
+    Lista de cierres históricos con filtros.
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request):
+        cierres = (
+            CierreCaja.objects
+            .select_related('sesion__usuario', 'usuario_cierre')
+            .prefetch_related('por_metodo__metodo')
+            .order_by('-fecha_cierre')
+        )
+
+        desde = request.query_params.get('desde')
+        hasta = request.query_params.get('hasta')
+        usuario = request.query_params.get('usuario')
+
+        try:
+            if desde:
+                cierres = cierres.filter(fecha_cierre__date__gte=datetime.strptime(desde, '%Y-%m-%d').date())
+            if hasta:
+                cierres = cierres.filter(fecha_cierre__date__lte=datetime.strptime(hasta, '%Y-%m-%d').date())
+        except ValueError:
+            return Response({"error": "Fechas inválidas. Usa el formato YYYY-MM-DD."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if usuario:
+            cierres = cierres.filter(sesion__usuario__username=usuario)
+
+        serializer = CierreCajaSerializer(cierres[:200], many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class CierreCajaDetalleAPIView(APIView):
+    """
+    GET /api/v1/caja/cierre/<id>/
+    Detalle completo de un cierre histórico: totales, por método y snapshot
+    (detalle forense del turno).
+    """
+    permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
+
+    def get(self, request, pk):
+        try:
+            cierre = (
+                CierreCaja.objects
+                .select_related('sesion__usuario', 'usuario_cierre')
+                .prefetch_related('por_metodo__metodo')
+                .get(pk=pk)
+            )
+        except CierreCaja.DoesNotExist:
+            return Response({"error": "Cierre no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = CierreCajaSerializer(cierre).data
+        data['snapshot'] = cierre.snapshot_json
+        return Response(data, status=status.HTTP_200_OK)

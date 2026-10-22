@@ -276,12 +276,21 @@ async function guardarNuevoCliente() {
 // ==============================================================================
 // Variable global para configuración (agregar al inicio del archivo, después de las otras variables globales)
 let permitirStockNegativo = false;
+// >>> FASE 1.5: políticas de vuelto (se cargan de /config/tasa-status/) <<<
+let configVuelto = {
+    permitir_vuelto_a_saldo_favor: true,
+    permitir_vuelto_a_cxc: true,
+    vuelto_obligatorio_efectivo: false
+};
 
 // Función para cargar configuración (agregar después de cargarDatosIniciales)
 async function cargarConfiguracionStock() {
     try {
         const config = await apiFetch('/config/tasa-status/', 'GET');
         permitirStockNegativo = config.permitir_stock_negativo || false;
+        configVuelto.permitir_vuelto_a_saldo_favor = config.permitir_vuelto_a_saldo_favor !== false;
+        configVuelto.permitir_vuelto_a_cxc = config.permitir_vuelto_a_cxc !== false;
+        configVuelto.vuelto_obligatorio_efectivo = config.vuelto_obligatorio_efectivo === true;
     } catch (e) {
         console.warn("No se pudo cargar configuración de stock:", e);
         permitirStockNegativo = false;
@@ -804,10 +813,119 @@ function evaluarEstadoPago() {
         }
     }
 
+    // --- FASE 1.5: panel de distribución del vuelto ---
+    const panelVuelto = document.getElementById('panel-vuelto');
+    if (panelVuelto) {
+        const excedente = Math.max(0, sumaUSD - totalUSD);
+        const clienteActual = clientesCache.find(function (c) { return c.id === clienteSeleccionadoId; });
+        const deudaCliente = clienteActual ? (parseFloat(clienteActual.deuda_total) || 0) : 0;
+        const obligatorioEfectivo = configVuelto.vuelto_obligatorio_efectivo === true;
+        const permitidoCxc = configVuelto.permitir_vuelto_a_cxc && deudaCliente > 0.01 && !obligatorioEfectivo;
+        const permitidoSaldo = configVuelto.permitir_vuelto_a_saldo_favor && !obligatorioEfectivo;
+
+        if (excedente > 0.01) {
+            panelVuelto.style.display = 'block';
+            document.getElementById('panel-vuelto-monto').innerText = excedente.toFixed(2);
+            document.getElementById('vuelto-deuda-disp').innerText = '$ ' + deudaCliente.toFixed(2);
+            document.getElementById('vuelto-op-cxc-wrap').style.display = permitidoCxc ? 'block' : 'none';
+            document.getElementById('vuelto-op-saldo-wrap').style.display = permitidoSaldo ? 'block' : 'none';
+            document.getElementById('vuelto-op-mixto-wrap').style.display = obligatorioEfectivo ? 'none' : 'block';
+
+            // Selección por defecto solo la primera vez: deudas si hay, si no entregar
+            if (!panelVuelto.dataset.inicializado) {
+                const destinoDefault = permitidoCxc ? 'CXC' : 'ENTREGAR';
+                const radioDefault = document.querySelector('input[name="destinoVuelto"][value="' + destinoDefault + '"]');
+                if (radioDefault) radioDefault.checked = true;
+                panelVuelto.dataset.inicializado = '1';
+            }
+            // Si la opción seleccionada quedó oculta (cambió la config/deuda), volver a ENTREGAR
+            const seleccionado = document.querySelector('input[name="destinoVuelto"]:checked');
+            if (seleccionado) {
+                const wrap = seleccionado.closest('.form-check');
+                if (wrap && wrap.style.display === 'none') {
+                    document.getElementById('vuelto-entregar').checked = true;
+                }
+            }
+            actualizarPanelVuelto();
+        } else {
+            panelVuelto.style.display = 'none';
+            delete panelVuelto.dataset.inicializado;
+        }
+    }
+
     // Nunca reactivar el botón mientras una facturación esté en curso
     if (facturandoEnCurso || (tipoVenta === 'CONTADO' && totalUSD > 0 && sumaUSD <= 0)) {
         btnFacturar.disabled = true;
     }
+}
+
+// ==============================================================================
+// FASE 1.5 (Anexo A): DISTRIBUCIÓN DEL VUELTO
+// ==============================================================================
+function actualizarPanelVuelto() {
+    const panel = document.getElementById('panel-vuelto');
+    if (!panel || panel.style.display === 'none') return;
+    const excedente = parseFloat(document.getElementById('panel-vuelto-monto').innerText) || 0;
+    const mixtoSel = document.getElementById('vuelto-mixto') && document.getElementById('vuelto-mixto').checked;
+    document.getElementById('vuelto-mixto-campos').style.display = mixtoSel ? 'block' : 'none';
+
+    if (mixtoSel) {
+        const tasa = tasaCambio > 0 ? tasaCambio : 1;
+        const eusd = parseFloat(document.getElementById('vuelto-mix-entregar-usd').value) || 0;
+        const ebs = parseFloat(document.getElementById('vuelto-mix-entregar-bs').value) || 0;
+        const cxc = parseFloat(document.getElementById('vuelto-mix-cxc').value) || 0;
+        const saldo = parseFloat(document.getElementById('vuelto-mix-saldo').value) || 0;
+        const asignado = eusd + ebs / tasa + cxc + saldo;
+        const info = document.getElementById('vuelto-mix-info');
+        const dif = excedente - asignado;
+        if (asignado > excedente + 0.01) {
+            info.innerHTML = '<span class="text-danger fw-bold">⚠ La distribución ($' + asignado.toFixed(2) +
+                ') excede el vuelto ($' + excedente.toFixed(2) + '). Corrige antes de facturar.</span>';
+        } else if (dif > 0.01) {
+            info.innerHTML = '<span class="text-muted">Sin asignar: $' + dif.toFixed(2) +
+                ' → se aplicará por defecto a deudas viejas / saldo a favor.</span>';
+        } else {
+            info.innerHTML = '<span class="text-success">✓ Distribución completa.</span>';
+        }
+    }
+}
+
+function construirVueltoDistribucion() {
+    const panel = document.getElementById('panel-vuelto');
+    if (!panel || panel.style.display === 'none') return null;
+    const excedente = parseFloat(document.getElementById('panel-vuelto-monto').innerText) || 0;
+    if (excedente <= 0.01) return null;
+
+    const seleccionado = document.querySelector('input[name="destinoVuelto"]:checked');
+    const destino = seleccionado ? seleccionado.value : 'ENTREGAR';
+
+    if (destino === 'CXC') {
+        return {
+            entregado_principal: '0.00', entregado_secundaria: '0.00',
+            aplicado_cxc_principal: excedente.toFixed(2), saldo_favor_principal: '0.00'
+        };
+    }
+    if (destino === 'SALDO') {
+        return {
+            entregado_principal: '0.00', entregado_secundaria: '0.00',
+            aplicado_cxc_principal: '0.00', saldo_favor_principal: excedente.toFixed(2)
+        };
+    }
+    if (destino === 'MIXTO') {
+        return {
+            entregado_principal: (parseFloat(document.getElementById('vuelto-mix-entregar-usd').value) || 0).toFixed(2),
+            entregado_secundaria: (parseFloat(document.getElementById('vuelto-mix-entregar-bs').value) || 0).toFixed(2),
+            aplicado_cxc_principal: (parseFloat(document.getElementById('vuelto-mix-cxc').value) || 0).toFixed(2),
+            saldo_favor_principal: (parseFloat(document.getElementById('vuelto-mix-saldo').value) || 0).toFixed(2)
+        };
+    }
+    // ENTREGAR (default)
+    return {
+        entregado_principal: excedente.toFixed(2),
+        entregado_secundaria: '0.00',
+        aplicado_cxc_principal: '0.00',
+        saldo_favor_principal: '0.00'
+    };
 }
 
 // >>> NUEVO: helper visual para el estado "procesando" del boton <<<
@@ -914,7 +1032,8 @@ async function procesarFactura(tipoPago) {
                 subtotal: item.subtotal.toFixed(2)
             };
         }),
-        pagos: pagos
+        pagos: pagos,
+        vuelto_distribucion: construirVueltoDistribucion()
     };
 
     try {
@@ -939,7 +1058,13 @@ async function procesarFactura(tipoPago) {
                 abonos_cxc_viejas: respuesta.abonos_cxc_viejas || [],
                 abono_nueva_cxc: respuesta.abono_nueva_cxc || 0,
                 saldo_favor_a_nueva: respuesta.saldo_favor_a_nueva || 0,
-                deuda_total_cliente: respuesta.deuda_total_cliente || 0
+                deuda_total_cliente: respuesta.deuda_total_cliente || 0,
+                // >>> FASE 1.5: vuelto distribuido <<<
+                vuelto_total_principal: respuesta.vuelto_total_principal || 0,
+                vuelto_entregado_principal: respuesta.vuelto_entregado_principal || 0,
+                vuelto_entregado_secundaria: respuesta.vuelto_entregado_secundaria || 0,
+                vuelto_aplicado_cxc_principal: respuesta.vuelto_aplicado_cxc_principal || 0,
+                vuelto_a_saldo_favor_principal: respuesta.vuelto_a_saldo_favor_principal || 0
             }
         };
 
@@ -992,6 +1117,20 @@ async function procesarFactura(tipoPago) {
                 msg += "\n\nDEUDA TOTAL DEL CLIENTE: $" + respuesta.deuda_total_cliente.toFixed(2);
             } else {
                 msg += "\n\nCliente AL DÍA (sin deudas pendientes)";
+            }
+        }
+        if (respuesta.vuelto_total_principal > 0.01) {
+            msg += "\n\n--- VUELTO ---";
+            msg += "\nTotal: $" + respuesta.vuelto_total_principal.toFixed(2);
+            if (respuesta.vuelto_entregado_principal > 0.01 || respuesta.vuelto_entregado_secundaria > 0.01) {
+                msg += "\nEntregado en efectivo: $" + respuesta.vuelto_entregado_principal.toFixed(2) +
+                    (respuesta.vuelto_entregado_secundaria > 0.01 ? " + BS " + respuesta.vuelto_entregado_secundaria.toFixed(2) : "");
+            }
+            if (respuesta.vuelto_aplicado_cxc_principal > 0.01) {
+                msg += "\nAplicado a deudas: $" + respuesta.vuelto_aplicado_cxc_principal.toFixed(2);
+            }
+            if (respuesta.vuelto_a_saldo_favor_principal > 0.01) {
+                msg += "\nGuardado como saldo a favor: $" + respuesta.vuelto_a_saldo_favor_principal.toFixed(2);
             }
         }
         alert(msg);
@@ -1404,6 +1543,23 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
     if (vuelto > 0.01) {
         vueltoSection.style.display = 'block';
         document.getElementById('ticket-vuelto').innerText = vuelto.toFixed(2);
+        // FASE 1.5: detalle de la distribución del vuelto
+        const detalleVueltoEl = document.getElementById('ticket-vuelto-detalle');
+        if (detalleVueltoEl) {
+            const vEntregado = parseFloat(infoCredito.vuelto_entregado_principal) || 0;
+            const vEntregadoBs = parseFloat(infoCredito.vuelto_entregado_secundaria) || 0;
+            const vCxc = parseFloat(infoCredito.vuelto_aplicado_cxc_principal) || 0;
+            const vSaldo = parseFloat(infoCredito.vuelto_a_saldo_favor_principal) || 0;
+            if (vCxc > 0.01 || vSaldo > 0.01 || vEntregadoBs > 0.01) {
+                detalleVueltoEl.innerText =
+                    'Entregado $' + vEntregado.toFixed(2) +
+                    (vEntregadoBs > 0.01 ? ' + BS ' + vEntregadoBs.toFixed(2) : '') +
+                    ' · A deudas $' + vCxc.toFixed(2) +
+                    ' · Saldo favor $' + vSaldo.toFixed(2);
+            } else {
+                detalleVueltoEl.innerText = '';
+            }
+        }
     } else {
         vueltoSection.style.display = 'none';
     }
@@ -2176,6 +2332,10 @@ async function verificarTasaDiaria() {
     try {
         const resp = await apiFetch('/config/tasa-status/', 'GET');
         tasaCambio = parseFloat(resp.tasa_cambio_actual) || 0;
+        // FASE 1.5: políticas de vuelto
+        configVuelto.permitir_vuelto_a_saldo_favor = resp.permitir_vuelto_a_saldo_favor !== false;
+        configVuelto.permitir_vuelto_a_cxc = resp.permitir_vuelto_a_cxc !== false;
+        configVuelto.vuelto_obligatorio_efectivo = resp.vuelto_obligatorio_efectivo === true;
         document.getElementById('tasaDisplay').innerText = "TASA Bs " + tasaCambio.toFixed(2);
         document.getElementById('tasa-anterior-display').innerText = tasaCambio.toFixed(2);
 

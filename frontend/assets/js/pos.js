@@ -1453,40 +1453,324 @@ function generarEImprimirTicket(ventaId, totales, carritoFacturado, tipoVenta, p
     }, 100);
 }
 
-function imprimirCorteZ(datosCaja) {
-    const ticketZ = document.getElementById('ticket-z-impresion');
+// ==============================================================================
+// 9.5 CIERRE DE CAJA — FASE 1C (arqueo informado + ticket Z + reporte en pantalla)
+// ==============================================================================
+let _previewCierre = null;
+let _datosUltimoCierre = null;
 
+function fmtNum(v) { return Number(v || 0).toFixed(2); }
+function fmtSigned(v) {
+    const n = Number(v || 0);
+    return (n > 0.005 ? '+' : (n < -0.005 ? '-' : '')) + '$ ' + Math.abs(n).toFixed(2);
+}
+function fmtSignedBs(v) {
+    const n = Number(v || 0);
+    return (n > 0.005 ? '+' : (n < -0.005 ? '-' : '')) + 'BS ' + Math.abs(n).toFixed(2);
+}
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+    });
+}
+
+// Abre el modal de cierre CON el preview del servidor (nunca a ciegas)
+async function abrirModalCierreCaja() {
+    try {
+        const preview = await apiFetch('/caja/cierre/preview/', 'GET');
+        _previewCierre = preview;
+        renderizarModalCierre(preview);
+        const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('modalCierreCaja'));
+        modal.show();
+    } catch (error) {
+        alert('No se pudo calcular el cierre: ' + (error.messageForUser || error.detail || error.error || 'Revisa la consola.'));
+        console.error(error);
+    }
+}
+
+function renderizarModalCierre(preview) {
+    const ef = preview.efectivo;
+    document.getElementById('cierre-r-fondo-usd').innerText = fmtNum(ef.fondo_inicial_principal);
+    document.getElementById('cierre-r-fondo-bs').innerText = fmtNum(ef.fondo_inicial_secundaria);
+    document.getElementById('cierre-r-cobros-usd').innerText = fmtNum(ef.cobros_efectivo_principal);
+    document.getElementById('cierre-r-cobros-bs').innerText = fmtNum(ef.cobros_efectivo_secundaria);
+    document.getElementById('cierre-r-egresos-usd').innerText = fmtNum(ef.egresos_principal);
+    document.getElementById('cierre-r-egresos-bs').innerText = fmtNum(ef.egresos_secundaria);
+    document.getElementById('cierre-r-vueltos-usd').innerText = fmtNum(ef.vuelto_entregado_principal);
+    document.getElementById('cierre-r-vueltos-bs').innerText = fmtNum(ef.vuelto_entregado_secundaria);
+
+    // Prefill del declarado con el esperado (el cajero edita con el conteo real)
+    document.getElementById('cierre-usd').value = Number(ef.esperado_principal).toFixed(2);
+    document.getElementById('cierre-bs').value = Number(ef.esperado_secundaria).toFixed(2);
+
+    // Filas por método
+    const tbody = document.getElementById('cierre-por-metodo');
+    tbody.innerHTML = '';
+    (preview.por_metodo || []).forEach(function (m) {
+        const tr = document.createElement('tr');
+        const monedaTxt = m.moneda === 'SECUNDARIA' ? 'BS' : 'USD';
+        if (m.es_efectivo && m.metodo_id) {
+            tr.innerHTML =
+                '<td>' + escHtml(m.nombre) + '</td>' +
+                '<td>' + monedaTxt + '</td>' +
+                '<td class="text-end">' + fmtNum(m.esperado_en_moneda) + '</td>' +
+                '<td><input type="number" step="0.01" class="form-control form-control-sm" ' +
+                'data-metodo-id="' + m.metodo_id + '" value="' + Number(m.esperado_en_moneda).toFixed(2) + '"></td>';
+        } else if (m.es_sin_metodo) {
+            tr.innerHTML =
+                '<td class="text-warning">' + escHtml(m.nombre) + '</td>' +
+                '<td>' + monedaTxt + '</td>' +
+                '<td class="text-end">' + fmtNum(m.esperado_en_moneda) + '</td>' +
+                '<td class="text-center text-muted">asignar método</td>';
+        } else {
+            tr.innerHTML =
+                '<td>' + escHtml(m.nombre) + '</td>' +
+                '<td>' + monedaTxt + '</td>' +
+                '<td class="text-end">' + fmtNum(m.esperado_en_moneda) + '</td>' +
+                '<td class="text-center text-muted">N/A (banco)</td>';
+        }
+        tbody.appendChild(tr);
+    });
+    // Solo se envía declaración por método si el cajero editó el valor (data-dirty)
+    tbody.querySelectorAll('input[data-metodo-id]').forEach(function (inp) {
+        inp.addEventListener('input', function () { inp.dataset.dirty = '1'; });
+    });
+
+    actualizarDescuadreLive();
+}
+
+function actualizarDescuadreLive() {
+    const preview = _previewCierre;
+    const el = document.getElementById('cierre-live-descuadre');
+    if (!preview || !el) return;
+    const ef = preview.efectivo;
+    const usd = parseFloat(document.getElementById('cierre-usd').value) || 0;
+    const bs = parseFloat(document.getElementById('cierre-bs').value) || 0;
+    const difU = usd - Number(ef.esperado_principal);
+    const difB = bs - Number(ef.esperado_secundaria);
+    const tasa = Number(preview.tasas.tasa_cierre) || 1;
+    const consolidado = difU + difB / tasa;
+
+    el.innerHTML =
+        'Descuadre USD: <b>' + fmtSigned(difU) + '</b> &nbsp;|&nbsp; ' +
+        'Descuadre BS: <b>' + fmtSignedBs(difB) + '</b> &nbsp;|&nbsp; ' +
+        'Consolidado: <b>' + fmtSigned(consolidado) + ' USD</b>';
+    el.className = 'alert text-center mb-0 ' + (Math.abs(consolidado) > 0.01 ? 'alert-danger' : 'alert-success');
+}
+
+function imprimirCorteZ(datos) {
+    const preview = datos.preview;
+    const resp = datos.respuesta || {};
+    const res = preview.resumen;
+    const ef = preview.efectivo;
+    const vueltos = preview.vueltos;
+    const tasas = preview.tasas;
+    const cambio = preview.diferencia_cambiaria;
+
+    const ticketZ = document.getElementById('ticket-z-impresion');
     ticketZ.classList.remove('activo');
 
-    document.getElementById('z-fecha-cierre').innerText = new Date(datosCaja.fecha_cierre).toLocaleString('es-VE');
-    document.getElementById('z-cajero').innerText = document.getElementById('nombreCajero').innerText;
-    document.getElementById('z-fondo').innerText = parseFloat(datosCaja.fondo_inicial_principal).toFixed(2);
-    document.getElementById('z-ventas').innerText = parseFloat(datosCaja.total_ventas_principal).toFixed(2);
+    document.getElementById('z-turno').innerText = preview.sesion.id;
+    document.getElementById('z-fecha-cierre').innerText = new Date().toLocaleString('es-VE');
+    document.getElementById('z-fecha-apertura').innerText = preview.sesion.fecha_apertura;
+    document.getElementById('z-cajero').innerText = preview.sesion.cajero || '—';
+    document.getElementById('z-tasas').innerText =
+        fmtNum(tasas.tasa_apertura) + ' → ' + fmtNum(tasas.tasa_cierre) + ' BS/USD (' + fmtNum(tasas.variacion_pct) + '%)';
 
-    const gastos = parseFloat(datosCaja.total_egresos_caja_principal || 0);
-    document.getElementById('z-gastos').innerText = gastos.toFixed(2);
+    document.getElementById('z-facturado').innerText = fmtNum(res.total_facturado_principal);
+    document.getElementById('z-contado').innerText = fmtNum(res.total_contado_principal);
+    document.getElementById('z-credito-emitido').innerText = fmtNum(res.total_credito_emitido_principal);
+    document.getElementById('z-cobrado').innerText = fmtNum(res.total_cobrado_principal);
+    document.getElementById('z-credito-generado').innerText = fmtNum(res.total_credito_generado_principal);
+    document.getElementById('z-num-facturas').innerText = res.num_facturas;
+    document.getElementById('z-ticket-promedio').innerText = fmtNum(res.ticket_promedio_principal);
 
-    const esperado = parseFloat(datosCaja.fondo_inicial_principal) + parseFloat(datosCaja.total_ventas_principal) - gastos;
-    document.getElementById('z-esperado').innerText = esperado.toFixed(2);
+    document.getElementById('z-abonos-total').innerText = fmtNum(res.total_abonos_cxc_principal);
+    document.getElementById('z-abonos-cant').innerText = res.cantidad_abonos_cxc;
 
-    document.getElementById('z-declarado-usd').innerText = parseFloat(datosCaja.reporte_cierre_principal).toFixed(2);
-    document.getElementById('z-declarado-bs').innerText = parseFloat(datosCaja.reporte_cierre_secundaria).toFixed(2);
+    // --- Desglose por método (esperado | declarado | dif.) ---
+    const contMet = document.getElementById('z-por-metodo');
+    contMet.innerHTML = '';
+    (preview.por_metodo || []).forEach(function (m) {
+        let decl = '—';
+        let dif = '—';
+        if (!m.es_efectivo) {
+            decl = 'N/A';
+            dif = '(banco)';
+        } else if (m.metodo_id && datos.declaradoPorMetodoMap && datos.declaradoPorMetodoMap[m.metodo_id] != null) {
+            decl = fmtNum(datos.declaradoPorMetodoMap[m.metodo_id]);
+            dif = fmtSigned(datos.declaradoPorMetodoMap[m.metodo_id] - Number(m.esperado_en_moneda));
+        }
+        contMet.innerHTML += '<div class="fila-total"><span>' + escHtml(m.nombre) +
+            ':</span><span>' + fmtNum(m.esperado_en_moneda) + ' | ' + decl + ' | ' + dif + '</span></div>';
+    });
 
-    const descuadre = parseFloat(datosCaja.descuadre_principal);
-    const spanDescuadre = document.getElementById('z-descuadre');
+    // --- Caja física USD ---
+    document.getElementById('z-fondo-usd').innerText = fmtNum(ef.fondo_inicial_principal);
+    document.getElementById('z-cobros-usd').innerText = fmtNum(ef.cobros_efectivo_principal);
+    document.getElementById('z-egresos-usd').innerText = fmtNum(ef.egresos_principal);
+    document.getElementById('z-vueltos-usd').innerText = fmtNum(ef.vuelto_entregado_principal);
+    document.getElementById('z-esperado-usd').innerText = fmtNum(ef.esperado_principal);
+    document.getElementById('z-declarado-usd').innerText = fmtNum(datos.declaradoP);
+    document.getElementById('z-descuadre-usd').innerText = fmtSigned(Number(datos.declaradoP) - Number(ef.esperado_principal));
 
-    if (descuadre < 0) spanDescuadre.innerText = 'FALTANTE $ ' + Math.abs(descuadre).toFixed(2);
-    else if (descuadre > 0) spanDescuadre.innerText = 'SOBRANTE $ ' + descuadre.toFixed(2);
-    else spanDescuadre.innerText = 'CUADRE PERFECTO';
+    // --- Caja física BS ---
+    document.getElementById('z-fondo-bs').innerText = fmtNum(ef.fondo_inicial_secundaria);
+    document.getElementById('z-cobros-bs').innerText = fmtNum(ef.cobros_efectivo_secundaria);
+    document.getElementById('z-egresos-bs').innerText = fmtNum(ef.egresos_secundaria);
+    document.getElementById('z-vueltos-bs').innerText = fmtNum(ef.vuelto_entregado_secundaria);
+    document.getElementById('z-esperado-bs').innerText = fmtNum(ef.esperado_secundaria);
+    document.getElementById('z-declarado-bs').innerText = fmtNum(datos.declaradoS);
+    document.getElementById('z-descuadre-bs').innerText = fmtSignedBs(Number(datos.declaradoS) - Number(ef.esperado_secundaria));
+
+    // --- Egresos ---
+    const contEg = document.getElementById('z-egresos-detalle');
+    contEg.innerHTML = '';
+    (preview.egresos.detalle || []).forEach(function (e) {
+        const simbolo = e.moneda_extraida === 'SECUNDARIA' ? 'BS ' : '$ ';
+        contEg.innerHTML += '<div class="fila-total"><span>' + escHtml(e.fecha) + ' ' + escHtml(e.concepto) +
+            ':</span><span>-' + simbolo + fmtNum(e.monto_extraido) + '</span></div>';
+    });
+    if (!(preview.egresos.detalle || []).length) {
+        contEg.innerHTML = '<div class="fila-total"><span>Sin egresos</span><span></span></div>';
+    }
+    document.getElementById('z-egresos-total').innerText =
+        '$ ' + fmtNum(preview.egresos.total_principal) + ' / BS ' + fmtNum(preview.egresos.total_secundaria);
+
+    // --- Créditos otorgados ---
+    const contCr = document.getElementById('z-creditos-detalle');
+    contCr.innerHTML = '';
+    const creditos = (preview.creditos_generados && preview.creditos_generados.detalle) || [];
+    creditos.forEach(function (c) {
+        contCr.innerHTML += '<div class="fila-total"><span>Fact. #' + c.venta_id + ' ' + escHtml(c.cliente) +
+            ':</span><span>$ ' + fmtNum(c.saldo) + '</span></div>';
+    });
+    if (!creditos.length) {
+        contCr.innerHTML = '<div class="fila-total"><span>Sin créditos nuevos</span><span></span></div>';
+    }
+    document.getElementById('z-creditos-total').innerText = fmtNum(res.total_credito_generado_principal);
+
+    // --- Vueltos ---
+    document.getElementById('z-vuelto-entregado').innerText = fmtNum(vueltos.entregado_principal);
+    document.getElementById('z-vuelto-aplicado').innerText = fmtNum(vueltos.aplicado_cxc_principal);
+    document.getElementById('z-vuelto-saldo').innerText = fmtNum(vueltos.saldo_favor_principal);
+    document.getElementById('z-vuelto-total').innerText = fmtNum(vueltos.total_generado_principal);
+
+    // --- Diferencia cambiaria + estado final ---
+    document.getElementById('z-impacto-cambio').innerText =
+        fmtSigned(cambio.diferencia_principal) + ' USD (tasa ' + fmtNum(tasas.variacion_pct) + '%)';
+
+    const difU = Number(datos.declaradoP) - Number(ef.esperado_principal);
+    const difB = Number(datos.declaradoS) - Number(ef.esperado_secundaria);
+    const consolidado = (resp.descuadre_total_principal != null)
+        ? Number(resp.descuadre_total_principal)
+        : difU + difB / (Number(tasas.tasa_cierre) || 1);
+    document.getElementById('z-descuadre-consolidado').innerText = fmtSigned(consolidado) + ' USD';
+    document.getElementById('z-estado').innerText = resp.requiere_revision ? '⚠ REQUIERE REVISIÓN' : '✓ CUADRE OK';
 
     ticketZ.classList.add('activo');
 
-    setTimeout(function() {
+    setTimeout(function () {
         window.print();
-        setTimeout(function() {
+        setTimeout(function () {
             ticketZ.classList.remove('activo');
         }, 500);
     }, 100);
+}
+
+function mostrarReporteCierre(datos) {
+    const preview = datos.preview;
+    const resp = datos.respuesta || {};
+    const res = preview.resumen;
+    const ef = preview.efectivo;
+    const vueltos = preview.vueltos;
+    const tasas = preview.tasas;
+    const cambio = preview.diferencia_cambiaria;
+
+    document.getElementById('reporte-cierre-titulo').innerText =
+        'Cierre de Caja #' + (resp.cierre_id || preview.sesion.id) + ' — ' + (preview.sesion.cajero || '');
+
+    let html = '';
+    html += '<p class="text-muted mb-1">Apertura: ' + escHtml(preview.sesion.fecha_apertura) +
+        ' · Tasa: ' + fmtNum(tasas.tasa_apertura) + ' → ' + fmtNum(tasas.tasa_cierre) + ' BS/USD</p>';
+
+    if ((preview.advertencias || []).length) {
+        html += '<div class="alert alert-warning py-2">' + preview.advertencias.map(escHtml).join('<br>') + '</div>';
+    }
+
+    html += '<h6 class="fw-bold mt-3">Resumen de ventas</h6>' +
+        '<table class="table table-sm table-bordered"><tbody>' +
+        '<tr><td>Total facturado</td><td class="text-end">$ ' + fmtNum(res.total_facturado_principal) + '</td></tr>' +
+        '<tr><td>&nbsp;&nbsp;Contado</td><td class="text-end">$ ' + fmtNum(res.total_contado_principal) + '</td></tr>' +
+        '<tr><td>&nbsp;&nbsp;Crédito</td><td class="text-end">$ ' + fmtNum(res.total_credito_emitido_principal) + '</td></tr>' +
+        '<tr><td>Total cobrado (real)</td><td class="text-end">$ ' + fmtNum(res.total_cobrado_principal) + '</td></tr>' +
+        '<tr><td>Crédito nuevo generado</td><td class="text-end">$ ' + fmtNum(res.total_credito_generado_principal) + '</td></tr>' +
+        '<tr><td>Abonos a cuentas viejas</td><td class="text-end">$ ' + fmtNum(res.total_abonos_cxc_principal) + '</td></tr>' +
+        '<tr><td>N° facturas / ticket promedio</td><td class="text-end">' + res.num_facturas +
+        ' / $ ' + fmtNum(res.ticket_promedio_principal) + '</td></tr>' +
+        '</tbody></table>';
+
+    html += '<h6 class="fw-bold mt-3">Desglose por método</h6>' +
+        '<table class="table table-sm table-bordered"><thead><tr>' +
+        '<th>Método</th><th>Moneda</th><th class="text-end">Esperado</th><th class="text-end">Declarado</th><th class="text-end">Diferencia</th>' +
+        '</tr></thead><tbody>';
+    (preview.por_metodo || []).forEach(function (m) {
+        let decl = 'N/A (banco)';
+        let dif = '—';
+        if (m.es_efectivo && m.metodo_id && datos.declaradoPorMetodoMap && datos.declaradoPorMetodoMap[m.metodo_id] != null) {
+            decl = fmtNum(datos.declaradoPorMetodoMap[m.metodo_id]);
+            dif = fmtSigned(datos.declaradoPorMetodoMap[m.metodo_id] - Number(m.esperado_en_moneda));
+        }
+        html += '<tr><td>' + escHtml(m.nombre) + '</td><td>' + (m.moneda === 'SECUNDARIA' ? 'BS' : 'USD') +
+            '</td><td class="text-end">' + fmtNum(m.esperado_en_moneda) +
+            '</td><td class="text-end">' + decl + '</td><td class="text-end">' + dif + '</td></tr>';
+    });
+    html += '</tbody></table>';
+
+    const difU = Number(datos.declaradoP) - Number(ef.esperado_principal);
+    const difB = Number(datos.declaradoS) - Number(ef.esperado_secundaria);
+    html += '<h6 class="fw-bold mt-3">Caja física</h6>' +
+        '<table class="table table-sm table-bordered"><thead><tr><th></th><th class="text-end">USD</th><th class="text-end">BS</th></tr></thead><tbody>' +
+        '<tr><td>Fondo inicial</td><td class="text-end">' + fmtNum(ef.fondo_inicial_principal) + '</td><td class="text-end">' + fmtNum(ef.fondo_inicial_secundaria) + '</td></tr>' +
+        '<tr><td>(+) Cobros efectivo</td><td class="text-end">' + fmtNum(ef.cobros_efectivo_principal) + '</td><td class="text-end">' + fmtNum(ef.cobros_efectivo_secundaria) + '</td></tr>' +
+        '<tr><td>(−) Egresos</td><td class="text-end">' + fmtNum(ef.egresos_principal) + '</td><td class="text-end">' + fmtNum(ef.egresos_secundaria) + '</td></tr>' +
+        '<tr><td>(−) Vueltos entregados</td><td class="text-end">' + fmtNum(ef.vuelto_entregado_principal) + '</td><td class="text-end">' + fmtNum(ef.vuelto_entregado_secundaria) + '</td></tr>' +
+        '<tr class="table-light fw-bold"><td>= Esperado</td><td class="text-end">' + fmtNum(ef.esperado_principal) + '</td><td class="text-end">' + fmtNum(ef.esperado_secundaria) + '</td></tr>' +
+        '<tr><td>= Declarado</td><td class="text-end">' + fmtNum(datos.declaradoP) + '</td><td class="text-end">' + fmtNum(datos.declaradoS) + '</td></tr>' +
+        '<tr class="fw-bold"><td>= Descuadre</td><td class="text-end">' + fmtSigned(difU) + '</td><td class="text-end">' + fmtSignedBs(difB) + '</td></tr>' +
+        '</tbody></table>';
+
+    html += '<h6 class="fw-bold mt-3">Vueltos del turno</h6>' +
+        '<p class="mb-1">Entregados: $ ' + fmtNum(vueltos.entregado_principal) +
+        ' · Aplicados a deudas: $ ' + fmtNum(vueltos.aplicado_cxc_principal) +
+        ' · Saldo a favor: $ ' + fmtNum(vueltos.saldo_favor_principal) +
+        ' · <b>Total: $ ' + fmtNum(vueltos.total_generado_principal) + '</b></p>';
+    html += '<p>Diferencia cambiaria estimada: <b>' + fmtSigned(cambio.diferencia_principal) +
+        ' USD</b> (tasa varió ' + fmtNum(tasas.variacion_pct) + '%)</p>';
+
+    const estado = resp.requiere_revision ? '⚠ REQUIERE REVISIÓN' : '✓ CUADRE OK';
+    html += '<div class="alert ' + (resp.requiere_revision ? 'alert-danger' : 'alert-success') +
+        ' fw-bold text-center mb-0">DESCUADRE CONSOLIDADO: ' + fmtSigned(resp.descuadre_total_principal) +
+        ' USD — ' + estado + '</div>';
+
+    document.getElementById('reporte-cierre-contenido').innerHTML = html;
+    document.getElementById('reporte-cierre-overlay').style.display = 'block';
+}
+
+function reimprimirCorteZ() {
+    if (_datosUltimoCierre) {
+        imprimirCorteZ(_datosUltimoCierre);
+    } else {
+        alert('No hay un cierre reciente para reimprimir.');
+    }
+}
+
+function finalizarCierreSesion() {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem(POS_CART_KEY);
+    localStorage.removeItem(POS_SESION_ID_KEY);
+    window.location.href = 'index.html';
 }
 
 // ==============================================================================
@@ -1523,31 +1807,58 @@ async function procesarAperturaCaja() {
 }
 
 async function procesarCierreCaja() {
+    // FASE 1C: cierre informado → POST /caja/cierre/ (snapshot inmutable)
     const declaradoUSD = parseFloat(document.getElementById('cierre-usd').value) || 0;
     const declaradoBS = parseFloat(document.getElementById('cierre-bs').value) || 0;
+    const observacion = (document.getElementById('cierre-observacion')?.value || '').trim();
 
-    if (confirm("Estas seguro de cerrar la caja? Esta accion no se puede deshacer.")) {
-        try {
-            const payload = {
-                reporte_cierre_principal: declaradoUSD.toFixed(2),
-                reporte_cierre_secundaria: declaradoBS.toFixed(2)
-            };
-            const respuesta = await apiFetch('/pos/caja/', 'PUT', payload);
-            imprimirCorteZ(respuesta);
+    if (!confirm("¿Estás seguro de cerrar la caja? Esta acción no se puede deshacer.")) return;
 
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
-            localStorage.removeItem(POS_CART_KEY);
-            localStorage.removeItem(POS_SESION_ID_KEY);
+    // Solo se envía declaración por método de los campos que el cajero EDITÓ
+    const declaradoPorMetodo = [];
+    const declaradoPorMetodoMap = {};
+    document.querySelectorAll('#cierre-por-metodo input[data-metodo-id][data-dirty="1"]').forEach(function (inp) {
+        const monto = (parseFloat(inp.value) || 0);
+        declaradoPorMetodo.push({
+            metodo_id: parseInt(inp.dataset.metodoId, 10),
+            declarado_en_moneda: monto.toFixed(2)
+        });
+        declaradoPorMetodoMap[parseInt(inp.dataset.metodoId, 10)] = monto;
+    });
 
-            setTimeout(function() {
-                alert("Turno cerrado exitosamente.");
-                window.location.href = 'index.html';
-            }, 2000);
-        } catch (error) {
-            alert("Error al cerrar la caja.");
-            console.error(error);
-        }
+    try {
+        const respuesta = await apiFetch('/caja/cierre/', 'POST', {
+            declarado_efectivo_principal: declaradoUSD.toFixed(2),
+            declarado_efectivo_secundaria: declaradoBS.toFixed(2),
+            declarado_por_metodo: declaradoPorMetodo,
+            observacion: observacion
+        });
+
+        const datos = {
+            preview: _previewCierre,
+            declaradoP: declaradoUSD,
+            declaradoS: declaradoBS,
+            declaradoPorMetodoMap: declaradoPorMetodoMap,
+            respuesta: respuesta
+        };
+        _datosUltimoCierre = datos;
+
+        // Cerrar modal, imprimir ticket Z y mostrar el reporte en pantalla
+        const modalEl = document.getElementById('modalCierreCaja');
+        const modalInstance = bootstrap.Modal.getInstance(modalEl);
+        if (modalInstance) modalInstance.hide();
+
+        imprimirCorteZ(datos);
+
+        localStorage.removeItem(POS_CART_KEY);
+        localStorage.removeItem(POS_SESION_ID_KEY);
+
+        setTimeout(function () {
+            mostrarReporteCierre(datos);
+        }, 2200);
+    } catch (error) {
+        alert("Error al cerrar la caja: " + (error.messageForUser || error.detail || error.error || "Revisa la consola."));
+        console.error(error);
     }
 }
 

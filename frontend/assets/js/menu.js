@@ -105,7 +105,7 @@ function renderizarNavbar(config) {
                     <a href="mercado.html" class="btn btn-sm btn-info fw-bold me-2 text-white">
                         <i class="bi bi-truck"></i> Mercado
                     </a>
-                    <button class="btn btn-sm btn-danger fw-bold" data-bs-toggle="modal" data-bs-target="#modalCierreCaja">Cerrar Turno</button>
+                    <button class="btn btn-sm btn-danger fw-bold" onclick="abrirModalCierreCaja()">Cerrar Turno</button>
                 </div>
             </div>
         </nav>`;

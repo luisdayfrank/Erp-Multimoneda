@@ -312,8 +312,25 @@ class SesionCaja(models.Model):
     reporte_cierre_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     reporte_cierre_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
+    # >>> FASE 1A: tasa vigente al ABRIR la sesión (foto del momento) <<<
+    # Necesaria para el cuadre cambiario del cierre. Si queda vacía, se autorellena
+    # al crear la sesión con ConfiguracionGlobal.tasa_cambio_actual.
+    tasa_apertura = models.DecimalField(
+        max_digits=15, decimal_places=2, null=True, blank=True,
+        help_text="Tasa de cambio vigente al abrir la sesión (se autollená al crearla)."
+    )
+
     class Meta:
         verbose_name_plural = "Sesiones de Caja"
+
+    def save(self, *args, **kwargs):
+        # FASE 1A: capturar la tasa de apertura solo al crear la sesión.
+        # Nunca se recalcula después (es una foto histórica).
+        if not self.pk and self.tasa_apertura is None:
+            config = ConfiguracionGlobal.objects.first()
+            if config:
+                self.tasa_apertura = config.tasa_cambio_actual
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Sesión #{self.id} - {self.usuario.username} ({self.estado})"
@@ -351,6 +368,12 @@ class MetodoPago(models.Model):
     MONEDAS = (('PRINCIPAL', 'Moneda Principal (USD)'), ('SECUNDARIA', 'Moneda Secundaria (BS)'))
     moneda_referencia = models.CharField(max_length=15, choices=MONEDAS, default='PRINCIPAL')
     activo = models.BooleanField(default=True)
+    # >>> FASE 1A: distingue efectivo físico (gaveta) de dinero electrónico (banco) <<<
+    es_efectivo = models.BooleanField(
+        default=False,
+        help_text="True solo para Efectivo USD y Efectivo BS. "
+                  "Los métodos electrónicos (Pago Móvil, Zelle, Punto, Transferencia) van al banco."
+    )
 
     def __str__(self):
         return self.nombre
@@ -392,8 +415,45 @@ class Venta(TransaccionBase):
     # Usamos related_name='ventas' para poder hacer self.ventas.filter() en el cálculo de arriba
     sesion_caja = models.ForeignKey(SesionCaja, on_delete=models.RESTRICT, related_name='ventas', null=True, blank=True)
 
+    # ======================================================================
+    # >>> FASE 1A (Anexo A): REGISTRO EXPLÍCITO DEL VUELTO <<<
+    # Hoy el excedente (pagos - total) no queda registrado como movimiento del
+    # turno. Estos campos guardan cuánto hubo y cómo se distribuyó.
+    # ======================================================================
+    vuelto_total_principal = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Excedente total (pagos - total_venta) en USD equivalente"
+    )
+    vuelto_entregado_principal = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Parte del vuelto entregada físicamente en USD (sale de la gaveta)"
+    )
+    vuelto_entregado_secundaria = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Parte del vuelto entregada físicamente en BS (sale de la gaveta)"
+    )
+    vuelto_aplicado_cxc_principal = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Parte del vuelto aplicada a deudas viejas (CxC). NO sale de la gaveta"
+    )
+    vuelto_a_saldo_favor_principal = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Parte del vuelto guardada como saldo a favor del cliente. NO sale de la gaveta"
+    )
+
     def __str__(self):
         return f"Venta #{self.id} - {self.cliente.nombre} - {self.total_principal}"
+
+    @property
+    def vuelto_asignado_principal(self):
+        """Suma en USD equivalente de todas las asignaciones del vuelto."""
+        tasa = self.tasa_cambio_historica or Decimal('1')
+        return (
+            self.vuelto_entregado_principal
+            + (self.vuelto_entregado_secundaria / tasa if tasa > 0 else Decimal('0'))
+            + self.vuelto_aplicado_cxc_principal
+            + self.vuelto_a_saldo_favor_principal
+        )
 
     # REEMPLAZAR el método procesar_venta completo dentro de class Venta
     def procesar_venta(self):
@@ -892,6 +952,12 @@ class PagoBase(models.Model):
     """
     Modelo abstracto para reutilizar la lógica de pagos a deudas.
     """
+    # >>> FASE 1A: método en que se entregó el dinero (null en históricos) <<<
+    # Sin esto es imposible cuadrar el cierre de caja por método de pago.
+    metodo = models.ForeignKey(
+        MetodoPago, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        help_text="Método de pago con que se entregó el dinero (null en registros históricos)"
+    )
     # Fecha del abono: editable para poder corregir registros desde el admin.
     # Por defecto toma el momento del registro (antes era auto_now_add, inmutable).
     fecha = models.DateTimeField(
@@ -912,6 +978,27 @@ class PagoBase(models.Model):
 class PagoCuentaCobrar(PagoBase):
     cuenta = models.ForeignKey(CuentaPorCobrar, on_delete=models.CASCADE, related_name='pagos')
     usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, help_text="Cajero que recibió el pago")
+    # >>> FASE 1A: sesión de caja en la que se recibió este abono <<<
+    # null si fue registrado por admin/offline (no suma al arqueo de ningún turno).
+    sesion_caja = models.ForeignKey(
+        SesionCaja, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='abonos_cxc',
+        help_text="Sesión de caja en la que se recibió este abono (null si fue por admin/offline)"
+    )
+    # >>> FASE 1A: origen del abono. CRÍTICO para evitar doble conteo <<<
+    # COBRO_POS: dinero ya contado en Venta.pagos (PagoVenta) -> NO debe sumarse
+    #            otra vez como "cobrado" en el cierre (bug de doble conteo).
+    # SALDO_FAVOR: no fue dinero físico/electrónico del turno.
+    ORIGENES = (
+        ('COBRO_POS', 'Cobro desde POS (dinero ya contado como PagoVenta)'),
+        ('ABONO_CXC', 'Abono directo a CxC'),
+        ('ABONO_MASIVO', 'Abono masivo desde módulo Clientes'),
+        ('RUTA_MERCADO', 'Cobranza en Ruta de Mercado'),
+        ('VUELTO_VENTA', 'Vuelto de venta aplicado a deuda vieja'),
+        ('SALDO_FAVOR', 'Pagado con saldo a favor del cliente'),
+        ('OTRO', 'Otro origen (registros históricos / admin)'),
+    )
+    origen = models.CharField(max_length=20, choices=ORIGENES, default='OTRO')
 
     def __str__(self):
         return f"Abono a CxC #{self.cuenta.id} - Monto: {self.monto_abono_principal}"
@@ -939,6 +1026,12 @@ class PagoCuentaCobrar(PagoBase):
 class PagoCuentaPagar(PagoBase):
     cuenta = models.ForeignKey(CuentaPorPagar, on_delete=models.CASCADE, related_name='pagos')
     usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, help_text="Usuario que emitió el pago")
+    # >>> FASE 1A: paridad con PagoCuentaCobrar (trazabilidad de caja) <<<
+    sesion_caja = models.ForeignKey(
+        SesionCaja, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pagos_cxp',
+        help_text="Sesión de caja de la que salió este pago (null si fue por admin/offline)"
+    )
 
     def __str__(self):
         return f"Abono a CxP #{self.cuenta.id} - Monto: {self.monto_abono_principal}"
@@ -1579,6 +1672,12 @@ class ReciboAbono(models.Model):
     origen = models.CharField(max_length=20, choices=ORIGENES, default='ABONO_MASIVO')
     
     venta_origen = models.ForeignKey(Venta, on_delete=models.SET_NULL, null=True, blank=True, related_name='recibos')
+    # >>> FASE 1A: sesión de caja en la que se recibió el dinero <<<
+    sesion_caja = models.ForeignKey(
+        SesionCaja, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='recibos',
+        help_text="Sesión de caja en la que se recibió este pago (null si fue por admin/offline)"
+    )
     
     class Meta:
         ordering = ['-fecha']
@@ -1636,6 +1735,116 @@ class ReciboAbono(models.Model):
     @property
     def facturas_afectadas_count(self):
         return self.aplicaciones.count()
+
+
+# ==============================================================================
+# 7. CIERRE DE CAJA (FASE 1A) — Fotografía inmutable del cierre de una sesión
+# ==============================================================================
+
+class CierreCaja(models.Model):
+    """
+    Foto inmutable del cierre de una sesión de caja.
+
+    Una vez creado, NUNCA se recalcula: cambiar SesionCaja no debe alterar un
+    cierre histórico. Los detalles por método van en CierrePorMetodoPago y el
+    desglose completo (ventas, abonos, egresos, vueltos) en snapshot_json.
+
+    Convención de moneda: _principal = USD, _secundaria = BS (igual que el resto
+    del código). Los importes "principal" de totales de turno están valorizados
+    a la tasa histórica de cada transacción.
+    """
+    sesion = models.OneToOneField(SesionCaja, on_delete=models.CASCADE, related_name='cierre')
+    fecha_cierre = models.DateTimeField(auto_now_add=True)
+    usuario_cierre = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
+
+    # --- Totales del turno (USD valorizado a tasa histórica) ---
+    total_facturado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Contado + crédito emitido en el turno")
+    total_cobrado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Dinero realmente recibido (pagos de ventas + abonos CxC del turno), sin doble conteo")
+    total_credito_generado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="CxC nuevas generadas en el turno")
+    total_abonos_cxc_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Abonos a CxC viejas recibidos en el turno")
+
+    # --- Caja física (gaveta) ---
+    fondo_inicial_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    fondo_inicial_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    efectivo_esperado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    efectivo_esperado_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    efectivo_declarado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    efectivo_declarado_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    descuadre_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Declarado USD - Esperado USD")
+    descuadre_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Declarado BS - Esperado BS")
+    descuadre_total_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Descuadre consolidado en USD (incluye BS / tasa_cierre)")
+
+    # --- Vueltos del turno (Anexo A) ---
+    vuelto_entregado_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    vuelto_entregado_secundaria = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    vuelto_retenido_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Vuelto aplicado a CxC + guardado como saldo a favor (no salió de la gaveta)")
+
+    # --- Contexto cambiario ---
+    tasa_apertura = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('1.00'))
+    tasa_cierre = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('1.00'))
+    diferencia_cambiaria_estimada_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # --- Snapshot completo (auditoría forense / reconstruir reporte) ---
+    snapshot_json = models.JSONField(default=dict)
+
+    observacion = models.TextField(blank=True)
+    firma_cajero = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        ordering = ['-fecha_cierre']
+        verbose_name = "Cierre de Caja"
+        verbose_name_plural = "Cierres de Caja"
+
+    def __str__(self):
+        return f"Cierre Sesión #{self.sesion_id} - {self.fecha_cierre}"
+
+    @property
+    def requiere_revision(self):
+        """True si hay algún descuadre fuera de tolerancia (±$0.01 / ±Bs 1)."""
+        return (
+            abs(self.descuadre_principal) > Decimal('0.01')
+            or abs(self.descuadre_secundaria) > Decimal('1.00')
+        )
+
+
+class CierrePorMetodoPago(models.Model):
+    """
+    Una fila por cada método de pago usado (o esperado) en el turno.
+    Permite comparar efectivo USD vs Pago Móvil vs Zelle, etc., por separado.
+    """
+    cierre = models.ForeignKey(CierreCaja, on_delete=models.CASCADE, related_name='por_metodo')
+    metodo = models.ForeignKey(MetodoPago, on_delete=models.RESTRICT)
+    moneda = models.CharField(max_length=15, choices=MetodoPago.MONEDAS)
+
+    # Cuánto debió recibir por este método
+    esperado_en_moneda = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    esperado_equivalente_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    # Cuánto declaró el cajero (solo aplica a efectivo; se guarda para todos)
+    declarado_en_moneda = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    declarado_equivalente_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    descuadre_en_moneda = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    descuadre_equivalente_principal = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+
+    observacion = models.CharField(max_length=250, blank=True)
+
+    class Meta:
+        ordering = ['metodo__moneda_referencia', 'metodo__nombre']
+        unique_together = ('cierre', 'metodo')
+        verbose_name = "Cierre por Método de Pago"
+        verbose_name_plural = "Cierres por Método de Pago"
+
+    def __str__(self):
+        return f"Cierre #{self.cierre_id} - {self.metodo.nombre}: esperado {self.esperado_en_moneda} / declarado {self.declarado_en_moneda}"
 
 
 class ReciboAbonoAplicacion(models.Model):

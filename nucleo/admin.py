@@ -39,7 +39,8 @@ from .models import (
     RutaMercadoGasto,
     BorradorFactura,
     TomaFisica, DetalleTomaFisica, AjusteInventario, DetalleAjusteInventario,
-    ReciboAbono, ReciboAbonoAplicacion
+    ReciboAbono, ReciboAbonoAplicacion,
+    CierreCaja, CierrePorMetodoPago
 )
 
 # ==============================================================================
@@ -73,8 +74,8 @@ class AlmacenAdmin(admin.ModelAdmin):
 
 @admin.register(MetodoPago)
 class MetodoPagoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'moneda_referencia', 'activo')
-    list_filter = ('moneda_referencia', 'activo')
+    list_display = ('nombre', 'moneda_referencia', 'activo', 'es_efectivo')
+    list_filter = ('moneda_referencia', 'activo', 'es_efectivo')
     search_fields = ('nombre',)
 
 # ==============================================================================
@@ -200,7 +201,7 @@ class SesionCajaAdmin(admin.ModelAdmin):
         'get_ventas', 'get_descuadre'
     )
     list_filter = ('estado', 'usuario', 'fecha_apertura')
-    readonly_fields = ('fecha_apertura', 'fecha_cierre', 'get_ventas', 'get_descuadre')
+    readonly_fields = ('fecha_apertura', 'fecha_cierre', 'tasa_apertura', 'get_ventas', 'get_descuadre')
     inlines = [EgresoCajaInline] 
 
     def get_ventas(self, obj):
@@ -227,7 +228,12 @@ class VentaAdmin(admin.ModelAdmin):
     list_display = ('id', 'fecha', 'cliente', 'tipo', 'estado', 'total_principal', 'total_secundaria')
     list_filter = ('estado', 'tipo', 'fecha', 'almacen')
     search_fields = ('cliente__nombre', 'id')
-    readonly_fields = ('fecha',)
+    # FASE 1A: los campos de vuelto se calculan al facturar; no editar a mano.
+    readonly_fields = (
+        'fecha',
+        'vuelto_total_principal', 'vuelto_entregado_principal', 'vuelto_entregado_secundaria',
+        'vuelto_aplicado_cxc_principal', 'vuelto_a_saldo_favor_principal',
+    )
     inlines = [DetalleVentaInline, PagoVentaInline]
 
     def save_model(self, request, obj, form, change):
@@ -482,13 +488,16 @@ class PagoCuentaCobrarInline(admin.TabularInline):
     extra = 0
     # 'fecha' es editable a propósito: permite corregir la fecha del abono
     # si se registró mal, sin tener que borrar y recrear el registro.
-    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago', 'referencia', 'usuario')
+    # FASE 1A: 'metodo', 'sesion_caja' y 'origen' permiten cuadrar el cierre por método.
+    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago',
+              'metodo', 'origen', 'sesion_caja', 'referencia', 'usuario')
     readonly_fields = ('usuario',)
 
 class PagoCuentaPagarInline(admin.TabularInline):
     model = PagoCuentaPagar
     extra = 0
-    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago', 'referencia', 'usuario')
+    fields = ('fecha', 'monto_abono_principal', 'monto_entregado_secundaria', 'tasa_cambio_pago',
+              'metodo', 'sesion_caja', 'referencia', 'usuario')
     readonly_fields = ('usuario',)
 
 @admin.register(CuentaPorCobrar)
@@ -649,8 +658,8 @@ class ReciboAbonoAplicacionInline(admin.TabularInline):
 
 @admin.register(ReciboAbono)
 class ReciboAbonoAdmin(admin.ModelAdmin):
-    list_display = ('id', 'cliente', 'fecha', 'monto_total_entregado', 'total_aplicado_display', 'sobrante_a_favor', 'origen', 'usuario')
-    list_filter = ('origen', 'fecha', 'usuario')
+    list_display = ('id', 'cliente', 'fecha', 'monto_total_entregado', 'total_aplicado_display', 'sobrante_a_favor', 'origen', 'usuario', 'sesion_caja')
+    list_filter = ('origen', 'fecha', 'usuario', 'sesion_caja')
     search_fields = ('cliente__nombre', 'referencia')
     # 'fecha' editable: se puede corregir la fecha del recibo al agregar o modificar
     readonly_fields = ('total_aplicado_display', 'facturas_afectadas_display')
@@ -669,3 +678,66 @@ class ReciboAbonoAplicacionAdmin(admin.ModelAdmin):
     list_display = ('recibo', 'cuenta', 'monto_aplicado', 'saldo_antes', 'saldo_despues', 'saldo_la_factura', 'origen_dinero')
     list_filter = ('saldo_la_factura', 'origen_dinero')
     readonly_fields = ('saldo_antes', 'saldo_despues')
+
+
+# ==============================================================================
+# 8. CIERRE DE CAJA (FASE 1A)
+# ==============================================================================
+
+class CierrePorMetodoPagoInline(admin.TabularInline):
+    model = CierrePorMetodoPago
+    extra = 0
+    can_delete = False
+    readonly_fields = ('metodo', 'moneda', 'esperado_en_moneda', 'esperado_equivalente_principal',
+                       'declarado_en_moneda', 'declarado_equivalente_principal',
+                       'descuadre_en_moneda', 'descuadre_equivalente_principal', 'observacion')
+
+
+@admin.register(CierreCaja)
+class CierreCajaAdmin(admin.ModelAdmin):
+    """
+    El cierre es una foto inmutable: solo observacion y firma_cajero son editables.
+    """
+    list_display = ('id', 'sesion', 'fecha_cierre', 'usuario_cierre',
+                    'total_cobrado_principal', 'descuadre_principal', 'descuadre_secundaria',
+                    'requiere_revision_display')
+    list_filter = ('fecha_cierre', 'usuario_cierre')
+    search_fields = ('sesion__usuario__username', 'observacion', 'firma_cajero')
+    date_hierarchy = 'fecha_cierre'
+    inlines = [CierrePorMetodoPagoInline]
+
+    def get_readonly_fields(self, request, obj=None):
+        todos = (
+            'sesion', 'fecha_cierre', 'usuario_cierre',
+            'total_facturado_principal', 'total_cobrado_principal',
+            'total_credito_generado_principal', 'total_abonos_cxc_principal',
+            'fondo_inicial_principal', 'fondo_inicial_secundaria',
+            'efectivo_esperado_principal', 'efectivo_esperado_secundaria',
+            'efectivo_declarado_principal', 'efectivo_declarado_secundaria',
+            'descuadre_principal', 'descuadre_secundaria', 'descuadre_total_principal',
+            'vuelto_entregado_principal', 'vuelto_entregado_secundaria', 'vuelto_retenido_principal',
+            'tasa_apertura', 'tasa_cierre', 'diferencia_cambiaria_estimada_principal',
+            'snapshot_json',
+        )
+        return todos
+
+    def has_delete_permission(self, request, obj=None):
+        # Un cierre histórico no se borra (auditoría).
+        return False
+
+    def requiere_revision_display(self, obj):
+        return "⚠ REQUIERE REVISIÓN" if obj.requiere_revision else "OK"
+    requiere_revision_display.short_description = 'Estado'
+
+
+@admin.register(CierrePorMetodoPago)
+class CierrePorMetodoPagoAdmin(admin.ModelAdmin):
+    list_display = ('cierre', 'metodo', 'moneda', 'esperado_en_moneda', 'declarado_en_moneda',
+                    'descuadre_en_moneda', 'descuadre_equivalente_principal')
+    list_filter = ('moneda', 'metodo')
+    readonly_fields = ('cierre', 'metodo', 'moneda', 'esperado_en_moneda', 'esperado_equivalente_principal',
+                       'declarado_en_moneda', 'declarado_equivalente_principal',
+                       'descuadre_en_moneda', 'descuadre_equivalente_principal')
+
+    def has_delete_permission(self, request, obj=None):
+        return False

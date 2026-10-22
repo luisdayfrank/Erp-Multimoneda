@@ -7,3 +7,4 @@ PyJWT==2.11.0
 sqlparse==0.5.5
 tzdata==2025.3
 openpyxl
+requests==2.32.3

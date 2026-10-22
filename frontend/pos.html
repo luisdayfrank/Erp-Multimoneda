@@ -609,11 +609,41 @@
                 </div>
                 <div class="modal-body p-4 text-center">
                     <p class="text-muted">La tasa no ha sido actualizada hoy. Ingresa la tasa actual antes de continuar.</p>
+
+                    <!-- FASE 1.6: referencia BCV (visible solo si usar_tasa_bcv=True) -->
+                    <div id="bcv-seccion" class="mb-3" style="display:none;">
+                        <div class="border rounded p-2 bg-light">
+                            <div class="small text-muted mb-1">Tasa BCV oficial (referencia)</div>
+                            <div class="fs-5 fw-bold text-primary">
+                                <span id="bcv-tasa-display">--</span> BS/USD
+                                <button type="button" class="btn btn-sm btn-outline-primary ms-2" id="btn-recargar-bcv"
+                                        onclick="recargarTasaBCV()" title="Volver a consultar la tasa BCV">
+                                    <i class="bi bi-arrow-clockwise"></i> Actualizar BCV
+                                </button>
+                            </div>
+                            <div class="small text-muted" id="bcv-fuente-display"></div>
+                            <div id="bcv-error" class="small text-danger mt-1" style="display:none;">
+                                No se pudo consultar la tasa BCV automáticamente.
+                                <input type="number" class="form-control form-control-sm mt-1" id="tasa-bcv-manual-input"
+                                       step="0.01" placeholder="Ingresar tasa BCV manual" oninput="actualizarDiferenciaTasa()">
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label fw-bold">Tasa de Cambio (BS / USD)</label>
-                        <input type="number" class="form-control form-control-lg text-center" id="nueva-tasa-input" step="0.01" value="0.00">
+                        <input type="number" class="form-control form-control-lg text-center" id="nueva-tasa-input" step="0.01" value="0.00" oninput="actualizarDiferenciaTasa()">
+                        <div class="small mt-1" id="tasa-diferencia-display" style="display:none;"></div>
+                        <div class="alert alert-danger py-2 mt-2 mb-0" id="tasa-alerta-banner" style="display:none;"></div>
                     </div>
                     <p class="small text-muted">Tasa anterior: <span id="tasa-anterior-display">0.00</span></p>
+
+                    <!-- FASE 1.6: motivo de diferencia con BCV (opcional) -->
+                    <div class="mb-2 text-start">
+                        <label class="form-label small fw-bold mb-1">Motivo de la diferencia (opcional)</label>
+                        <input type="text" class="form-control form-control-sm" id="tasa-motivo-input" maxlength="250"
+                               placeholder="Ej: spread operativo 0.2%">
+                    </div>
                 </div>
                 <div class="modal-footer d-flex justify-content-between">
                     <button class="btn btn-outline-danger" onclick="cerrarSesionLocal()">Salir</button>

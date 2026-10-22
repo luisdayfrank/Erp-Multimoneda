@@ -76,6 +76,71 @@ def _tipo_documento_cxc(cxc):
         return "DEUDA_INICIAL"
     return "CREDITO_RUTA"
 
+
+# ==============================================================================
+# MEJORAS INVENTARIO — Desglose de stock por presentación (greedy)
+# ==============================================================================
+def desglosar_stock(producto, stock_base):
+    """
+    Convierte N unidades base en el desglose óptimo por presentación.
+    Algoritmo greedy: de mayor factor_conversion a menor.
+
+    Ej: stock 107 con [Bulto x10, Unidad x1]  -> 10 bultos + 7 unidades
+        stock 107 con [Bulto x10, Medio x5, Unidad x1]
+                                      -> 10 bultos + 1 medio bulto + 2 unidades
+
+    Devuelve {'desglose': [...], 'residuo_unidades': float, 'total_unidades_base': float}.
+    NOTA: si el stock es negativo (permitido por config) el desglose queda vacío.
+    """
+    presentaciones = list(
+        PresentacionProducto.objects
+        .filter(producto=producto)
+        .select_related('unidad_medida')
+        .order_by('-factor_conversion')
+    )
+
+    # Garantizar que la unidad base (factor 1) exista en el desglose
+    factores_presentes = {p.factor_conversion for p in presentaciones}
+    if Decimal('1.0000') not in factores_presentes:
+        presentaciones.append(None)  # None = unidad base del producto
+
+    restante = Decimal(str(stock_base))
+    desglose = []
+
+    for pres in presentaciones:
+        if pres is None:
+            factor = Decimal('1.0000')
+            nombre = producto.unidad_medida.nombre if producto.unidad_medida else 'Unidad'
+            sigla = producto.unidad_medida.sigla if producto.unidad_medida else 'und'
+            pres_id = None
+        else:
+            factor = Decimal(str(pres.factor_conversion))
+            nombre = pres.unidad_medida.nombre if pres.unidad_medida else f"x{factor}"
+            sigla = pres.unidad_medida.sigla if pres.unidad_medida else 'und'
+            pres_id = pres.id
+
+        if factor <= 0:
+            continue
+
+        cantidad = int(restante // factor)
+        if cantidad > 0:
+            desglose.append({
+                'presentacion_id': pres_id,
+                'nombre': nombre,
+                'sigla': sigla,
+                'factor': float(factor),
+                'cantidad': cantidad,
+                'unidades_base': float(cantidad * factor),
+            })
+            restante -= cantidad * factor
+
+    return {
+        'desglose': desglose,
+        'residuo_unidades': float(restante),
+        'total_unidades_base': float(stock_base),
+    }
+
+
 class GestionCajaAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
@@ -542,6 +607,24 @@ class DashboardResumenAPIView(APIView):
             for item in inventario_critico
         ]
 
+        # >>> MEJORA INVENTARIO: capital inmovilizado (1 query agrupada + Decimal en
+        # Python; evita overflow DECIMAL(15,4) x DECIMAL(15,4) en SQL) <<<
+        inventario_filas = InventarioAlmacen.objects.filter(
+            almacen__activo=True
+        ).values(
+            'producto_id', 'producto__costo_base_moneda_principal'
+        ).annotate(stock=Sum('stock_actual_unidades_base'))
+
+        inventario_valor_total = Decimal('0.00')
+        productos_con_stock = 0
+        for fila in inventario_filas:
+            stock_fila = fila['stock'] or Decimal('0.00')
+            if stock_fila > 0:
+                productos_con_stock += 1
+            inventario_valor_total += stock_fila * (
+                fila['producto__costo_base_moneda_principal'] or Decimal('0.00')
+            )
+
         return Response({
             "ventas": {
                 "hoy_total": float(total_hoy_usd),
@@ -555,6 +638,11 @@ class DashboardResumenAPIView(APIView):
             },
             "alertas": {
                 "inventario_bajo": lista_alertas_stock
+            },
+            # >>> MEJORA INVENTARIO: capital inmovilizado en inventario <<<
+            "inventario": {
+                "valor_total_usd": float(inventario_valor_total),
+                "productos_con_stock": productos_con_stock,
             }
         }, status=status.HTTP_200_OK)
 
@@ -762,7 +850,9 @@ class ProductoInventarioAPIView(APIView):
                 "costo": float(p.costo_base_moneda_principal),
                 "stock_total": float(stock_total),
                 "stock_inicial": float(p.stock_inicial),
-                "unidad": p.unidad_medida.sigla if p.unidad_medida else "und"
+                "unidad": p.unidad_medida.sigla if p.unidad_medida else "und",
+                # >>> MEJORA INVENTARIO: valor monetario del stock <<<
+                "valor_stock": float(stock_total) * float(p.costo_base_moneda_principal or 0),
             })
         return Response(data, status=status.HTTP_200_OK)
 
@@ -863,6 +953,78 @@ class ProductoDetalleHistorialAPIView(APIView):
 
         except Producto.DoesNotExist:
             return Response({"error": "Producto no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+# ==============================================================================
+# MEJORAS INVENTARIO — Valorización total y desglose por presentación
+# ==============================================================================
+class InventarioResumenValorAPIView(APIView):
+    """GET /inventario/resumen-valor/ — KPI de valor total del inventario."""
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    def get(self, request):
+        # Agregación agrupada en SQL + Decimal en Python (preciso y sin riesgo
+        # de overflow de multiplicar DECIMAL(15,4) x DECIMAL(15,4) en el motor).
+        filas = InventarioAlmacen.objects.filter(almacen__activo=True).values(
+            'producto_id', 'producto__costo_base_moneda_principal'
+        ).annotate(stock=Sum('stock_actual_unidades_base'))
+
+        valor_total = Decimal('0.00')
+        productos_con_stock = 0
+        for fila in filas:
+            stock_fila = fila['stock'] or Decimal('0.00')
+            if stock_fila > 0:
+                productos_con_stock += 1
+            valor_total += stock_fila * (
+                fila['producto__costo_base_moneda_principal'] or Decimal('0.00')
+            )
+
+        almacenes_activos = Almacen.objects.filter(activo=True).count()
+
+        return Response({
+            'valor_total_usd': float(valor_total),
+            'productos_con_stock': productos_con_stock,
+            'almacenes_activos': almacenes_activos,
+        }, status=status.HTTP_200_OK)
+
+
+class ProductoDesgloseStockAPIView(APIView):
+    """GET /inventario/productos/<pk>/desglose/ — desglose por presentación + por almacén."""
+    permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
+
+    def get(self, request, pk):
+        try:
+            producto = Producto.objects.select_related('unidad_medida').get(pk=pk)
+        except Producto.DoesNotExist:
+            return Response({"error": "Producto no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+        total_global = InventarioAlmacen.objects.filter(
+            producto=producto
+        ).aggregate(total=Sum('stock_actual_unidades_base'))['total'] or Decimal('0.00')
+
+        por_almacen = []
+        for inv in InventarioAlmacen.objects.filter(
+            producto=producto
+        ).select_related('almacen'):
+            por_almacen.append({
+                'almacen_id': inv.almacen.id,
+                'almacen': inv.almacen.nombre,
+                'stock_base': float(inv.stock_actual_unidades_base),
+                'desglose': desglosar_stock(producto, inv.stock_actual_unidades_base)['desglose'],
+            })
+
+        return Response({
+            'producto': {
+                'id': producto.id,
+                'codigo': producto.codigo_base,
+                'nombre': producto.nombre,
+                'unidad_base': producto.unidad_medida.sigla if producto.unidad_medida else 'und',
+            },
+            'stock_total_base': float(total_global),
+            'valor_total': float(total_global * producto.costo_base_moneda_principal),
+            'desglose_global': desglosar_stock(producto, total_global),
+            'por_almacen': por_almacen,
+        }, status=status.HTTP_200_OK)
 
 class ProveedorListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]

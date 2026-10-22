@@ -57,7 +57,17 @@ from .api import (
     CierrePreviewAPIView,
     CierreCajaAPIView,
     CierreCajaListAPIView,
-    CierreCajaDetalleAPIView
+    CierreCajaDetalleAPIView,
+    # >>> MEJORAS INVENTARIO <<<
+    InventarioResumenValorAPIView,
+    ProductoDesgloseStockAPIView,
+)
+from .informes.inventario import (  # >>> CENTRO DE INFORMES — Fase 2 (inventario) <<<
+    InformeValorizacionInventarioAPIView,
+    InformeKardexAPIView,
+    InformeStockBajoAPIView,
+    InformeSinMovimientoAPIView,
+    InformeRotacionCategoriaAPIView,
 )
 
 urlpatterns = [
@@ -97,6 +107,9 @@ urlpatterns = [
 
     # Inventario
     path('api/v1/inventario/productos/', ProductoInventarioAPIView.as_view(), name='api_inventario_productos'),
+    # >>> MEJORAS INVENTARIO <<<
+    path('api/v1/inventario/resumen-valor/', InventarioResumenValorAPIView.as_view(), name='api_inventario_resumen_valor'),
+    path('api/v1/inventario/productos/<int:pk>/desglose/', ProductoDesgloseStockAPIView.as_view(), name='api_producto_desglose'),
     path('api/v1/inventario/productos/<int:pk>/historial/', ProductoDetalleHistorialAPIView.as_view(), name='api_producto_historial'),
     path('api/v1/inventario/productos/actualizar-costos/', ActualizarCostosProductosAPIView.as_view(), name='api_actualizar_costos'),
 
@@ -144,4 +157,13 @@ urlpatterns = [
     path('api/v1/inventarios/tomas/<int:pk>/informe/', InformeTomaAPIView.as_view(), name='api_toma_informe'),
     path('api/v1/inventarios/ajustes/', AjusteInventarioListAPIView.as_view(), name='api_ajustes_list'),
     path('api/v1/inventarios/ajustes/<int:pk>/', AjusteInventarioDetalleAPIView.as_view(), name='api_ajuste_detalle'),
+
+    # ======================================================================
+    # CENTRO DE INFORMES (Fase 2 — Inventario; el resto de bloques viene luego)
+    # ======================================================================
+    path('api/v1/informes/inventario/valorizacion/', InformeValorizacionInventarioAPIView.as_view(), name='api_informe_inv_valorizacion'),
+    path('api/v1/informes/inventario/kardex/', InformeKardexAPIView.as_view(), name='api_informe_inv_kardex'),
+    path('api/v1/informes/inventario/stock-bajo/', InformeStockBajoAPIView.as_view(), name='api_informe_inv_stock_bajo'),
+    path('api/v1/informes/inventario/sin-movimiento/', InformeSinMovimientoAPIView.as_view(), name='api_informe_inv_sin_movimiento'),
+    path('api/v1/informes/inventario/rotacion/', InformeRotacionCategoriaAPIView.as_view(), name='api_informe_inv_rotacion'),
 ]

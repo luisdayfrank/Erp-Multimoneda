@@ -1,4 +1,5 @@
 const BASE_URL = '/api/v1';
+
 async function refreshAccessToken() {
     const refresh = localStorage.getItem('refresh_token');
     if (!refresh) throw new Error('No hay refresh_token. Inicia sesión de nuevo.');
@@ -22,12 +23,6 @@ async function refreshAccessToken() {
 async function apiFetch(endpoint, method = 'GET', body = null, _retried = false) {
     console.log(`🚀 Realizando petición: ${method} ${endpoint}`)
     const token = localStorage.getItem('access_token');
-    
-    if (token) {
-        console.log("✅ Token encontrado en localStorage.");
-    } else {
-        console.warn("🚨 No se encontró token en localStorage. La petición irá sin autenticación.");
-    }
 
     const headers = {
         'Content-Type': 'application/json',
@@ -36,6 +31,8 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
 
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+    } else {
+        console.warn("🚨 No se encontró token en localStorage. La petición irá sin autenticación.");
     }
 
     const config = {
@@ -49,22 +46,38 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
 
     try {
         const url = endpoint.startsWith('/') ? `${BASE_URL}${endpoint}` : `${BASE_URL}/${endpoint}`;
-        
+
         console.log("Enviando a:", url);
-        console.log("Con cabeceras:", headers);
+        // FIX SEG-1: NUNCA imprimir las cabeceras en consola. Antes se hacía
+        // console.log("Con cabeceras:", headers) y el token Bearer (la sesión
+        // completa del usuario) quedaba a la vista de cualquiera que abriera la
+        // consola del navegador, una extensión o una grabación de pantalla.
+        console.log("Con cabeceras:", { ...headers, Authorization: headers.Authorization ? 'Bearer ***oculto***' : '(sin token)' });
 
         const response = await fetch(url, config);
 
         // A veces 204/empty; evitamos crash de .json()
         const text = await response.text();
-        const data = text ? JSON.parse(text) : {};
+        // FIX SEG-2: si el servidor devuelve HTML (página de error 500, proxy caído)
+        // JSON.parse reventaba y el usuario veía "Error de red", que lo empujaba a
+        // reintentar a mano una venta que SÍ se había procesado.
+        let data;
+        try {
+            data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+            data = {
+                detail: 'El servidor devolvió una respuesta que no es JSON (¿error 500 o proxy caído?).',
+                raw: String(text).slice(0, 300)
+            };
+        }
 
         if (!response.ok) {
             console.error("❌ Error en la respuesta de la API:", data);
-            console.warn("⚠️ RAW response text:", text);
-            console.warn("⚠️ Parsed error data:", data);
 
-            // Si expiró el access_token, intentamos refrescar y reintentar 1 vez
+            // Si expiró el access_token, intentamos refrescar y reintentar 1 vez.
+            // ESTO ES SEGURO: una petición con token inválido la rechaza la capa de
+            // autenticación ANTES de que la vista la procese, así que reintentarla
+            // nunca puede duplicar una venta.
             const tokenNotValid =
                 response.status === 401 &&
                 data &&
@@ -75,18 +88,15 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
                 try {
                     const newAccess = await refreshAccessToken();
                     console.warn("🔁 Token refrescado. Reintentando petición...");
-                    // Reintenta con token nuevo
                     localStorage.setItem('access_token', newAccess);
                     return await apiFetch(endpoint, method, body, true);
                 } catch (refreshErr) {
-                    // Si no se puede refrescar, limpiamos y forzamos login
                     localStorage.removeItem('access_token');
                     localStorage.removeItem('refresh_token');
-                    
-                    // >>> NUEVO: REDIRECCIÓN FORZADA POR SEGURIDAD <<<
+
                     alert('Tu sesión expiró por inactividad. Serás redirigido al inicio de sesión.');
-                    window.location.href = 'index.html'; 
-                    
+                    window.location.href = 'index.html';
+
                     throw Object.assign(refreshErr, { messageForUser: 'Tu sesión expiró. Inicia sesión nuevamente.' });
                 }
             }
@@ -98,11 +108,10 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
         return data;
 
     } catch (error) {
-        console.error("💥 Excepción catastrófica en apiFetch:", error);
+        console.error("💥 Excepción en apiFetch:", error && error.message ? error.message : error);
         // Si es respuesta de la API con errores de validación (400, 401, etc.)
         if (error && typeof error === 'object') {
             if (error.detail) throw error;
-            // Errores de validación DRF suelen venir en el mismo objeto (ej. { campo: ["mensaje"] })
             const msg = typeof error.detail !== 'undefined' ? error.detail : (error.error || JSON.stringify(error));
             throw Object.assign(error, { messageForUser: msg });
         }

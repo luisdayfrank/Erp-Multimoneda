@@ -65,6 +65,18 @@ function actualizarKPIs(data) {
     document.getElementById('kpi-facturas-hoy').innerText = `${data.ventas.hoy_cantidad} Facturas emitidas hoy`;
     document.getElementById('kpi-ventas-mes').innerText = `$ ${parseFloat(data.ventas.mes_total).toFixed(2)}`;
 
+    // FIX DASHBOARD-1: desglose POS vs Rutas de Mercado. Si un mes se ve
+    // "inflado", aquí se ve de inmediato de cuál de las dos fuentes viene.
+    const fmt = v => `$ ${parseFloat(v || 0).toFixed(2)}`;
+    const detHoy = document.getElementById('kpi-ventas-hoy-detalle');
+    if (detHoy) {
+        detHoy.innerText = `POS ${fmt(data.ventas.hoy_pos_usd)} · Rutas ${fmt(data.ventas.hoy_rutas_usd)}`;
+    }
+    const detMes = document.getElementById('kpi-ventas-mes-detalle');
+    if (detMes) {
+        detMes.innerText = `POS ${fmt(data.ventas.mes_pos_usd)} · Rutas ${fmt(data.ventas.mes_rutas_usd)} · Ingresos brutos`;
+    }
+
     // Deudas
     document.getElementById('kpi-cxc').innerText = `$ ${parseFloat(data.finanzas.por_cobrar_total).toFixed(2)}`;
     document.getElementById('kpi-clientes-cxc').innerText = `${data.finanzas.clientes_con_deuda} Clientes con deuda`;

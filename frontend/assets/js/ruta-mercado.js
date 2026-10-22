@@ -40,6 +40,18 @@ function formatearErrorDRF(error, profundidad = 0) {
     return JSON.stringify(error);
 }
 
+// FIX RUTA-2: fecha local YYYY-MM-DD.
+// valueAsDate y toISOString() trabajan en UTC: después de las 8pm (UTC-4) el
+// campo de fecha se llenaba con el día SIGUIENTE y la ruta terminaba
+// contabilizada en otro día / otro mes en el dashboard.
+function fechaLocalISO(d) {
+    const fecha = d || new Date();
+    const y = fecha.getFullYear();
+    const m = String(fecha.getMonth() + 1).padStart(2, '0');
+    const dia = String(fecha.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dia}`;
+}
+
 // ==============================================================================
 // INICIALIZACIÓN
 // ==============================================================================
@@ -48,7 +60,7 @@ document.addEventListener('DOMContentLoaded', function() {
         window.location.href = 'index.html';
         return;
     }
-    document.getElementById('ruta-fecha').valueAsDate = new Date();
+    document.getElementById('ruta-fecha').value = fechaLocalISO();
     document.getElementById('nombreUsuario').innerText = 'Admin';
     inicializarRutaMercado();
 });
@@ -842,8 +854,9 @@ async function cargarRutaExistente(id) {
         rutaActualId = r.id;
 
         // 4. Datos generales
-        const fecha = new Date(r.fecha);
-        document.getElementById('ruta-fecha').value = fecha.toISOString().split('T')[0];
+        // FIX RUTA-2: fecha LOCAL (toISOString() la corría un día completo
+        // después de las 8pm y movía la ruta a otro día/mes).
+        document.getElementById('ruta-fecha').value = fechaLocalISO(new Date(r.fecha));
 
         const tasa = parseFloat(r.tasa_cambio || 0);
         document.getElementById('ruta-tasa').value = tasa.toFixed(2);
@@ -1255,6 +1268,16 @@ async function duplicarUltimaRuta() {
         const ultima = rutas[0];
         await cargarRutaExistente(ultima.id);
         rutaActualId = null;
+        // FIX RUTA-3: la copia es una PLANTILLA para el día de hoy.
+        // ANTES se heredaba la FECHA de la ruta original (una copia hecha el 5
+        // se registraba el día 1 de nuevo) y las CANTIDADES vendidas, de modo
+        // que al cerrarla el dashboard sumaba DOS veces el mismo mercado.
+        document.getElementById('ruta-fecha').value = fechaLocalISO();
+        filasProducto.forEach(f => {
+            f.salida = 0;
+            f.entrada = 0;
+        });
+        renderizarTablaProductos();
         document.getElementById('contenedor-pagos').innerHTML = '';
         document.getElementById('contenedor-creditos').innerHTML = '';
         document.getElementById('contenedor-gastos').innerHTML = '';
@@ -1263,7 +1286,7 @@ async function duplicarUltimaRuta() {
         pagos = []; creditos = []; gastos = [];
         agregarPago();
         recalcularCuadre();
-        alert('Ruta duplicada como base. Ajusta las cantidades y cierra cuando esté listo.');
+        alert('Ruta duplicada como base (fecha de hoy y cantidades en cero). Carga la salida/entrada real del día y cierra cuando esté listo.');
     } catch (e) {
         alert('Error: ' + e.message);
     }

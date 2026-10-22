@@ -211,85 +211,102 @@ class CatalogoPosAPIView(APIView):
 class ProcesarVentaAPIView(APIView):
     permission_classes = [IsAuthenticated, IsCajeroOrSuperior]
 
-    @transaction.atomic
+    # FIX VENTAS-1 (integridad transaccional):
+    # ANTES el @transaction.atomic envolvía el try/except: si procesar_venta()
+    # fallaba (stock, límite de crédito...) la excepción se convertía en una
+    # respuesta HTTP "normal" y el COMMIT dejaba una Venta BORRADOR huérfana en
+    # la BD. Ese registro podía procesarse después a mano en el admin y sumar
+    # DOS veces la misma operación en el dashboard.
+    # AHORA el try/except queda FUERA del bloque atómico: cualquier fallo hace
+    # rollback real y no queda ningún registro.
     def post(self, request):
         serializer = VentaSerializer(data=request.data, context={'request': request})
 
-        if serializer.is_valid():
-            try:
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
                 venta = serializer.save()
                 resultado_proceso = venta.procesar_venta()
+        except ValueError as e:
+            # Incluye el guard anti-duplicado de VentaSerializer.create
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Los errores de validación del serializer (caja cerrada, turno de
+            # ayer, etc.) también deben llegar claros al cajero, no como un 500.
+            detail = getattr(e, 'detail', None)
+            if detail is not None:
+                return Response({"error": str(detail)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Error interno al procesar la transacción."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-                # Recargar cliente para obtener saldo a favor actualizado
-                cliente = venta.cliente
-                cliente.refresh_from_db()
+        # Recargar cliente para obtener saldo a favor actualizado
+        cliente = venta.cliente
+        cliente.refresh_from_db()
 
-                return Response({
-                    "mensaje": "Venta procesada exitosamente",
-                    "venta_id": venta.id,
-                    "cajero": request.user.username,
-                    "total_cobrado": venta.total_principal,
-                    "tipo": venta.tipo,
-                    "saldo_favor_usado": float(resultado_proceso['saldo_favor_usado']),
-                    "sobrante_abono": float(resultado_proceso['sobrante_abono']),
-                    "saldo_restante_cxc": float(resultado_proceso['saldo_restante']),
-                    "estado_cxc": resultado_proceso['estado_cxc'],
-                    "saldo_favor_cliente": float(cliente.saldo_a_favor),
-                    "saldo_favor_a_nueva": float(resultado_proceso.get('saldo_favor_a_nueva', Decimal('0'))),
-                    # >>> FASE 1.5: vuelto registrado y distribuido <<<
-                    "vuelto_total_principal": float(venta.vuelto_total_principal),
-                    "vuelto_entregado_principal": float(venta.vuelto_entregado_principal),
-                    "vuelto_entregado_secundaria": float(venta.vuelto_entregado_secundaria),
-                    "vuelto_aplicado_cxc_principal": float(venta.vuelto_aplicado_cxc_principal),
-                    "vuelto_a_saldo_favor_principal": float(venta.vuelto_a_saldo_favor_principal),
-                    "vuelto_distribuido": bool(resultado_proceso.get('vuelto_distribuido', False)),
-                    "abonos_cxc_viejas": [
-                        {
-                            "cxc_id": a['cxc_id'],
-                            "venta_id": a['venta_id'],
-                            "monto_aplicado": float(a['monto_aplicado']),
-                            "saldo_restante": float(a['saldo_restante']),
-                            "estado": a['estado'],
-                            "origen": a.get('origen', 'EFECTIVO')
-                        } for a in resultado_proceso.get('abonos_cxc_viejas', [])
-                    ],
-                    "abono_nueva_cxc": float(resultado_proceso.get('abono_nueva_cxc', 0)),
-                    "deuda_total_cliente": float(resultado_proceso.get('deuda_total_cliente', Decimal('0'))),
-                }, status=status.HTTP_201_CREATED)
-
-            except ValueError as e:
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({"error": "Error interno al procesar la transacción."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "mensaje": "Venta procesada exitosamente",
+            "venta_id": venta.id,
+            "cajero": request.user.username,
+            "total_cobrado": venta.total_principal,
+            "tipo": venta.tipo,
+            "saldo_favor_usado": float(resultado_proceso['saldo_favor_usado']),
+            "sobrante_abono": float(resultado_proceso['sobrante_abono']),
+            "saldo_restante_cxc": float(resultado_proceso['saldo_restante']),
+            "estado_cxc": resultado_proceso['estado_cxc'],
+            "saldo_favor_cliente": float(cliente.saldo_a_favor),
+            "saldo_favor_a_nueva": float(resultado_proceso.get('saldo_favor_a_nueva', Decimal('0'))),
+            # >>> FASE 1.5: vuelto registrado y distribuido <<<
+            "vuelto_total_principal": float(venta.vuelto_total_principal),
+            "vuelto_entregado_principal": float(venta.vuelto_entregado_principal),
+            "vuelto_entregado_secundaria": float(venta.vuelto_entregado_secundaria),
+            "vuelto_aplicado_cxc_principal": float(venta.vuelto_aplicado_cxc_principal),
+            "vuelto_a_saldo_favor_principal": float(venta.vuelto_a_saldo_favor_principal),
+            "vuelto_distribuido": bool(resultado_proceso.get('vuelto_distribuido', False)),
+            "abonos_cxc_viejas": [
+                {
+                    "cxc_id": a['cxc_id'],
+                    "venta_id": a['venta_id'],
+                    "monto_aplicado": float(a['monto_aplicado']),
+                    "saldo_restante": float(a['saldo_restante']),
+                    "estado": a['estado'],
+                    "origen": a.get('origen', 'EFECTIVO')
+                } for a in resultado_proceso.get('abonos_cxc_viejas', [])
+            ],
+            "abono_nueva_cxc": float(resultado_proceso.get('abono_nueva_cxc', 0)),
+            "deuda_total_cliente": float(resultado_proceso.get('deuda_total_cliente', Decimal('0'))),
+        }, status=status.HTTP_201_CREATED)
 
 
 class ProcesarCompraAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
 
-    @transaction.atomic
+    # FIX VENTAS-1: mismo arreglo que en ProcesarVentaAPIView. Si procesar_compra()
+    # falla, no debe quedar una Compra BORRADOR huérfana en la BD.
     def post(self, request):
         serializer = CompraSerializer(data=request.data, context={'request': request})
 
-        if serializer.is_valid():
-            try:
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
                 compra = serializer.save()
                 compra.procesar_compra()
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            detail = getattr(e, 'detail', None)
+            if detail is not None:
+                return Response({"error": str(detail)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Error interno al procesar la compra."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-                return Response({
-                    "mensaje": "Compra registrada y stock actualizado exitosamente",
-                    "compra_id": compra.id,
-                    "registrado_por": request.user.username,
-                    "total_pagar": compra.total_principal
-                }, status=status.HTTP_201_CREATED)
-
-            except ValueError as e:
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({"error": "Error interno al procesar la compra."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "mensaje": "Compra registrada y stock actualizado exitosamente",
+            "compra_id": compra.id,
+            "registrado_por": request.user.username,
+            "total_pagar": compra.total_principal
+        }, status=status.HTTP_201_CREATED)
 
 
 class RegistrarAbonoMasivoAPIView(APIView):
@@ -578,8 +595,16 @@ class DashboardResumenAPIView(APIView):
             fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy, estado='CERRADA'
         ).aggregate(total_usd=Sum('total_venta_usd'))
 
-        total_hoy_usd = (ventas_hoy['total_usd'] or Decimal('0.00')) + (rutas_hoy['total_usd'] or Decimal('0.00'))
-        total_mes_usd = (ventas_mes['total_usd'] or Decimal('0.00')) + (rutas_mes['total_usd'] or Decimal('0.00'))
+        # FIX DASHBOARD-1: se guarda el desglose POS vs Rutas para poder ver de
+        # dónde sale cada dólar del KPI (una venta mensual "inflada" suele venir
+        # de una de estas dos fuentes, nunca de la consulta SQL en sí).
+        hoy_pos_usd = ventas_hoy['total_usd'] or Decimal('0.00')
+        hoy_rutas_usd = rutas_hoy['total_usd'] or Decimal('0.00')
+        mes_pos_usd = ventas_mes['total_usd'] or Decimal('0.00')
+        mes_rutas_usd = rutas_mes['total_usd'] or Decimal('0.00')
+
+        total_hoy_usd = hoy_pos_usd + hoy_rutas_usd
+        total_mes_usd = mes_pos_usd + mes_rutas_usd
 
         # CXC / CXP / STOCK (sin cambios)
         cxc_pendientes = CuentaPorCobrar.objects.filter(
@@ -630,6 +655,11 @@ class DashboardResumenAPIView(APIView):
                 "hoy_total": float(total_hoy_usd),
                 "hoy_cantidad": ventas_hoy['cantidad_facturas'] or 0,
                 "mes_total": float(total_mes_usd),
+                # FIX DASHBOARD-1: desglose para diagnosticar ventas "infladas"
+                "hoy_pos_usd": float(hoy_pos_usd),
+                "hoy_rutas_usd": float(hoy_rutas_usd),
+                "mes_pos_usd": float(mes_pos_usd),
+                "mes_rutas_usd": float(mes_rutas_usd),
             },
             "finanzas": {
                 "por_cobrar_total": cxc_pendientes['total_deuda'] or 0.00,

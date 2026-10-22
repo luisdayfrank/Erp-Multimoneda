@@ -184,6 +184,63 @@ class VentaSerializer(serializers.ModelSerializer):
             'vuelto_distribucion'
         ]
 
+    def validate(self, data):
+        """
+        FIX VENTAS-3 (validación de totales):
+        ANTES el backend guardaba total_principal tal cual venía del frontend,
+        sin comprobar nada. Un precio cargado en la moneda equivocada, un
+        impuesto mal tipeado o un carrito restaurado corrupto terminaba en el
+        dashboard como una venta gigante.
+        AHORA los totales se contrastan contra los productos de la venta (con
+        tolerancia de redondeo) antes de tocar la base de datos.
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        def D(valor):
+            return Decimal(str(valor if valor is not None else '0'))
+
+        detalles = data.get('detalles') or []
+        if not detalles:
+            raise serializers.ValidationError("La venta debe tener al menos un producto.")
+
+        subtotal_calc = Decimal('0.00')
+        impuestos_calc = Decimal('0.00')
+        for d in detalles:
+            cantidad = D(d.get('cantidad_presentacion'))
+            precio = D(d.get('precio_unitario_aplicado'))
+            porcentaje = D(d.get('porcentaje_impuesto_aplicado'))
+
+            if cantidad <= 0:
+                raise serializers.ValidationError("Hay un producto con cantidad igual o menor a cero.")
+            if precio < 0:
+                raise serializers.ValidationError("Hay un producto con precio negativo.")
+            if porcentaje < 0 or porcentaje > 100:
+                raise serializers.ValidationError(
+                    f"Porcentaje de impuesto inválido ({porcentaje}%). Debe estar entre 0 y 100."
+                )
+
+            linea = (cantidad * precio).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            subtotal_calc += linea
+            impuestos_calc += (linea * porcentaje / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        total_calc = subtotal_calc + impuestos_calc
+        total_recibido = D(data.get('total_principal'))
+
+        # Tolerancia: admite el descuadre de centavos propio del redondeo del POS,
+        # pero bloquea cualquier diferencia real (dato corrupto).
+        tolerancia = max(Decimal('0.50'), total_calc * Decimal('0.02'))
+        if abs(total_calc - total_recibido) > tolerancia:
+            raise serializers.ValidationError(
+                f"Total inconsistente: con los productos enviados el sistema calcula "
+                f"${total_calc:.2f} pero se recibió ${total_recibido:.2f}. "
+                "Revisa precios, cantidades e impuestos antes de facturar."
+            )
+
+        if D(data.get('tasa_cambio_historica')) <= 0:
+            raise serializers.ValidationError("La tasa de cambio histórica debe ser mayor a cero.")
+
+        return data
+
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
         pagos_data = validated_data.pop('pagos', [])
@@ -205,6 +262,38 @@ class VentaSerializer(serializers.ModelSerializer):
             from rest_framework.exceptions import ValidationError
             raise ValidationError("Acción denegada: Tienes un turno abierto de ayer. Ciérralo antes de vender hoy.")
 
+        # FIX VENTAS-2 (anti-duplicado):
+        # Si un reintento de red o un doble envío repite la MISMA operación en
+        # pocos segundos, se rechaza la copia en lugar de crear una venta
+        # fantasma que inflaría el total del día y del mes.
+        # (VENTANA_ANTIDUP_SEGUNDOS se puede ajustar o poner en 0 para desactivar).
+        from datetime import timedelta
+        VENTANA_ANTIDUP_SEGUNDOS = 15
+        if VENTANA_ANTIDUP_SEGUNDOS > 0:
+            desde = timezone.now() - timedelta(seconds=VENTANA_ANTIDUP_SEGUNDOS)
+            firma = [
+                (d['presentacion_id'], d['cantidad_presentacion'], d['precio_unitario_aplicado'])
+                for d in detalles_data
+            ]
+            candidatas = Venta.objects.filter(
+                cliente_id=cliente_id,
+                usuario=usuario,
+                sesion_caja=sesion_activa,
+                total_principal=validated_data.get('total_principal'),
+                estado__in=['BORRADOR', 'PROCESADA'],
+                fecha__gte=desde,
+            ).prefetch_related('detalles')
+            for otra in candidatas:
+                firma_otra = [
+                    (d.presentacion_id, d.cantidad_presentacion, d.precio_unitario_aplicado)
+                    for d in otra.detalles.all()
+                ]
+                if firma_otra == firma:
+                    raise ValueError(
+                        f"Venta duplicada detectada: es idéntica a la Venta #{otra.id} de hace unos segundos. "
+                        "Si son dos ventas realmente iguales, espera unos segundos e intenta de nuevo."
+                    )
+
         venta = Venta.objects.create(
             cliente_id=cliente_id,
             almacen_id=almacen_id,
@@ -217,6 +306,8 @@ class VentaSerializer(serializers.ModelSerializer):
         # no es campo del modelo; se consume en Venta.procesar_venta).
         venta._vuelto_distribucion = vuelto_distribucion or None
 
+        # FIX VENTAS-3: el subtotal de cada línea se recalcula en el servidor
+        # (cantidad x precio); el valor del frontend nunca se almacena tal cual.
         for detalle_data in detalles_data:
             DetalleVenta.objects.create(
                 venta=venta,
@@ -224,7 +315,7 @@ class VentaSerializer(serializers.ModelSerializer):
                 cantidad_presentacion=detalle_data['cantidad_presentacion'],
                 precio_unitario_aplicado=detalle_data['precio_unitario_aplicado'],
                 porcentaje_impuesto_aplicado=detalle_data['porcentaje_impuesto_aplicado'],
-                subtotal=detalle_data['subtotal']
+                subtotal=detalle_data['cantidad_presentacion'] * detalle_data['precio_unitario_aplicado']
             )
 
         for pago_data in pagos_data:
@@ -586,6 +677,27 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
         ruta.save()
         return ruta
 
+    def validate_tasa_cambio(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("La tasa de cambio debe ser mayor a cero.")
+        return value
+
+    def validate_fecha(self, value):
+        """
+        FIX RUTA-2: la fecha de una ruta es un DÍA calendario (se llena desde un
+        <input type="date">). Se normaliza a la medianoche local para que una
+        ruta nunca termine registrada en el día equivocado por husos horarios,
+        algo que movía ventas de un mes a otro y "desinflaba"/"hinchaba" los
+        acumulados del dashboard.
+        """
+        from datetime import datetime, time
+        from django.utils import timezone as _tz
+
+        if isinstance(value, datetime):
+            fecha_dia = _tz.localtime(value).date()
+            return _tz.make_aware(datetime.combine(fecha_dia, time.min))
+        return value
+
     def update(self, instance, validated_data):
         es_cerrada = instance.estado == 'CERRADA'
 
@@ -594,10 +706,30 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
         pagos_data = validated_data.pop('pagos', None)
         gastos_data = validated_data.pop('gastos', None)
 
+        # FIX RUTA-1 (inmutabilidad de la ruta cerrada):
+        # ANTES cualquier PUT reescribía fecha/tasa/cobranzas y hasta borraba y
+        # recreaba los créditos/pagos/gastos de una ruta CERRADA, y luego
+        # recalculaba total_venta_usd. Un mismo total podía "moverse" de día o
+        # de mes y descuadrar el histórico sin dejar rastro.
+        # AHORA una ruta cerrada solo acepta cambios de observación; para editar
+        # hay que Reabrir -> editar -> Cerrar (ese es el flujo previsto).
+        if es_cerrada:
+            tocados = [campo for campo in validated_data if campo != 'observacion']
+            if (tocados or detalles_data is not None or creditos_data is not None
+                    or pagos_data is not None or gastos_data is not None):
+                raise serializers.ValidationError(
+                    "La ruta está CERRADA: ya descontó inventario y generó sus cuentas por cobrar. "
+                    "Usa 'Reabrir ruta' para modificarla y vuelve a cerrarla."
+                )
+            if 'observacion' in validated_data:
+                instance.observacion = validated_data['observacion']
+                instance.save(update_fields=['observacion'])
+            return instance
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
-        if not es_cerrada and detalles_data is not None:
+        if detalles_data is not None:
             instance.detalles.all().delete()
             for d in detalles_data:
                 RutaMercadoDetalle.objects.create(ruta=instance, **d)

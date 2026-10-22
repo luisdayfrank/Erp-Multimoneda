@@ -146,6 +146,14 @@ class Impuesto(models.Model):
     nombre = models.CharField(max_length=50, unique=True, help_text="Ej. IVA, Exento")
     porcentaje = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'), help_text="Ej. 16.00")
 
+    def clean(self):
+        # FIX VENTAS-5: un impuesto tipeado como 1600 en vez de 16 multiplicaba
+        # el total de cada venta por 17 y desinflaba el dashboard en cuestión de
+        # horas. Aquí se corta de raíz en el admin.
+        from django.core.exceptions import ValidationError
+        if self.porcentaje is not None and (self.porcentaje < 0 or self.porcentaje > 100):
+            raise ValidationError({'porcentaje': 'El porcentaje debe estar entre 0 y 100.'})
+
     def __str__(self):
         return f"{self.nombre} ({self.porcentaje}%)"
 

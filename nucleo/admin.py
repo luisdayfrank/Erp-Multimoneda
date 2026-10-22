@@ -205,6 +205,14 @@ class DetalleVentaInline(admin.TabularInline):
     model = DetalleVenta
     extra = 1
 
+    def get_readonly_fields(self, request, obj=None):
+        # FIX VENTAS-4: una venta ya PROCESADA/ANULADA no se edita línea por
+        # línea. Antes, cambiar un precio en este inline recalculaba el total
+        # facturado (lo que ve el dashboard) sin ajustar el inventario.
+        if obj is not None and obj.estado != 'BORRADOR':
+            return [f.name for f in self.model._meta.fields]
+        return []
+
 class DetalleCompraInline(admin.TabularInline):
     model = DetalleCompra
     extra = 1
@@ -266,6 +274,41 @@ class VentaAdmin(admin.ModelAdmin):
         'vuelto_aplicado_cxc_principal', 'vuelto_a_saldo_favor_principal',
     )
     inlines = [DetalleVentaInline, PagoVentaInline]
+    actions = ['accion_anular_ventas']
+
+    def get_readonly_fields(self, request, obj=None):
+        # FIX VENTAS-4: el estado queda congelado una vez la venta está
+        # PROCESADA o ANULADA. Antes se podía hacer PROCESADA -> BORRADOR ->
+        # PROCESADA: eso volvía a descontar inventario y creaba una segunda
+        # CxC / nuevos abonos por la misma operación.
+        base = list(self.readonly_fields)
+        if obj is not None and obj.estado in ('PROCESADA', 'ANULADA'):
+            base = base + ['estado']
+        return base
+
+    def accion_anular_ventas(self, request, queryset):
+        """Anulación REAL: revierte inventario y elimina la CxC (Venta.anular_venta)."""
+        from django.contrib import messages
+        ok, errores = 0, []
+        for venta in queryset:
+            try:
+                cxc = getattr(venta, 'cuentaporcobrar', None)
+                if cxc is not None and cxc.pagos.exists():
+                    errores.append(
+                        f"Venta #{venta.id}: su cuenta por cobrar ya tiene abonos registrados; "
+                        "revierte esos abonos antes de anular."
+                    )
+                    continue
+                with transaction.atomic():
+                    venta.anular_venta()
+                ok += 1
+            except Exception as e:
+                errores.append(f"Venta #{venta.id}: {e}")
+        if ok:
+            self.message_user(request, f"Venta(s) anulada(s): {ok}. Inventario y CxC revertidos.", level=messages.SUCCESS)
+        for error in errores:
+            self.message_user(request, error, level=messages.ERROR)
+    accion_anular_ventas.short_description = "Anular venta(s): revierte inventario y elimina la CxC"
 
     def save_model(self, request, obj, form, change):
         estado_anterior = None
@@ -617,24 +660,61 @@ class BorradorFacturaAdmin(admin.ModelAdmin):
 # RUTAS DE MERCADO
 # ==============================================================================
 
-class RutaMercadoDetalleInline(admin.TabularInline):
+class _RutaCerradaMixin:
+    """
+    FIX RUTA-1: dentro de una ruta CERRADA los inlines quedan bloqueados.
+    Una ruta cerrada ya descontó inventario y creó sus CxC: editarla aquí
+    cambiaba los totales que el dashboard ya había contabilizado.
+    Para modificar una ruta cerrada: Reabrir -> editar -> Cerrar de nuevo.
+    """
+    ESTADO_BLOQUEADO = 'CERRADA'
+
+    def _bloqueada(self, obj):
+        return obj is not None and getattr(obj, 'estado', None) == self.ESTADO_BLOQUEADO
+
+    def get_readonly_fields(self, request, obj=None):
+        if self._bloqueada(obj):
+            return [f.name for f in self.model._meta.fields]
+        return []
+
+    def has_add_permission(self, request, obj=None):
+        if self._bloqueada(obj):
+            return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self._bloqueada(obj):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self._bloqueada(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+class RutaMercadoDetalleInline(_RutaCerradaMixin, admin.TabularInline):
     model = RutaMercadoDetalle
     extra = 0
 
-class RutaMercadoCreditoInline(admin.TabularInline):
+
+class RutaMercadoCreditoInline(_RutaCerradaMixin, admin.TabularInline):
     model = RutaMercadoCredito
     extra = 0
 
-class RutaMercadoPagoInline(admin.TabularInline):
+
+class RutaMercadoPagoInline(_RutaCerradaMixin, admin.TabularInline):
     model = RutaMercadoPago
     extra = 0
 
-class RutaMercadoGastoInline(admin.TabularInline):
+
+class RutaMercadoGastoInline(_RutaCerradaMixin, admin.TabularInline):
     model = RutaMercadoGasto
     extra = 0
 
+
 @admin.register(RutaMercado)
-class RutaMercadoAdmin(admin.ModelAdmin):
+class RutaMercadoAdmin(_RutaCerradaMixin, admin.ModelAdmin):
     list_display = ('id', 'fecha', 'usuario', 'estado', 'total_venta_usd', 'diferencia_bs')
     list_filter = ('estado', 'fecha')
     readonly_fields = (
@@ -645,8 +725,18 @@ class RutaMercadoAdmin(admin.ModelAdmin):
     )
     inlines = [RutaMercadoDetalleInline, RutaMercadoCreditoInline, RutaMercadoPagoInline, RutaMercadoGastoInline]
 
+    def has_change_permission(self, request, obj=None):
+        # OJO: seguir permitiendo ABRIR la ruta cerrada en el admin (queda de
+        # solo lectura). Lo que se bloquea es escribir/borrar, no ver.
+        return admin.ModelAdmin.has_change_permission(self, request, obj)
 
-# ==============================================================================
+    def get_readonly_fields(self, request, obj=None):
+        base = list(self.readonly_fields)
+        if self._bloqueada(obj):
+            base = [f.name for f in self.model._meta.fields]
+        return base
+
+
 # TOMA FÍSICA Y AJUSTES
 # ==============================================================================
 

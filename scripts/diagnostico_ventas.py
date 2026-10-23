@@ -31,7 +31,7 @@ from django.utils import timezone
 try:
     from nucleo.models import (
         Venta, RutaMercado, TasaCambioDiaria, Impuesto, PresentacionProducto,
-        PagoVenta, PagoCuentaCobrar, CuentaPorCobrar,
+        PagoVenta, PagoCuentaCobrar, CuentaPorCobrar, Cliente,
     )
 except Exception:  # pragma: no cover
     from django.apps import apps
@@ -43,6 +43,7 @@ except Exception:  # pragma: no cover
     PagoVenta = apps.get_model('nucleo', 'PagoVenta')
     PagoCuentaCobrar = apps.get_model('nucleo', 'PagoCuentaCobrar')
     CuentaPorCobrar = apps.get_model('nucleo', 'CuentaPorCobrar')
+    Cliente = apps.get_model('nucleo', 'Cliente')
 
 
 def D(v):
@@ -269,5 +270,64 @@ for v in sorted(ventas_mes, key=lambda x: -x.total_principal)[:10]:
     saldo = cxc.saldo_pendiente if cxc else Decimal('0.00')
     print(f"    #{v.id:>5} {timezone.localtime(v.fecha):%d/%m} {v.tipo:<8} ${v.total_principal:>10,.2f}  "
           f"fiado aún: ${saldo:>9,.2f}  {v.cliente.nombre}")
+
+# ═══════════════════════════════════════════════════════════════════════
+titulo("I. ¿CÓMO SE LIQUIDÓ EL FIADO DEL MES?  (orígenes del dinero)")
+# ═══════════════════════════════════════════════════════════════════════
+# El bloque H mostró que de las ventas a crédito del mes se "liquidaron"
+# $35k pero solo se vio una fracción de dinero. Aquí se ve EN QUÉ MONEDA
+# DE PAGO se hizo cada liquidación (PagoCuentaCobrar.origen).
+liquidado = D(credito['t']) - D(fiado_pendiente['t'])
+print(f"  Ventas a crédito del mes ............. ${D(credito['t']):>12,.2f}")
+print(f"  Deuda de esas ventas ya liquidada .... ${liquidado:>12,.2f}")
+print(f"  Deuda todavía pendiente .............. ${D(fiado_pendiente['t']):>12,.2f}")
+print("\n  Pagos registrados sobre esas deudas, por ORIGEN:")
+por_origen = (PagoCuentaCobrar.objects
+              .filter(cuenta__venta__in=ventas_mes)
+              .values('origen')
+              .annotate(t=Sum('monto_abono_principal'), n=Count('id'))
+              .order_by('-t'))
+suma_pagos = Decimal('0.00')
+for fila in por_origen:
+    suma_pagos += D(fila['t'])
+    nota = {
+        'COBRO_POS': '(dinero del POS, ya contado en PagoVenta)',
+        'SALDO_FAVOR': '(pagado con saldo a favor: SIN dinero nuevo)',
+        'VUELTO_VENTA': '(vuelto de otra venta aplicado: SIN dinero nuevo)',
+        'ABONO_CXC': '(abono manual desde el módulo de clientes / admin)',
+        'ABONO_MASIVO': '(abono masivo)',
+    }.get(fila['origen'] or '', '')
+    print(f"    {str(fila['origen']):<15} ${D(fila['t']):>12,.2f}  ({fila['n']} pagos) {nota}")
+if not por_origen:
+    print("    (no hay pagos registrados sobre esas deudas)")
+print("  " + "-" * 60)
+print(f"  Suma de pagos registrados ............ ${suma_pagos:>12,.2f}")
+dif = liquidado - suma_pagos
+if abs(dif) > Decimal('0.05'):
+    print(f"  ⚠ DIFERENCIA sin explicar ............ ${dif:>12,.2f}")
+    print("    → La deuda bajó SIN un pago que lo respalde (edición manual en el admin,")
+    print("      ajuste de saldo_pendiente o un flujo que no deja registro). Revisar.")
+else:
+    print("  ✅ Cada dólar de deuda liquidada tiene su pago registrado.")
+
+print("\n  💰 Saldo a favor acumulado de los clientes (top 10):")
+for c in Cliente.objects.exclude(saldo_a_favor=0).order_by('-saldo_a_favor')[:10]:
+    print(f"    {c.nombre:<30} ${c.saldo_a_favor:>10,.2f}")
+
+print("\n  🧺 Cobranzas registradas en RUTAS del mes (total_cobranzas_bs):")
+cobranzas_bs = rutas_mes.aggregate(t=Sum('total_cobranzas_bs'))['t'] or Decimal('0.00')
+print(f"    Total: BS {cobranzas_bs:,.2f}")
+print("    ⚠ OJO: este dinero se cobra en el mercado por deudas viejas, pero")
+print("      cerrar_ruta() NUNCA lo aplica a las CxC del cliente: queda solo como")
+print("      un número en el cuadre de la ruta. Si aquí se cobró, la deuda sigue")
+print("      viva en el sistema y alguien más la está cancelando por otra vía.")
+
+print("\n  👛 Top 10 clientes con deuda PENDIENTE total (todas las épocas):")
+ranking = (CuentaPorCobrar.objects.filter(estado__in=['PENDIENTE', 'VENCIDA'])
+           .values('cliente__nombre')
+           .annotate(t=Sum('saldo_pendiente'), n=Count('id'))
+           .order_by('-t')[:10])
+for fila in ranking:
+    print(f"    {str(fila['cliente__nombre']):<30} ${D(fila['t']):>10,.2f}  ({fila['n']} facturas)")
 
 titulo("FIN DEL DIAGNÓSTICO — pega esta salida completa para analizarla")

@@ -76,6 +76,12 @@ function actualizarKPIs(data) {
     if (detMes) {
         detMes.innerText = `POS ${fmt(data.ventas.mes_pos_usd)} · Rutas ${fmt(data.ventas.mes_rutas_usd)} · Ingresos brutos`;
     }
+    // FIX DASHBOARD-2: el desglose cobrado vs fiado pendiente. Siempre cuadra:
+    // Acumulado (bruto) = Cobrado + Fiado pendiente.
+    const detFiado = document.getElementById('kpi-ventas-mes-fiado');
+    if (detFiado) {
+        detFiado.innerText = `Cobrado ${fmt(data.ventas.mes_cobrado)} · Fiado pendiente ${fmt(data.ventas.mes_fiado_pendiente)}`;
+    }
 
     // Deudas
     document.getElementById('kpi-cxc').innerText = `$ ${parseFloat(data.finanzas.por_cobrar_total).toFixed(2)}`;

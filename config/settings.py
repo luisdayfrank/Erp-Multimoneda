@@ -196,7 +196,42 @@ SIMPLE_JWT = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# 14. OTROS
+# 14. LOGGING (captura los 500 con traceback en archivo)
+# ─────────────────────────────────────────────────────────────
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'archivo_errores': {
+            'class': 'logging.FileHandler',
+            'filename': '/var/www/erp/logs/django-errors.log',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        # Errores de peticiones HTTP (los 500 del admin, etc.)
+        'django.request': {
+            'handlers': ['archivo_errores'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        # Cualquier otra excepción no capturada del proyecto
+        'nucleo': {
+            'handlers': ['archivo_errores'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}
+
+# ─────────────────────────────────────────────────────────────
+# 15. OTROS
 # ─────────────────────────────────────────────────────────────
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'nucleo.Usuario'

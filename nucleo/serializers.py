@@ -84,10 +84,17 @@ class ProductoPosSerializer(serializers.ModelSerializer):
     impuesto_porcentaje = serializers.DecimalField(
         source='impuesto.porcentaje', max_digits=5, decimal_places=2, read_only=True
     )
+    # POS MÓVIL: categoría para los chips de filtro del catálogo táctil.
+    # Campo nuevo y aditivo: el POS de PC lo ignora.
+    categoria_nombre = serializers.SerializerMethodField()
 
     class Meta:
         model = Producto
-        fields = ['id', 'codigo_base', 'nombre', 'impuesto_porcentaje']
+        fields = ['id', 'codigo_base', 'nombre', 'impuesto_porcentaje', 'categoria_nombre']
+
+    def get_categoria_nombre(self, obj):
+        categoria = getattr(obj, 'categoria', None)
+        return categoria.nombre if categoria else 'General'
 
 # Reemplazar la clase PresentacionProductoSerializer completa
 class PresentacionProductoSerializer(serializers.ModelSerializer):

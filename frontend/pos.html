@@ -7,8 +7,8 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f8f9fa; height: 100vh; overflow: hidden; }
-        .pos-container { height: calc(100vh - 56px); } 
+        body { background-color: #f8f9fa; height: 100vh; overflow: hidden; touch-action: manipulation; }
+        .pos-container { height: calc(100vh - var(--pos-navbar-h, 56px) - var(--pos-header-movil-h, 0px)); }
         .products-panel { height: 100%; overflow-y: auto; padding: 20px; border-right: 1px solid #dee2e6; }
         .cart-panel { background-color: white; height: 100%; display: flex; flex-direction: column; }
         .cart-table-container { flex-grow: 1; overflow-y: auto; }
@@ -16,6 +16,184 @@
         .btn-producto { height: 120px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; cursor: pointer; transition: transform 0.1s; }
         .btn-producto:active { transform: scale(0.95); }
         .cliente-item:hover { background-color: #e9ecef; cursor: pointer; }
+
+        /* ═══════════════════════ POS MÓVIL (< 768px) ═══════════════════════
+           Todo lo que está en este bloque vive SOLO en pantallas pequeñas.
+           En PC (>= 768px) ninguna de estas reglas aplica y la vista queda
+           idéntica a la original. */
+        @supports (height: 100dvh) {
+            /* Altura real con la barra de direcciones dinámica de Android */
+            body { height: 100dvh; }
+            .pos-container { height: calc(100dvh - var(--pos-navbar-h, 56px) - var(--pos-header-movil-h, 0px)); }
+        }
+        :root { }
+        @media (max-width: 767.98px) {
+            :root { --pos-header-movil-h: 56px; }
+            /* Chrome no hace zoom al enfocar si la fuente es >= 16px */
+            input, select, textarea { font-size: 16px !important; }
+        }
+
+        /* Header superior (solo móvil) */
+        #header-movil {
+            height: 56px;
+            background: #212529;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 0 10px;
+        }
+        #header-movil .hm-info { flex: 1; min-width: 0; text-align: center; line-height: 1.15; }
+        #header-movil .hm-cliente { font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #header-movil .hm-total { font-size: 19px; font-weight: 700; color: #ffc107; white-space: nowrap; }
+        #header-movil .hm-btn {
+            width: 44px; height: 44px; flex: 0 0 44px;
+            display: flex; align-items: center; justify-content: center;
+            border: none; border-radius: 10px; background: rgba(255,255,255,.12); color: #fff; font-size: 20px;
+        }
+
+        /* Overlay del panel de productos (con fallback si no hay backdrop-filter) */
+        #productos-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1040;
+        }
+        #productos-overlay.open { display: block; }
+        @supports (backdrop-filter: blur(3px)) {
+            #productos-overlay.open { backdrop-filter: blur(3px); }
+        }
+
+        .sidebar-movil-top {
+            display: flex; align-items: center; justify-content: space-between;
+            margin: -12px -12px 12px; padding: 10px 14px;
+            background: #0d6efd; color: #fff;
+            position: sticky; top: -12px; z-index: 6;
+        }
+        .sidebar-movil-top .btn-cerrar {
+            width: 38px; height: 38px; border: none; border-radius: 10px;
+            background: rgba(255,255,255,.2); color: #fff; font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Chips de categoría */
+        #categorias-chips {
+            display: flex; gap: 8px; overflow-x: auto;
+            padding-bottom: 10px; margin-bottom: 12px;
+            scrollbar-width: none; -ms-overflow-style: none;
+        }
+        #categorias-chips::-webkit-scrollbar { display: none; }
+        #categorias-chips .chip-cat {
+            flex: 0 0 auto; padding: 9px 16px; border-radius: 20px;
+            background: #e9ecef; color: #495057;
+            font-size: 13px; font-weight: 600; border: none; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #categorias-chips .chip-cat.activo { background: #0d6efd; color: #fff; }
+
+        /* Item de producto táctil (solo móvil) */
+        .producto-tactil {
+            display: flex; align-items: center; gap: 12px;
+            padding: 13px 12px; margin-bottom: 10px;
+            background: #fff; border: 1px solid #e9ecef; border-radius: 12px;
+            cursor: pointer; transition: transform .12s ease, background .12s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .producto-tactil:active { transform: scale(.98); background: #f8f9fa; }
+        .producto-tactil .prod-icono {
+            width: 48px; height: 48px; flex: 0 0 48px;
+            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+            border-radius: 12px; color: #fff; font-size: 22px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .producto-tactil .prod-info { flex: 1; min-width: 0; }
+        .producto-tactil .prod-nombre {
+            font-weight: 600; font-size: 15px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .producto-tactil .prod-meta { font-size: 12px; color: #6c757d; margin-top: 2px; }
+        .producto-tactil .prod-precio { font-weight: 700; font-size: 16px; color: #198754; margin-top: 2px; }
+        .producto-tactil .btn-agregar {
+            width: 46px; height: 46px; flex: 0 0 46px; border: none; border-radius: 50%;
+            background: #198754; color: #fff; font-size: 24px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(25, 135, 84, .3);
+            -webkit-tap-highlight-color: transparent;
+        }
+        .producto-tactil .btn-agregar:active { transform: scale(.92); }
+
+        /* Carrito táctil (solo móvil) */
+        #carrito-lista-mobile { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; background: #fff; }
+        .carrito-item-mobile {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px; border-bottom: 1px solid #e9ecef;
+        }
+        .carrito-item-mobile .item-info { flex: 1; min-width: 0; }
+        .carrito-item-mobile .item-nombre {
+            font-weight: 600; font-size: 14px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .carrito-item-mobile .item-precio-unit { font-size: 12px; color: #6c757d; }
+        .carrito-item-mobile .item-precio-unit.precio-editable { color: #0d6efd; cursor: pointer; }
+        .carrito-item-mobile .cantidad-control { display: flex; align-items: center; gap: 6px; }
+        .carrito-item-mobile .btn-cant {
+            width: 38px; height: 38px; border: 1px solid #dee2e6; border-radius: 10px;
+            background: #fff; font-size: 19px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .carrito-item-mobile .btn-cant:active { background: #e9ecef; }
+        .carrito-item-mobile .input-cant {
+            width: 62px; height: 38px; text-align: center; font-weight: 700;
+            border: 1px solid #dee2e6; border-radius: 10px;
+        }
+        .carrito-item-mobile .item-subtotal { font-weight: 700; font-size: 15px; color: #198754; min-width: 74px; text-align: right; }
+        .carrito-item-mobile .btn-eliminar {
+            width: 34px; height: 34px; flex: 0 0 34px; padding: 0;
+            border: 1px solid #f1aeb5; border-radius: 10px; background: #fff; color: #dc3545;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Bottom sheet de presentaciones */
+        .bottom-sheet-backdrop {
+            position: fixed; inset: 0; background: rgba(0,0,0,.5);
+            z-index: 1060; opacity: 0; transition: opacity .25s ease;
+        }
+        .bottom-sheet-backdrop.open { opacity: 1; }
+        .bottom-sheet {
+            position: fixed; left: 0; right: 0; bottom: 0;
+            background: #fff; border-radius: 18px 18px 0 0;
+            box-shadow: 0 -6px 24px rgba(0,0,0,.2);
+            z-index: 1070; max-height: 72vh; overflow-y: auto;
+            padding: 10px 14px 18px;
+            transform: translateY(100%); transition: transform .28s ease-out;
+        }
+        .bottom-sheet.open { transform: translateY(0); }
+        .bottom-sheet .bs-grab { width: 42px; height: 4px; border-radius: 4px; background: #ced4da; margin: 2px auto 12px; }
+
+        @media (max-width: 767.98px) {
+            /* Sidebar de productos = off-canvas */
+            #sidebar-productos {
+                position: fixed; top: 0; left: 0; bottom: 0;
+                width: min(92vw, 420px); max-width: 420px;
+                transform: translateX(-100%);
+                transition: transform .28s ease-in-out;
+                z-index: 1050; overflow-y: auto; -webkit-overflow-scrolling: touch;
+                padding: 12px; border-right: none;
+                box-shadow: 6px 0 28px rgba(0,0,0,.28);
+            }
+            #sidebar-productos.open { transform: translateX(0); }
+
+            /* La tabla del carrito es solo de PC: en móvil va la lista táctil */
+            .cart-table-container { display: none !important; }
+
+            /* Totales compactos: solo TOTAL + botones grandes */
+            .totals-section { padding: 10px 12px 14px; }
+            .tot-detalle, .tot-separador { display: none !important; }
+            #col-cancelar { flex: 0 0 33.333%; max-width: 33.333%; }
+            #col-cobrar { flex: 0 0 66.667%; max-width: 66.667%; }
+        }
 
         #tablaCarrito td {
             white-space: nowrap;
@@ -247,9 +425,34 @@
 
     <div id="erp-navbar"></div>
 
+    <!-- ═══════════ HEADER MÓVIL (solo < 768px) ═══════════ -->
+    <div id="header-movil" class="d-md-none">
+        <button type="button" class="hm-btn" onclick="toggleProductosPanel()" aria-label="Ver productos">
+            <i class="bi bi-grid-3x3-gap-fill"></i>
+        </button>
+        <div class="hm-info">
+            <div class="hm-cliente" id="mobile-cliente-nombre">Cliente Mostrador</div>
+            <div class="hm-total" id="mobile-total">$ 0.00</div>
+        </div>
+        <button type="button" class="hm-btn" onclick="abrirModalBorradores()" aria-label="Borradores">
+            <i class="bi bi-folder2-open"></i>
+        </button>
+    </div>
+
+    <!-- Overlay para cerrar el panel de productos tocando fuera (solo móvil) -->
+    <div id="productos-overlay" onclick="toggleProductosPanel()"></div>
+
     <div class="container-fluid pos-container">
         <div class="row h-100">
-            <div class="col-md-8 products-panel bg-white">
+            <div class="col-md-8 products-panel bg-white" id="sidebar-productos">
+                <!-- Barra superior del panel (solo móvil) -->
+                <div class="sidebar-movil-top d-md-none">
+                    <h6 class="m-0 fw-bold"><i class="bi bi-box-seam me-2"></i>Productos</h6>
+                    <button type="button" class="btn-cerrar" onclick="toggleProductosPanel()" aria-label="Cerrar">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+
                 <div class="row mb-3 align-items-center">
                     <div class="col-md-9">
                         <div class="input-group shadow-sm border-primary">
@@ -269,15 +472,22 @@
                 <div class="mb-4">
                     <div class="input-group input-group-lg shadow-sm">
                         <span class="input-group-text bg-white border-primary"><i class="bi bi-barcode"></i></span>
-                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea código o escribe nombre del producto..." autofocus autocomplete="off">
+                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea código o escribe nombre del producto..." autocomplete="off" inputmode="search" enterkeyhint="search">
                     </div>
                 </div>
 
+                <!-- Chips de categoría (solo móvil) -->
+                <div id="categorias-chips" class="d-md-none"></div>
+
                 <div class="row g-3" id="gridProductos"></div>
+
+                <!-- Lista táctil de productos (solo móvil) -->
+                <div id="lista-productos-mobile" class="d-md-none"></div>
             </div>
 
             <div class="col-md-4 cart-panel shadow-lg">
-                <div class="cart-table-container p-3">
+                <!-- Tabla del carrito (solo PC) -->
+                <div class="cart-table-container p-3 d-none d-md-block">
                     <table class="table table-sm table-hover text-center align-middle">
                         <thead class="table-dark">
                             <tr>
@@ -299,16 +509,19 @@
                     </table>
                 </div>
 
+                <!-- Lista táctil del carrito (solo móvil) -->
+                <div id="carrito-lista-mobile" class="d-md-none"></div>
+
                 <div class="totals-section">
-                    <div class="d-flex justify-content-between mb-1">
+                    <div class="d-flex justify-content-between mb-1 tot-detalle">
                         <span class="text-muted">Subtotal:</span>
                         <span id="ui-subtotal" class="fw-bold">$ 0.00</span>
                     </div>
-                    <div class="d-flex justify-content-between mb-2">
+                    <div class="d-flex justify-content-between mb-2 tot-detalle">
                         <span class="text-muted">Impuestos (IVA):</span>
                         <span id="ui-impuestos" class="fw-bold">$ 0.00</span>
                     </div>
-                    <hr class="my-2">
+                    <hr class="my-2 tot-separador">
                     <div class="d-flex justify-content-between align-items-center mb-1">
                         <span class="fs-5 fw-bold">TOTAL USD:</span>
                         <span class="fs-3 fw-bold text-success" id="ui-total-usd">$ 0.00</span>
@@ -330,12 +543,12 @@
                         </div>
                     </div>
                     <div class="row g-2">
-                        <div class="col-6">
+                        <div class="col-6" id="col-cancelar">
                             <button class="btn btn-outline-danger w-100 py-3 fw-bold" onclick="vaciarCarrito()">
                                 <i class="bi bi-trash"></i> CANCELAR
                             </button>
                         </div>
-                        <div class="col-6">
+                        <div class="col-6" id="col-cobrar">
                             <button class="btn btn-success w-100 py-3 fw-bold shadow" onclick="abrirModalCobro()">
                                 <i class="bi bi-cash-stack"></i> COBRAR (F12)
                             </button>
@@ -1064,7 +1277,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js?v=6.3"></script>
-    <script src="assets/js/menu.js?v=1.2"></script>
-    <script src="assets/js/pos.js?v=7.9"></script>
+    <script src="assets/js/menu.js?v=1.3"></script>
+    <script src="assets/js/pos.js?v=8.0"></script>
 </body>
 </html>

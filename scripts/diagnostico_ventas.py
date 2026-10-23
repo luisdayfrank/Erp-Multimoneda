@@ -32,6 +32,7 @@ try:
     from nucleo.models import (
         Venta, RutaMercado, TasaCambioDiaria, Impuesto, PresentacionProducto,
         PagoVenta, PagoCuentaCobrar, CuentaPorCobrar, Cliente,
+        ReciboAbono,
     )
 except Exception:  # pragma: no cover
     from django.apps import apps
@@ -44,6 +45,7 @@ except Exception:  # pragma: no cover
     PagoCuentaCobrar = apps.get_model('nucleo', 'PagoCuentaCobrar')
     CuentaPorCobrar = apps.get_model('nucleo', 'CuentaPorCobrar')
     Cliente = apps.get_model('nucleo', 'Cliente')
+    ReciboAbono = apps.get_model('nucleo', 'ReciboAbono')
 
 
 def D(v):
@@ -329,5 +331,39 @@ ranking = (CuentaPorCobrar.objects.filter(estado__in=['PENDIENTE', 'VENCIDA'])
            .order_by('-t')[:10])
 for fila in ranking:
     print(f"    {str(fila['cliente__nombre']):<30} ${D(fila['t']):>10,.2f}  ({fila['n']} facturas)")
+
+# ═══════════════════════════════════════════════════════════════════════
+titulo("J. ¿LOS PAGOS 'OTRO' SON HISTÓRICOS?  (origen + semana de registro)")
+# ═══════════════════════════════════════════════════════════════════════
+# 'OTRO' es el valor POR DEFECTO del campo origen: aparece en los pagos
+# registrados antes de que existiera el control de orígenes (o a mano en el
+# admin). Si los pagos NUEVOS del módulo de clientes salen como ABONO_MASIVO,
+# el flujo está bien y lo demás es histórico.
+agrupado = defaultdict(lambda: [0, Decimal('0.00')])
+for p in PagoCuentaCobrar.objects.filter(cuenta__venta__in=ventas_mes):
+    d = timezone.localtime(p.fecha).date()
+    semana = d - timedelta(days=d.weekday())
+    clave = (str(p.origen or 'SIN_ORIGEN'), semana)
+    agrupado[clave][0] += 1
+    agrupado[clave][1] += D(p.monto_abono_principal)
+
+print("  Pagos sobre las deudas del mes, por ORIGEN y semana de registro:")
+for clave in sorted(agrupado.keys(), key=lambda k: (k[0], k[1])):
+    origen, semana = clave
+    n, total = agrupado[clave]
+    print(f"    {origen:<15} semana del {semana:%d/%m/%Y}  {n:>3} pagos  ${total:>12,.2f}")
+
+print("\n  Recibos de abono del mes (lo que crea el módulo de clientes), por origen:")
+recibos = (ReciboAbono.objects.filter(fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy_dt)
+           .values('origen').annotate(t=Sum('monto_total_entregado'), n=Count('id'))
+           .order_by('-t'))
+for fila in recibos:
+    print(f"    {str(fila['origen']):<15} {fila['n']:>3} recibos  ${D(fila['t']):>12,.2f}")
+if not recibos:
+    print("    (ninguno)")
+
+print("\n  👉 Si ABONO_MASIVO aparece solo en semanas recientes y 'OTRO' en las")
+print("     antiguas: los 'OTRO' son HISTÓRICOS (registrados antes del control de")
+print("     orígenes) y tu flujo actual del módulo de clientes está correcto.")
 
 titulo("FIN DEL DIAGNÓSTICO — pega esta salida completa para analizarla")

@@ -1,0 +1,1294 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS Bimonetario - ERP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; height: 100vh; overflow: hidden; touch-action: manipulation; }
+        .pos-container { height: calc(100vh - var(--pos-navbar-h, 56px) - var(--pos-header-movil-h, 0px)); }
+        .products-panel { height: 100%; overflow-y: auto; padding: 20px; border-right: 1px solid #dee2e6; }
+        .cart-panel { background-color: white; height: 100%; display: flex; flex-direction: column; }
+        .cart-table-container { flex-grow: 1; overflow-y: auto; }
+        .totals-section { background-color: #f1f3f5; padding: 20px; border-top: 2px solid #dee2e6; }
+        .btn-producto { height: 120px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; cursor: pointer; transition: transform 0.1s; }
+        .btn-producto:active { transform: scale(0.95); }
+        .cliente-item:hover { background-color: #e9ecef; cursor: pointer; }
+
+        /* ═══════════════════════ POS MÓVIL (< 768px) ═══════════════════════
+           Todo lo que está en este bloque vive SOLO en pantallas pequeñas.
+           En PC (>= 768px) ninguna de estas reglas aplica y la vista queda
+           idéntica a la original. */
+        @supports (height: 100dvh) {
+            /* Altura real con la barra de direcciones dinámica de Android */
+            body { height: 100dvh; }
+            .pos-container { height: calc(100dvh - var(--pos-navbar-h, 56px) - var(--pos-header-movil-h, 0px)); }
+        }
+        :root { }
+        @media (max-width: 767.98px) {
+            :root { --pos-header-movil-h: 56px; }
+            /* Chrome no hace zoom al enfocar si la fuente es >= 16px */
+            input, select, textarea { font-size: 16px !important; }
+        }
+
+        /* Header superior (solo móvil) */
+        #header-movil {
+            height: 56px;
+            background: #212529;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 0 10px;
+        }
+        #header-movil .hm-info { flex: 1; min-width: 0; text-align: center; line-height: 1.15; }
+        #header-movil .hm-cliente { font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #header-movil .hm-total { font-size: 19px; font-weight: 700; color: #ffc107; white-space: nowrap; }
+        #header-movil .hm-btn {
+            width: 44px; height: 44px; flex: 0 0 44px;
+            display: flex; align-items: center; justify-content: center;
+            border: none; border-radius: 10px; background: rgba(255,255,255,.12); color: #fff; font-size: 20px;
+        }
+
+        /* Overlay del panel de productos (con fallback si no hay backdrop-filter) */
+        #productos-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1040;
+        }
+        #productos-overlay.open { display: block; }
+        @supports (backdrop-filter: blur(3px)) {
+            #productos-overlay.open { backdrop-filter: blur(3px); }
+        }
+
+        .sidebar-movil-top {
+            display: flex; align-items: center; justify-content: space-between;
+            margin: -12px -12px 12px; padding: 10px 14px;
+            background: #0d6efd; color: #fff;
+            position: sticky; top: -12px; z-index: 6;
+        }
+        .sidebar-movil-top .btn-cerrar {
+            width: 38px; height: 38px; border: none; border-radius: 10px;
+            background: rgba(255,255,255,.2); color: #fff; font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Chips de categoría */
+        #categorias-chips {
+            display: flex; gap: 8px; overflow-x: auto;
+            padding-bottom: 10px; margin-bottom: 12px;
+            scrollbar-width: none; -ms-overflow-style: none;
+        }
+        #categorias-chips::-webkit-scrollbar { display: none; }
+        #categorias-chips .chip-cat {
+            flex: 0 0 auto; padding: 9px 16px; border-radius: 20px;
+            background: #e9ecef; color: #495057;
+            font-size: 13px; font-weight: 600; border: none; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #categorias-chips .chip-cat.activo { background: #0d6efd; color: #fff; }
+
+        /* Item de producto táctil (solo móvil) */
+        .producto-tactil {
+            display: flex; align-items: center; gap: 12px;
+            padding: 13px 12px; margin-bottom: 10px;
+            background: #fff; border: 1px solid #e9ecef; border-radius: 12px;
+            cursor: pointer; transition: transform .12s ease, background .12s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .producto-tactil:active { transform: scale(.98); background: #f8f9fa; }
+        .producto-tactil .prod-icono {
+            width: 48px; height: 48px; flex: 0 0 48px;
+            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+            border-radius: 12px; color: #fff; font-size: 22px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .producto-tactil .prod-info { flex: 1; min-width: 0; }
+        .producto-tactil .prod-nombre {
+            font-weight: 600; font-size: 15px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .producto-tactil .prod-meta { font-size: 12px; color: #6c757d; margin-top: 2px; }
+        .producto-tactil .prod-precio { font-weight: 700; font-size: 16px; color: #198754; margin-top: 2px; }
+        .producto-tactil .btn-agregar {
+            width: 46px; height: 46px; flex: 0 0 46px; border: none; border-radius: 50%;
+            background: #198754; color: #fff; font-size: 24px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(25, 135, 84, .3);
+            -webkit-tap-highlight-color: transparent;
+        }
+        .producto-tactil .btn-agregar:active { transform: scale(.92); }
+
+        /* Carrito táctil (solo móvil) */
+        #carrito-lista-mobile { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; background: #fff; }
+        .carrito-item-mobile {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px; border-bottom: 1px solid #e9ecef;
+        }
+        .carrito-item-mobile .item-info { flex: 1; min-width: 0; }
+        .carrito-item-mobile .item-nombre {
+            font-weight: 600; font-size: 14px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .carrito-item-mobile .item-precio-unit { font-size: 12px; color: #6c757d; }
+        .carrito-item-mobile .item-precio-unit.precio-editable { color: #0d6efd; cursor: pointer; }
+        .carrito-item-mobile .cantidad-control { display: flex; align-items: center; gap: 6px; }
+        .carrito-item-mobile .btn-cant {
+            width: 38px; height: 38px; border: 1px solid #dee2e6; border-radius: 10px;
+            background: #fff; font-size: 19px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .carrito-item-mobile .btn-cant:active { background: #e9ecef; }
+        .carrito-item-mobile .input-cant {
+            width: 62px; height: 38px; text-align: center; font-weight: 700;
+            border: 1px solid #dee2e6; border-radius: 10px;
+        }
+        .carrito-item-mobile .item-subtotal { font-weight: 700; font-size: 15px; color: #198754; min-width: 74px; text-align: right; }
+        .carrito-item-mobile .btn-eliminar {
+            width: 34px; height: 34px; flex: 0 0 34px; padding: 0;
+            border: 1px solid #f1aeb5; border-radius: 10px; background: #fff; color: #dc3545;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Bottom sheet de presentaciones */
+        .bottom-sheet-backdrop {
+            position: fixed; inset: 0; background: rgba(0,0,0,.5);
+            z-index: 1060; opacity: 0; transition: opacity .25s ease;
+        }
+        .bottom-sheet-backdrop.open { opacity: 1; }
+        .bottom-sheet {
+            position: fixed; left: 0; right: 0; bottom: 0;
+            background: #fff; border-radius: 18px 18px 0 0;
+            box-shadow: 0 -6px 24px rgba(0,0,0,.2);
+            z-index: 1070; max-height: 72vh; overflow-y: auto;
+            padding: 10px 14px 18px;
+            transform: translateY(100%); transition: transform .28s ease-out;
+        }
+        .bottom-sheet.open { transform: translateY(0); }
+        .bottom-sheet .bs-grab { width: 42px; height: 4px; border-radius: 4px; background: #ced4da; margin: 2px auto 12px; }
+
+        @media (max-width: 767.98px) {
+            /* Sidebar de productos = off-canvas */
+            #sidebar-productos {
+                position: fixed; top: 0; left: 0; bottom: 0;
+                width: min(92vw, 420px); max-width: 420px;
+                transform: translateX(-100%);
+                transition: transform .28s ease-in-out;
+                z-index: 1050; overflow-y: auto; -webkit-overflow-scrolling: touch;
+                padding: 12px; border-right: none;
+                box-shadow: 6px 0 28px rgba(0,0,0,.28);
+            }
+            #sidebar-productos.open { transform: translateX(0); }
+
+            /* La tabla del carrito es solo de PC: en móvil va la lista táctil */
+            .cart-table-container { display: none !important; }
+
+            /* Totales compactos: solo TOTAL + botones grandes */
+            .totals-section { padding: 10px 12px 14px; }
+            .tot-detalle, .tot-separador { display: none !important; }
+            #col-cancelar { flex: 0 0 33.333%; max-width: 33.333%; }
+            #col-cobrar { flex: 0 0 66.667%; max-width: 66.667%; }
+        }
+
+        #tablaCarrito td {
+            white-space: nowrap;
+            vertical-align: middle;
+            padding-top: 4px;
+            padding-bottom: 4px;
+        }
+        #tablaCarrito .form-control-sm {
+            margin-bottom: 0; 
+        }
+        .text-truncate-sm {
+            max-width: 140px;
+            display: inline-block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ============================================================
+           TICKET DE IMPRESIÓN 52mm - ESTILOS PANTALLA (oculto)
+           ============================================================ */
+        .ticket-impresion {
+            display: none;
+            width: 100%;
+            max-width: 48mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 8px;
+            line-height: 1.2;
+            color: #000;
+            background: #fff;
+            padding: 0.5mm 0.3mm 0.5mm 0.3mm;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            font-weight: 400;
+            letter-spacing: -0.1px;
+        }
+        .ticket-impresion * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        .ticket-encabezado {
+            text-align: center;
+            margin-bottom: 2mm;
+            border-bottom: 1px dashed #000;
+            padding-bottom: 1.5mm;
+        }
+        .ticket-encabezado h3 {
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 0.5mm;
+            letter-spacing: 0;
+        }
+        .ticket-encabezado p {
+            font-size: 9px;
+            margin-bottom: 0.3mm;
+            font-weight: 400;
+        }
+        .ticket-info {
+            margin-bottom: 1mm;
+            font-size: 9px;
+            font-weight: 400;
+        }
+        .ticket-info p {
+            margin-bottom: 0.3mm;
+        }
+        .ticket-items {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1mm;
+            font-size: 9px;
+            font-weight: 400;
+        }
+        .ticket-items th {
+            border-bottom: 1px dashed #000;
+            text-align: left;
+            padding: 0.5mm 0;
+            font-weight: 700;
+        }
+        .ticket-items td {
+            padding: 0.2mm 0;
+            vertical-align: top;
+            font-weight: 400;
+        }
+        /* >>> NUEVO: formato 2 líneas por producto (Cant X Precio / Nombre + Total) <<< */
+        .ticket-items td.der {
+            text-align: right;
+        }
+        .ticket-items td.cant-precio {
+            font-size: 8px;
+            font-weight: 700;
+            padding-top: 0.8mm;
+        }
+        .ticket-items tr.sep td {
+            border-top: 1px dotted #000;
+        }
+        /* Fila flexible reutilizable (deudas / pagos / totales de bloque) */
+        .ticket-fila {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.3mm;
+            font-weight: 600;
+        }
+        .ticket-totales {
+            border-top: 1px dashed #000;
+            padding-top: 1mm;
+            margin-bottom: 1mm;
+            font-size: 9px;
+            font-weight: 600;
+        }
+        .ticket-totales .fila-total {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.3mm;
+        }
+        .ticket-totales .total-final {
+            font-size: 11px;
+            font-weight: 700;
+            border-top: 1px solid #000;
+            padding-top: 0.5mm;
+            margin-top: 0.5mm;
+        }
+        .ticket-pagos {
+            border-top: 1px dashed #000;
+            padding-top: 1mm;
+            margin-bottom: 1mm;
+            font-size: 9px;
+            font-weight: 600;
+        }
+        .ticket-pagos .fila-pago {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.3mm;
+        }
+        .ticket-vuelto {
+            font-size: 9px;
+            font-weight: 700;
+            color: #000;
+            margin-bottom: 0.5mm;
+        }
+        .ticket-credito {
+            font-size: 9px;
+            font-weight: 700;
+            color: #000;
+            border: 1px solid #000;
+            padding: 0.5mm;
+            text-align: center;
+            margin-bottom: 1mm;
+        }
+        .ticket-footer {
+            text-align: center;
+            border-top: 1px dashed #000;
+            padding-top: 1mm;
+            font-size: 8px;
+            font-weight: 600;
+        }
+        .ticket-footer p {
+            margin-bottom: 0.3mm;
+        }
+        /* >>> NUEVO: caja de PENDIENTE TOTAL destacada <<< */
+        .ticket-pendiente {
+            display: none;
+            border: 2px solid #000;
+            padding: 1.2mm 1mm;
+            margin-bottom: 1mm;
+            text-align: center;
+        }
+        /* ============================================================
+           TICKET CORTE Z - ESTILOS PANTALLA (oculto)
+           ============================================================ */
+        .ticket-z-impresion {
+            display: none;
+            width: 100%;
+            max-width: 48mm;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 8px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            padding: 2mm;
+            box-sizing: border-box;
+        }
+        .ticket-z-impresion * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* ============================================================
+           CSS DE IMPRESIÓN - SOLO SE APLICA AL IMPRIMIR
+           ============================================================ */
+        @media print {
+            /* Ocultar TODO el contenido de la página.
+               FIX v2.0.1: además de .pos-container/.navbar/.modal se oculta
+               cualquier otro elemento hermano del <body> (header-movil,
+               productos-overlay, erp-navbar, etc.) que antes se colaba en la
+               impresión y salía como "$0.00 + ícono carpeta + botón". */
+            body > *:not(.ticket-impresion):not(.ticket-z-impresion) {
+                display: none !important;
+            }
+            .pos-container, 
+            .navbar, 
+            .modal,
+            .modal-backdrop,
+            #header-movil,
+            #productos-overlay,
+            #erp-navbar,
+            #reporte-cierre-overlay {
+                display: none !important;
+            }
+
+            /* Mostrar SOLO el ticket activo */
+            .ticket-impresion.activo,
+            .ticket-z-impresion.activo {
+                display: block !important;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 48mm; /* Área real imprimible del cabezal térmico */
+                margin: 0;
+                padding: 0; /* Se elimina el padding externo para aprovechar el espacio */
+            }
+
+            /* Asegurar que el body no tenga márgenes */
+            body {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+            }
+
+            @page {
+                size: 48mm auto;
+                margin: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="erp-navbar"></div>
+
+    <!-- ═══════════ HEADER MÓVIL (solo < 768px) ═══════════ -->
+    <div id="header-movil" class="d-md-none">
+        <button type="button" class="hm-btn" onclick="toggleProductosPanel()" aria-label="Ver productos">
+            <i class="bi bi-grid-3x3-gap-fill"></i>
+        </button>
+        <div class="hm-info">
+            <div class="hm-cliente" id="mobile-cliente-nombre">Cliente Mostrador</div>
+            <div class="hm-total" id="mobile-total">$ 0.00</div>
+        </div>
+        <button type="button" class="hm-btn" onclick="abrirModalBorradores()" aria-label="Borradores">
+            <i class="bi bi-folder2-open"></i>
+        </button>
+    </div>
+
+    <!-- Overlay para cerrar el panel de productos tocando fuera (solo móvil) -->
+    <div id="productos-overlay" onclick="toggleProductosPanel()"></div>
+
+    <div class="container-fluid pos-container">
+        <div class="row h-100">
+            <div class="col-md-8 products-panel bg-white" id="sidebar-productos">
+                <!-- Barra superior del panel (solo móvil) -->
+                <div class="sidebar-movil-top d-md-none">
+                    <h6 class="m-0 fw-bold"><i class="bi bi-box-seam me-2"></i>Productos</h6>
+                    <button type="button" class="btn-cerrar" onclick="toggleProductosPanel()" aria-label="Cerrar">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+
+                <div class="row mb-3 align-items-center">
+                    <div class="col-md-9">
+                        <div class="input-group shadow-sm border-primary">
+                            <span class="input-group-text bg-primary text-white fw-bold"><i class="bi bi-person-fill me-1"></i> Cliente</span>
+                            <select class="form-select text-dark fw-bold" id="select-cliente" disabled>
+                                <option value="1">Cliente Mostrador</option> 
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary w-100 fw-bold shadow-sm" data-bs-toggle="modal" data-bs-target="#modalBuscarCliente">
+                            <i class="bi bi-search me-1"></i> BUSCAR
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <div class="input-group input-group-lg shadow-sm">
+                        <span class="input-group-text bg-white border-primary"><i class="bi bi-barcode"></i></span>
+                        <input type="text" class="form-control border-primary" id="buscador-productos" placeholder="Escanea código o escribe nombre del producto..." autocomplete="off" inputmode="search" enterkeyhint="search">
+                    </div>
+                </div>
+
+                <!-- Chips de categoría (solo móvil) -->
+                <div id="categorias-chips" class="d-md-none"></div>
+
+                <div class="row g-3" id="gridProductos"></div>
+
+                <!-- Lista táctil de productos (solo móvil) -->
+                <div id="lista-productos-mobile" class="d-md-none"></div>
+            </div>
+
+            <div class="col-md-4 cart-panel shadow-lg">
+                <!-- Tabla del carrito (solo PC) -->
+                <div class="cart-table-container p-3 d-none d-md-block">
+                    <table class="table table-sm table-hover text-center align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th class="text-start">Producto</th>
+                                <th>Cant.</th>
+                                <th>Precio</th>
+                                <th>Subt.</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="tablaCarrito">
+                            <tr>
+                                <td colspan="5" class="text-muted py-5 text-center">
+                                    <i class="bi bi-cart-x fs-1 d-block mb-2"></i>
+                                    El carrito está vacío
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Lista táctil del carrito (solo móvil) -->
+                <div id="carrito-lista-mobile" class="d-md-none"></div>
+
+                <div class="totals-section">
+                    <div class="d-flex justify-content-between mb-1 tot-detalle">
+                        <span class="text-muted">Subtotal:</span>
+                        <span id="ui-subtotal" class="fw-bold">$ 0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2 tot-detalle">
+                        <span class="text-muted">Impuestos (IVA):</span>
+                        <span id="ui-impuestos" class="fw-bold">$ 0.00</span>
+                    </div>
+                    <hr class="my-2 tot-separador">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="fs-5 fw-bold">TOTAL USD:</span>
+                        <span class="fs-3 fw-bold text-success" id="ui-total-usd">$ 0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="fs-6 text-muted">TOTAL BS:</span>
+                        <span class="fs-5 fw-bold text-primary" id="ui-total-bs">BS 0.00</span>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <button class="btn btn-outline-secondary w-100 py-2 fw-bold" onclick="abrirModalGuardarBorrador()">
+                                <i class="bi bi-save"></i> GUARDAR BORRADOR
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-outline-info w-100 py-2 fw-bold" onclick="abrirModalBorradores()">
+                                <i class="bi bi-folder-open"></i> CARGAR BORRADOR
+                            </button>
+                        </div>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-6" id="col-cancelar">
+                            <button class="btn btn-outline-danger w-100 py-3 fw-bold" onclick="vaciarCarrito()">
+                                <i class="bi bi-trash"></i> CANCELAR
+                            </button>
+                        </div>
+                        <div class="col-6" id="col-cobrar">
+                            <button class="btn btn-success w-100 py-3 fw-bold shadow" onclick="abrirModalCobro()">
+                                <i class="bi bi-cash-stack"></i> COBRAR (F12)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Buscar Cliente -->
+    <div class="modal fade" id="modalBuscarCliente" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-search me-2"></i>Seleccionar Cliente</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <div class="d-flex mb-3">
+                        <input type="text" class="form-control me-2 border-primary" id="input-buscar-cliente" placeholder="Nombre o Cédula/RIF..." onkeyup="filtrarClientesModal()">
+                        <button class="btn btn-primary fw-bold text-nowrap" data-bs-toggle="modal" data-bs-target="#modalNuevoCliente">
+                            <i class="bi bi-person-plus-fill"></i> + NUEVO
+                        </button>
+                    </div>
+                    <div class="list-group shadow-sm" id="lista-clientes-modal" style="max-height: 400px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Nuevo Cliente -->
+    <div class="modal fade" id="modalNuevoCliente" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title fw-bold">Registrar Cliente</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Nombre / Razón Social</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-nombre">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Cédula / RIF</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-doc">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Teléfono</label>
+                        <input type="text" class="form-control" id="nuevo-cliente-tlf">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary fw-bold" onclick="guardarNuevoCliente()">GUARDAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Egreso -->
+    <div class="modal fade" id="modalEgresos" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-box-arrow-up-right me-2"></i>Registrar Egreso / Salida</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light p-0">
+                    <ul class="nav nav-tabs nav-fill bg-white pt-2" id="egresosTab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active fw-bold text-dark" id="dinero-tab" data-bs-toggle="tab" data-bs-target="#dinero-pane" type="button" role="tab"><i class="bi bi-cash me-1"></i> Sacar Efectivo</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link fw-bold text-dark" id="inventario-tab" data-bs-toggle="tab" data-bs-target="#inventario-pane" type="button" role="tab"><i class="bi bi-box-seam me-1"></i> Salida de Productos</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content p-4" id="egresosTabContent">
+                        <div class="tab-pane fade show active" id="dinero-pane" role="tabpanel" tabindex="0">
+                            <div class="row g-3">
+                                <div class="col-md-12">
+                                    <label class="form-label fw-bold">Concepto / Motivo</label>
+                                    <select class="form-select border-warning select-concepto-egreso" id="egreso-caja-concepto"></select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Monto Extraído</label>
+                                    <input type="number" class="form-control form-control-lg text-center" id="egreso-caja-monto" step="0.01" value="0.00">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Moneda del Billete</label>
+                                    <select class="form-select form-select-lg text-center" id="egreso-caja-moneda">
+                                        <option value="PRINCIPAL">Dólares (USD)</option>
+                                        <option value="SECUNDARIA">Bolívares (BS)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-12">
+                                    <label class="form-label fw-bold">Observación</label>
+                                    <input type="text" class="form-control" id="egreso-caja-obs" placeholder="Ej: Pago de botellón de agua, pasaje, etc.">
+                                </div>
+                                <div class="col-12 text-end mt-4">
+                                    <button class="btn btn-warning fw-bold px-5" onclick="procesarEgresoCaja()">RETIRAR DINERO</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-pane fade" id="inventario-pane" role="tabpanel" tabindex="0">
+                            <div class="row g-2 mb-2 align-items-end">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold small">Concepto</label>
+                                    <select class="form-select form-select-sm border-warning select-concepto-egreso" id="egreso-inv-concepto"></select>
+                                </div>
+                                <div class="col-md-8">
+                                    <label class="form-label fw-bold small">Buscar Producto</label>
+                                    <input type="text" class="form-control form-control-sm border-primary" id="buscador-egreso-inv" placeholder="Escribe el nombre para filtrar la lista...">
+                                </div>
+                            </div>
+
+                            <div class="row g-2 mb-3 align-items-end">
+                                <div class="col-md-7">
+                                    <select class="form-select form-select-sm" id="egreso-inv-producto">
+                                        <option value="">-- Buscar Producto Arriba --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="number" class="form-control form-control-sm text-center" id="egreso-inv-cant" step="0.01" value="1" onclick="this.select()">
+                                </div>
+                                <div class="col-md-3">
+                                    <button class="btn btn-sm btn-primary w-100 fw-bold" onclick="agregarAEgresoInv()">+ AÑADIR</button>
+                                </div>
+                            </div>
+
+                            <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+                                <table class="table table-sm table-bordered text-center align-middle">
+                                    <thead class="table-light">
+                                        <tr><th>Producto</th><th>Cant.</th><th>Costo Unit.</th><th></th></tr>
+                                    </thead>
+                                    <tbody id="tabla-egreso-inv">
+                                        <tr><td colspan="4" class="text-muted small">Agrega productos a la lista de salida</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="row mt-2">
+                                <div class="col-md-8">
+                                    <input type="text" class="form-control form-control-sm" id="egreso-inv-obs" placeholder="Nota o persona que autoriza...">
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <button class="btn btn-sm btn-danger fw-bold w-100" onclick="procesarEgresoInventario()">DESCONTAR STOCK</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cobro -->
+    <div class="modal fade" id="modalCobro" data-bs-backdrop="static" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content border-success">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-check2-circle me-2"></i>Finalizar Venta</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <!-- INFO CLIENTE EN COBRO -->
+                    <div id="cobro-info-cliente" class="row mb-3 mx-1">
+                        <div class="col-12 bg-white p-2 rounded shadow-sm border-start border-4 border-primary">
+                            <div class="d-flex justify-content-between align-items-center flex-wrap">
+                                <div>
+                                    <small class="text-muted text-uppercase fw-bold">Atendiendo a</small>
+                                    <h5 class="mb-0 fw-bold text-dark" id="cobro-cliente-nombre">Cliente Genérico</h5>
+                                    <small class="text-muted" id="cobro-cliente-doc">Doc: ---</small>
+                                </div>
+                                <div class="text-end">
+                                    <div class="small text-muted">Deuda actual: <span class="text-danger fw-bold" id="cobro-cliente-deuda">$ 0.00</span></div>
+                                    <div class="small text-muted">Límite crédito: <span class="text-primary fw-bold" id="cobro-cliente-limite">$ 0.00</span></div>
+                                    <div class="small text-muted">Saldo a favor: <span class="text-success fw-bold" id="cobro-cliente-saldo">$ 0.00</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3 text-center bg-white p-3 rounded shadow-sm mx-1">
+                        <div class="col-6 border-end">
+                            <h5 class="text-muted mb-0">TOTAL USD</h5>
+                            <h2 class="text-success fw-bold mb-0" id="cobro-total-usd">$ 0.00</h2>
+                        </div>
+                        <div class="col-6">
+                            <h5 class="text-muted mb-0">TOTAL BS</h5>
+                            <h3 class="text-primary fw-bold mb-0" id="cobro-total-bs">BS 0.00</h3>
+                        </div>
+                    </div>
+                    <div class="mb-4 text-center">
+                        <div class="btn-group shadow-sm" role="group">
+                            <input type="radio" class="btn-check" name="tipoVenta" id="btn-contado" value="CONTADO" checked onchange="evaluarEstadoPago()">
+                            <label class="btn btn-outline-success fw-bold px-5 py-2" for="btn-contado">CONTADO</label>
+                            <input type="radio" class="btn-check" name="tipoVenta" id="btn-credito" value="CREDITO" onchange="evaluarEstadoPago()">
+                            <label class="btn btn-outline-warning fw-bold px-5 py-2" for="btn-credito">CRÉDITO</label>
+                        </div>
+                    </div>
+                    <h6 class="fw-bold text-secondary mb-2">Métodos de Pago (Abonos)</h6>
+                    <div id="contenedor-pagos" class="mb-3"></div>
+                    <div class="text-center mb-4">
+                        <button class="btn btn-sm btn-outline-primary fw-bold" onclick="agregarLineaPago()">+ AÑADIR OTRO MÉTODO</button>
+                    </div>
+                    <div class="row bg-dark text-white p-3 rounded mx-1 align-items-center shadow">
+                        <div class="col-6"><h5 class="mb-0">Restante por pagar:</h5></div>
+                        <div class="col-6 text-end">
+                            <h3 class="text-warning fw-bold mb-0" id="cobro-restante-usd">$ 0.00</h3>
+                            <small class="text-muted d-block" id="cobro-restante-bs" style="display: none;"></small>
+                        </div>
+                    </div>
+
+                    <!-- ============================================================
+                         FASE 1.5 (Anexo A): DISTRIBUCIÓN DEL VUELTO
+                         Aparece solo cuando hay excedente (pagos > total)
+                         ============================================================ -->
+                    <div id="panel-vuelto" class="mx-1 mb-3" style="display: none;">
+                        <div class="bg-white border border-success rounded p-3 shadow-sm">
+                            <h6 class="fw-bold text-success mb-2">💵 VUELTO: $ <span id="panel-vuelto-monto">0.00</span>
+                                <small class="text-muted fw-normal">— ¿cómo se distribuye?</small></h6>
+                            <div class="d-flex flex-column gap-1">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="destinoVuelto" id="vuelto-entregar" value="ENTREGAR" checked onchange="actualizarPanelVuelto()">
+                                    <label class="form-check-label" for="vuelto-entregar">Entregar en efectivo (cambio al cliente)</label>
+                                </div>
+                                <div class="form-check" id="vuelto-op-cxc-wrap">
+                                    <input class="form-check-input" type="radio" name="destinoVuelto" id="vuelto-cxc" value="CXC" onchange="actualizarPanelVuelto()">
+                                    <label class="form-check-label" for="vuelto-cxc">Aplicar a deudas del cliente (deuda disponible: <span id="vuelto-deuda-disp" class="text-danger fw-bold">$ 0.00</span>)</label>
+                                </div>
+                                <div class="form-check" id="vuelto-op-saldo-wrap">
+                                    <input class="form-check-input" type="radio" name="destinoVuelto" id="vuelto-saldo" value="SALDO" onchange="actualizarPanelVuelto()">
+                                    <label class="form-check-label" for="vuelto-saldo">Guardar como saldo a favor del cliente</label>
+                                </div>
+                                <div class="form-check" id="vuelto-op-mixto-wrap">
+                                    <input class="form-check-input" type="radio" name="destinoVuelto" id="vuelto-mixto" value="MIXTO" onchange="actualizarPanelVuelto()">
+                                    <label class="form-check-label" for="vuelto-mixto">Distribuir manualmente</label>
+                                </div>
+                                <div id="vuelto-mixto-campos" class="row g-2 mt-1" style="display: none;">
+                                    <div class="col-3"><label class="form-label small mb-0">Entregar USD</label>
+                                        <input type="number" step="0.01" min="0" class="form-control form-control-sm" id="vuelto-mix-entregar-usd" value="0.00" oninput="actualizarPanelVuelto()"></div>
+                                    <div class="col-3"><label class="form-label small mb-0">Entregar BS</label>
+                                        <input type="number" step="0.01" min="0" class="form-control form-control-sm" id="vuelto-mix-entregar-bs" value="0.00" oninput="actualizarPanelVuelto()"></div>
+                                    <div class="col-3"><label class="form-label small mb-0">Aplicar a deudas</label>
+                                        <input type="number" step="0.01" min="0" class="form-control form-control-sm" id="vuelto-mix-cxc" value="0.00" oninput="actualizarPanelVuelto()"></div>
+                                    <div class="col-3"><label class="form-label small mb-0">Saldo a favor</label>
+                                        <input type="number" step="0.01" min="0" class="form-control form-control-sm" id="vuelto-mix-saldo" value="0.00" oninput="actualizarPanelVuelto()"></div>
+                                    <div class="col-12 small" id="vuelto-mix-info"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">REGRESAR</button>
+                    <button type="button" class="btn btn-success fw-bold px-5 py-2" id="btn-procesar-factura" onclick="ejecutarFacturacionFinal()" disabled>FACTURAR AHORA</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Actualizar Tasa -->
+    <div class="modal fade" id="modalActualizarTasa" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-warning">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-currency-exchange me-2"></i>Actualizar Tasa del Día</h5>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <p class="text-muted">La tasa no ha sido actualizada hoy. Ingresa la tasa actual antes de continuar.</p>
+
+                    <!-- FASE 1.6: referencia BCV (visible solo si usar_tasa_bcv=True) -->
+                    <div id="bcv-seccion" class="mb-3" style="display:none;">
+                        <div class="border rounded p-2 bg-light">
+                            <div class="small text-muted mb-1">Tasa BCV oficial (referencia)</div>
+                            <div class="fs-5 fw-bold text-primary">
+                                <span id="bcv-tasa-display">--</span> BS/USD
+                                <button type="button" class="btn btn-sm btn-outline-primary ms-2" id="btn-recargar-bcv"
+                                        onclick="recargarTasaBCV()" title="Volver a consultar la tasa BCV">
+                                    <i class="bi bi-arrow-clockwise"></i> Actualizar BCV
+                                </button>
+                            </div>
+                            <div class="small text-muted" id="bcv-fuente-display"></div>
+                            <div id="bcv-error" class="small text-danger mt-1" style="display:none;">
+                                No se pudo consultar la tasa BCV automáticamente.
+                                <input type="number" class="form-control form-control-sm mt-1" id="tasa-bcv-manual-input"
+                                       step="0.01" placeholder="Ingresar tasa BCV manual" oninput="actualizarDiferenciaTasa()">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Tasa de Cambio (BS / USD)</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="nueva-tasa-input" step="0.01" value="0.00" oninput="actualizarDiferenciaTasa()">
+                        <div class="small mt-1" id="tasa-diferencia-display" style="display:none;"></div>
+                        <div class="alert alert-danger py-2 mt-2 mb-0" id="tasa-alerta-banner" style="display:none;"></div>
+                    </div>
+                    <p class="small text-muted">Tasa anterior: <span id="tasa-anterior-display">0.00</span></p>
+
+                    <!-- FASE 1.6: motivo de diferencia con BCV (opcional) -->
+                    <div class="mb-2 text-start">
+                        <label class="form-label small fw-bold mb-1">Motivo de la diferencia (opcional)</label>
+                        <input type="text" class="form-control form-control-sm" id="tasa-motivo-input" maxlength="250"
+                               placeholder="Ej: spread operativo 0.2%">
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button class="btn btn-outline-danger" onclick="cerrarSesionLocal()">Salir</button>
+                    <button class="btn btn-warning fw-bold px-4 text-dark" onclick="procesarActualizacionTasa()">GUARDAR Y CONTINUAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Guardar Borrador -->
+    <div class="modal fade" id="modalGuardarBorrador" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-secondary text-white">
+                    <h5 class="modal-title fw-bold">Guardar Borrador</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Cliente: <b id="borrador-cliente-nombre">Cliente Generico</b></p>
+                    <p>Total USD: <b id="borrador-total-usd">$ 0.00</b></p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Descripción / Referencia (opcional)</label>
+                        <input type="text" class="form-control" id="borrador-nombre" placeholder="Ej: Pedido Juan, Mesa 3, etc.">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">CANCELAR</button>
+                    <button class="btn btn-primary fw-bold" onclick="ejecutarGuardarBorrador()">GUARDAR BORRADOR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cargar Borrador -->
+    <div class="modal fade" id="modalBorradores" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-dark">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-folder-open me-2"></i>Borradores Guardados</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <div class="list-group shadow-sm" id="lista-borradores" style="max-height: 400px; overflow-y: auto;">
+                        <div class="list-group-item text-muted text-center">Cargando borradores...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Apertura Caja -->
+    <div class="modal fade" id="modalAperturaCaja" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-success">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title fw-bold">Apertura de Turno</h5>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <p class="text-muted">Ingresa el fondo inicial de la gaveta.</p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Fondo USD</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="apertura-usd" value="0.00">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Fondo BS</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="apertura-bs" value="0.00">
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-between">
+                    <button class="btn btn-outline-danger" onclick="cerrarSesion()">Salir</button>
+                    <button class="btn btn-success fw-bold px-4" onclick="procesarAperturaCaja()">ABRIR CAJA</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cierre Obligatorio -->
+    <div class="modal fade" id="modalCierreObligatorio" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-danger">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold">⚠ Turno Pendiente de Ayer</h5>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-danger fw-bold">Debes cerrar el turno del día anterior antes de continuar.</p>
+                    <div class="mb-3 text-center">
+                        <label class="form-label fw-bold">Total Físico en Gaveta (USD)</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-usd" value="0.00">
+                    </div>
+                    <div class="mb-3 text-center">
+                        <label class="form-label fw-bold">Total Físico en Gaveta (BS)</label>
+                        <input type="number" class="form-control form-control-lg text-center" id="cierre-oblig-bs" value="0.00">
+                    </div>
+                </div>
+                <div class="modal-footer text-center">
+                    <button class="btn btn-danger w-100 fw-bold" onclick="procesarCierreObligatorio()">CERRAR CAJA VIEJA Y RECARGAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cierre Caja — FASE 1C: arqueo informado (preview por método) -->
+    <div class="modal fade" id="modalCierreCaja" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title">Cierre de Turno — Arqueo de Caja</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row text-center mb-2" style="font-size: 12px;">
+                        <div class="col">Fondo<br><b>$ <span id="cierre-r-fondo-usd">0.00</span> / Bs <span id="cierre-r-fondo-bs">0.00</span></b></div>
+                        <div class="col">Cobros efectivo<br><b>$ <span id="cierre-r-cobros-usd">0.00</span> / Bs <span id="cierre-r-cobros-bs">0.00</span></b></div>
+                        <div class="col">Egresos<br><b>$ <span id="cierre-r-egresos-usd">0.00</span> / Bs <span id="cierre-r-egresos-bs">0.00</span></b></div>
+                        <div class="col">Vueltos<br><b>$ <span id="cierre-r-vueltos-usd">0.00</span> / Bs <span id="cierre-r-vueltos-bs">0.00</span></b></div>
+                    </div>
+                    <table class="table table-sm table-bordered" style="font-size: 12px;">
+                        <thead class="table-light">
+                            <tr><th>Método de pago</th><th>Moneda</th><th class="text-end">Esperado</th><th style="width: 160px;">Declarado (conteo)</th></tr>
+                        </thead>
+                        <tbody id="cierre-por-metodo"></tbody>
+                    </table>
+                    <div class="row">
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label fw-bold">Declarado USD en gaveta</label>
+                            <input type="number" step="0.01" class="form-control form-control-lg text-center" id="cierre-usd" value="0.00" oninput="actualizarDescuadreLive()">
+                        </div>
+                        <div class="col-md-6 mb-2">
+                            <label class="form-label fw-bold">Declarado BS en gaveta</label>
+                            <input type="number" step="0.01" class="form-control form-control-lg text-center" id="cierre-bs" value="0.00" oninput="actualizarDescuadreLive()">
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Observación (opcional)</label>
+                        <input type="text" class="form-control" id="cierre-observacion" maxlength="250" placeholder="Ej: cajero cambió $20 de su bolsillo, etc.">
+                    </div>
+                    <div class="alert alert-success text-center mb-0" id="cierre-live-descuadre">Calculando…</div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button class="btn btn-danger fw-bold" onclick="procesarCierreCaja()">CONFIRMAR CIERRE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         TICKET DE VENTA - 58mm - VERSIÓN 2 LÍNEAS POR PRODUCTO
+         ============================================================ -->
+    <div id="ticket-impresion" class="ticket-impresion">
+        <div class="ticket-encabezado">
+            <h3>Valles del pollo</h3>
+            <p>RIF: J-0000000-0</p>
+            <p>Av. Principal, Local 0</p>
+            <p>Tel: 0000-0000000</p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px;">TICKET DE VENTA</p>
+            <p style="font-size: 9px; font-weight: bold;">#<span id="ticket-id">---</span></p>
+            <p id="ticket-fecha" style="font-size: 8px;"></p>
+        </div>
+
+        <div class="ticket-info">
+            <p><strong>Cliente:</strong> <span id="ticket-cliente">Cliente Mostrador</span></p>
+            <p><strong>Cajero:</strong> <span id="ticket-cajero">Admin</span></p>
+            <p><strong>Tipo:</strong> <span id="ticket-tipo-venta">CONTADO</span></p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+        </div>
+
+        <table class="ticket-items">
+            <thead>
+                <tr>
+                    <th colspan="2">Descripción (Cant X Precio)</th>
+                    <th style="text-align: right;">Total</th>
+                </tr>
+            </thead>
+            <tbody id="ticket-items"></tbody>
+        </table>
+
+        <div class="ticket-totales">
+            <div class="fila-total">
+                <span>Subtotal:</span>
+                <span>$ <span id="ticket-subtotal">0.00</span></span>
+            </div>
+            <div class="fila-total">
+                <span>IVA:</span>
+                <span>$ <span id="ticket-iva">0.00</span></span>
+            </div>
+            <div class="fila-total total-final">
+                <span>TOTAL USD:</span>
+                <span>$ <span id="ticket-total-usd">0.00</span></span>
+            </div>
+            <div class="fila-total">
+                <span>TOTAL BS:</span>
+                <span>BS <span id="ticket-total-bs">0.00</span></span>
+            </div>
+            <div style="font-size: 8px; text-align: center; margin-top: 1mm;">
+                Tasa: <span id="ticket-tasa">0.00</span> BS/USD
+            </div>
+        </div>
+
+        <!-- >>> NUEVO: Bloque DEUDAS (CxC anterior + nueva factura) <<< -->
+        <div id="ticket-deudas-section" class="ticket-pagos" style="display: none;">
+            <p style="font-weight: bold; margin-bottom: 1mm;">DEUDAS:</p>
+            <div id="ticket-deudas-lista"></div>
+            <div class="ticket-fila" style="border-top: 1px dashed #000; padding-top: 0.5mm; margin-top: 0.5mm; font-weight: bold;">
+                <span>TOTAL DEUDA:</span>
+                <span>$ <span id="ticket-deuda-total">0.00</span></span>
+            </div>
+        </div>
+
+        <!-- >>> MEJORADO: Pagos y abonos con doble moneda <<< -->
+        <div id="ticket-pagos-section" class="ticket-pagos" style="display: none;">
+            <p style="font-weight: bold; margin-bottom: 1mm;">PAGOS Y ABONOS:</p>
+            <div id="ticket-pagos-lista"></div>
+            <div class="ticket-fila" style="border-top: 1px dashed #000; padding-top: 0.5mm; margin-top: 0.5mm; font-weight: bold;">
+                <span>TOTAL PAGADO:</span>
+                <span>$ <span id="ticket-pagos-total">0.00</span></span>
+            </div>
+        </div>
+
+        <div id="ticket-vuelto-section" class="ticket-vuelto" style="display: none;">
+            <div class="ticket-fila">
+                <span>VUELTO:</span>
+                <span>$ <span id="ticket-vuelto">0.00</span></span>
+            </div>
+            <p id="ticket-vuelto-detalle" style="font-size: 7px; margin: 0;"></p>
+        </div>
+
+        <!-- >>> NUEVO: PENDIENTE TOTAL destacado <<< -->
+        <div id="ticket-pendiente-section" class="ticket-pendiente">
+            <div id="ticket-pendiente-linea" style="font-size: 12px; font-weight: 700;">
+                <span id="ticket-pendiente-titulo">PENDIENTE TOTAL:</span>
+                $ <span id="ticket-pendiente">0.00</span>
+            </div>
+            <div id="ticket-pendiente-nota" style="font-size: 7px; font-weight: 400;">(incluye deudas anteriores)</div>
+            <div id="ticket-a-favor-linea" style="font-size: 9px; font-weight: 700; display: none;">
+                A FAVOR: $ <span id="ticket-a-favor">0.00</span>
+            </div>
+        </div>
+
+        <div class="ticket-footer">
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+            <p style="font-weight: bold;">¡Gracias por su compra!</p>
+            <p style="font-size: 8px;">Documento no válido como factura fiscal</p>
+            <p style="font-size: 7px; margin-top: 2mm;">ERP Bimonetario v1.0</p>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         TICKET CORTE Z - 58mm — FASE 1C (doble moneda, métodos,
+         vueltos, créditos, diferencia cambiaria)
+         ============================================================ -->
+    <div id="ticket-z-impresion" class="ticket-z-impresion">
+        <div class="ticket-encabezado">
+            <h3>Valles del Pollo</h3>
+            <p style="font-size: 9px; font-weight: bold;">CIERRE DE CAJA — TURNO #<span id="z-turno">---</span></p>
+            <p id="z-fecha-cierre" style="font-size: 8px;"></p>
+            <p style="font-size: 9px;">Cajero: <span id="z-cajero"></span></p>
+            <p style="font-size: 8px;">Apertura: <span id="z-fecha-apertura">--</span></p>
+            <p style="font-size: 8px;">Tasa: <span id="z-tasas">--</span></p>
+            <p style="font-size: 8px; margin-top: 1mm;">--------------------------------</p>
+        </div>
+        <div style="font-size: 9px; margin-bottom: 2mm;">
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">RESUMEN DE VENTAS</p>
+            <div class="fila-total"><span>Total facturado:</span><span>$ <span id="z-facturado">0.00</span></span></div>
+            <div class="fila-total"><span>&nbsp;&nbsp;Contado:</span><span>$ <span id="z-contado">0.00</span></span></div>
+            <div class="fila-total"><span>&nbsp;&nbsp;Crédito:</span><span>$ <span id="z-credito-emitido">0.00</span></span></div>
+            <div class="fila-total"><span>Total cobrado:</span><span>$ <span id="z-cobrado">0.00</span></span></div>
+            <div class="fila-total"><span>Crédito nuevo:</span><span>$ <span id="z-credito-generado">0.00</span></span></div>
+            <div class="fila-total"><span>N° facturas:</span><span id="z-num-facturas">0</span></div>
+            <div class="fila-total"><span>Ticket promedio:</span><span>$ <span id="z-ticket-promedio">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">ABONOS A CUENTAS VIEJAS</p>
+            <div class="fila-total"><span>Total abonos CxC:</span><span>$ <span id="z-abonos-total">0.00</span></span></div>
+            <div class="fila-total"><span>N° de abonos:</span><span id="z-abonos-cant">0</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">DESGLOSE POR MÉTODO</p>
+            <div style="font-size: 7px;">(esperado | declarado | dif.)</div>
+            <div id="z-por-metodo" style="font-size: 8px;"></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CAJA FÍSICA USD</p>
+            <div class="fila-total"><span>Fondo inicial:</span><span>$ <span id="z-fondo-usd">0.00</span></span></div>
+            <div class="fila-total"><span>(+) Cobros efectivo:</span><span>$ <span id="z-cobros-usd">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Egresos:</span><span>$ <span id="z-egresos-usd">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Vueltos:</span><span>$ <span id="z-vueltos-usd">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
+                <span>= ESPERADO:</span><span>$ <span id="z-esperado-usd">0.00</span></span></div>
+            <div class="fila-total"><span>= Declarado:</span><span>$ <span id="z-declarado-usd">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>= Descuadre:</span><span id="z-descuadre-usd">0.00</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CAJA FÍSICA BS</p>
+            <div class="fila-total"><span>Fondo inicial:</span><span>BS <span id="z-fondo-bs">0.00</span></span></div>
+            <div class="fila-total"><span>(+) Cobros efectivo:</span><span>BS <span id="z-cobros-bs">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Egresos:</span><span>BS <span id="z-egresos-bs">0.00</span></span></div>
+            <div class="fila-total" style="color: #cc0000;"><span>(-) Vueltos:</span><span>BS <span id="z-vueltos-bs">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; margin-top: 1mm;">
+                <span>= ESPERADO:</span><span>BS <span id="z-esperado-bs">0.00</span></span></div>
+            <div class="fila-total"><span>= Declarado:</span><span>BS <span id="z-declarado-bs">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>= Descuadre:</span><span id="z-descuadre-bs">0.00</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">EGRESOS DEL TURNO</p>
+            <div id="z-egresos-detalle" style="font-size: 8px;"></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL EGRESOS:</span><span id="z-egresos-total">--</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">CRÉDITOS OTORGADOS</p>
+            <div id="z-creditos-detalle" style="font-size: 8px;"></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL CxC NUEVAS:</span><span>$ <span id="z-creditos-total">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <p style="font-weight: bold; font-size: 9px; margin: 0;">VUELTOS DEL TURNO</p>
+            <div class="fila-total"><span>Entregados (salen de caja):</span><span>$ <span id="z-vuelto-entregado">0.00</span></span></div>
+            <div class="fila-total"><span>Aplicados a deudas:</span><span>$ <span id="z-vuelto-aplicado">0.00</span></span></div>
+            <div class="fila-total"><span>Guardados (saldo a favor):</span><span>$ <span id="z-vuelto-saldo">0.00</span></span></div>
+            <div class="fila-total" style="font-weight: bold;"><span>TOTAL VUELTO:</span><span>$ <span id="z-vuelto-total">0.00</span></span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <div class="fila-total"><span>Diferencia cambiaria:</span><span id="z-impacto-cambio">--</span></div>
+            <p style="font-size: 8px; margin: 1mm 0;">--------------------------------</p>
+            <div class="fila-total" style="font-size: 10px; font-weight: bold;"><span>DESCUADRE CONSOLIDADO:</span><span id="z-descuadre-consolidado">--</span></div>
+            <div class="fila-total" style="font-size: 10px; font-weight: bold;"><span>ESTADO:</span><span id="z-estado">--</span></div>
+        </div>
+        <div style="text-align: center; margin-top: 5mm;">
+            <p style="margin: 0;">_______________________</p>
+            <p style="margin: 0; font-size: 8px;">Firma del Cajero</p>
+            <p style="margin: 2mm 0 0;">_______________________</p>
+            <p style="margin: 0; font-size: 8px;">Firma del Supervisor</p>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         REPORTE DE CIERRE EN PANTALLA (tras cerrar) — FASE 1C
+         ============================================================ -->
+    <div id="reporte-cierre-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 2100; overflow: auto; padding: 20px;">
+        <div style="max-width: 820px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 24px;">
+            <h4 id="reporte-cierre-titulo">Cierre de Caja</h4>
+            <div id="reporte-cierre-contenido"></div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-outline-secondary" onclick="reimprimirCorteZ()">🖨 Reimprimir ticket Z</button>
+                <button class="btn btn-primary fw-bold" onclick="finalizarCierreSesion()">Cerrar y salir</button>
+            </div>
+        </div>
+    </div>
+
+<!-- Modal: Lista de Facturas del Turno -->
+<div class="modal fade" id="modalHistorialFacturas" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">Facturas del Turno Actual</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="list-group" id="lista-facturas-turno">
+          <div class="list-group-item text-center text-muted">Cargando...</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Detalle de Factura -->
+<div class="modal fade" id="modalDetalleFactura" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header bg-dark text-white">
+        <h5 class="modal-title">Detalle Factura #<span id="detalle-factura-id"></span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row mb-3">
+          <div class="col-6"><small class="text-muted">Fecha:</small> <span id="detalle-factura-fecha"></span></div>
+          <div class="col-6 text-end">
+            <span class="badge bg-secondary" id="detalle-factura-tipo"></span>
+            <span class="badge bg-light text-dark border" id="detalle-factura-estado"></span>
+          </div>
+        </div>
+
+        <h6 class="fw-bold">Productos</h6>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered">
+            <thead class="table-light">
+              <tr><th>Producto</th><th>Pres.</th><th class="text-center">Cant.</th><th class="text-end">P.Unit</th><th class="text-end">Subtotal</th></tr>
+            </thead>
+            <tbody id="detalle-factura-productos"></tbody>
+          </table>
+        </div>
+
+        <h6 class="fw-bold mt-3">Pagos</h6>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered">
+            <thead class="table-light">
+              <tr><th>Método</th><th class="text-end">Monto USD</th><th class="text-end">Ref.</th></tr>
+            </thead>
+            <tbody id="detalle-factura-pagos"></tbody>
+          </table>
+        </div>
+
+        <div class="row mt-3 border-top pt-2">
+          <div class="col-6">
+            <small class="text-muted">Subtotal:</small> $<span id="detalle-factura-subtotal"></span><br>
+            <small class="text-muted">Impuestos:</small> $<span id="detalle-factura-impuestos"></span>
+          </div>
+          <div class="col-6 text-end">
+            <small class="text-muted">Tasa:</small> <span id="detalle-factura-tasa"></span><br>
+            <h5 class="mb-0">Total: $<span id="detalle-factura-total"></span></h5>
+            <small class="text-muted">BS <span id="detalle-factura-total-bs"></span></small>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        <button type="button" class="btn btn-primary" onclick="reimprimirFactura()"><i class="bi bi-printer me-1"></i>Imprimir</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="assets/js/api.js?v=6.3"></script>
+    <script src="assets/js/menu.js?v=1.3"></script>
+    <script src="assets/js/pos.js?v=8.0"></script>
+</body>
+</html>

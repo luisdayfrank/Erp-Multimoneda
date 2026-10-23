@@ -575,25 +575,29 @@ class DashboardResumenAPIView(APIView):
         inicio_mes_dt = timezone.make_aware(datetime.combine(inicio_mes, time.min))
 
         # VENTAS POS (usamos __lt en lugar de __lte para evitar inclusión del límite)
-        ventas_hoy = Venta.objects.filter(
+        ventas_hoy_qs = Venta.objects.filter(
             fecha__gte=inicio_hoy, fecha__lt=fin_hoy, estado='PROCESADA'
-        ).aggregate(
+        )
+        ventas_hoy = ventas_hoy_qs.aggregate(
             total_usd=Sum('total_principal'),
             cantidad_facturas=Count('id')
         )
 
-        ventas_mes = Venta.objects.filter(
+        ventas_mes_qs = Venta.objects.filter(
             fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy, estado='PROCESADA'
-        ).aggregate(total_usd=Sum('total_principal'))
+        )
+        ventas_mes = ventas_mes_qs.aggregate(total_usd=Sum('total_principal'))
 
         # RUTAS DE MERCADO
-        rutas_hoy = RutaMercado.objects.filter(
+        rutas_hoy_qs = RutaMercado.objects.filter(
             fecha__gte=inicio_hoy, fecha__lt=fin_hoy, estado='CERRADA'
-        ).aggregate(total_usd=Sum('total_venta_usd'))
+        )
+        rutas_hoy = rutas_hoy_qs.aggregate(total_usd=Sum('total_venta_usd'))
 
-        rutas_mes = RutaMercado.objects.filter(
+        rutas_mes_qs = RutaMercado.objects.filter(
             fecha__gte=inicio_mes_dt, fecha__lt=fin_hoy, estado='CERRADA'
-        ).aggregate(total_usd=Sum('total_venta_usd'))
+        )
+        rutas_mes = rutas_mes_qs.aggregate(total_usd=Sum('total_venta_usd'))
 
         # FIX DASHBOARD-1: se guarda el desglose POS vs Rutas para poder ver de
         # dónde sale cada dólar del KPI (una venta mensual "inflada" suele venir
@@ -605,6 +609,22 @@ class DashboardResumenAPIView(APIView):
 
         total_hoy_usd = hoy_pos_usd + hoy_rutas_usd
         total_mes_usd = mes_pos_usd + mes_rutas_usd
+
+        # FIX DASHBOARD-2: separar COBRADO vs FIADO de lo vendido este mes.
+        # El KPI es ingreso BRUTO: cuenta el fiado completo aunque el dinero no
+        # haya entrado. Con estas dos líneas la tarjeta se explica sola:
+        #   Acumulado (bruto) = Cobrado + Fiado pendiente
+        # (incluye el fiado de las rutas de mercado, que son CxC sin venta).
+        fiado_pos = CuentaPorCobrar.objects.filter(
+            venta__in=ventas_mes_qs
+        ).aggregate(t=Sum('saldo_pendiente'))['t'] or Decimal('0.00')
+
+        fiado_rutas = CuentaPorCobrar.objects.filter(
+            origen_ruta__ruta__in=rutas_mes_qs
+        ).aggregate(t=Sum('saldo_pendiente'))['t'] or Decimal('0.00')
+
+        mes_fiado_pendiente = fiado_pos + fiado_rutas
+        mes_cobrado = total_mes_usd - mes_fiado_pendiente
 
         # CXC / CXP / STOCK (sin cambios)
         cxc_pendientes = CuentaPorCobrar.objects.filter(
@@ -660,6 +680,9 @@ class DashboardResumenAPIView(APIView):
                 "hoy_rutas_usd": float(hoy_rutas_usd),
                 "mes_pos_usd": float(mes_pos_usd),
                 "mes_rutas_usd": float(mes_rutas_usd),
+                # FIX DASHBOARD-2: bruto = cobrado + fiado pendiente
+                "mes_fiado_pendiente": float(mes_fiado_pendiente),
+                "mes_cobrado": float(mes_cobrado),
             },
             "finanzas": {
                 "por_cobrar_total": cxc_pendientes['total_deuda'] or 0.00,

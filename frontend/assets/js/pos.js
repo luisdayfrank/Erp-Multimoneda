@@ -235,6 +235,10 @@ function seleccionarCliente(id, nombre) {
     const select = document.getElementById('select-cliente');
     select.innerHTML = '<option value="' + id + '">' + nombre + '</option>';
     select.value = id;
+
+    // POS MÓVIL: nombre del cliente en el header superior
+    const hmCliente = document.getElementById('mobile-cliente-nombre');
+    if (hmCliente) hmCliente.innerText = nombre;
     const modalEl = document.getElementById('modalBuscarCliente');
     const modalInst = bootstrap.Modal.getInstance(modalEl);
     if (modalInst) modalInst.hide();
@@ -373,6 +377,12 @@ function agregarAlCarrito(idPresentacion) {
     calcularTotales();
     renderizarCarritoHTML();
     guardarCarritoEnStorage();
+
+    // POS MÓVIL: el carrito siempre muestra el último ítem agregado
+    if (typeof esVistaMovilPOS === 'function' && esVistaMovilPOS()) {
+        const contM = document.getElementById('carrito-lista-mobile');
+        if (contM) contM.scrollTop = contM.scrollHeight;
+    }
 }
 function quitarDelCarrito(idPresentacion) {
     const index = carrito.findIndex(item => item.presentacion_id === idPresentacion);
@@ -436,6 +446,10 @@ function actualizarPantallaTotales(totales) {
     document.getElementById('ui-impuestos').innerText = '$ ' + totales.impuestos;
     document.getElementById('ui-total-usd').innerText = '$ ' + totales.total_usd;
     document.getElementById('ui-total-bs').innerText = 'BS ' + totales.total_bs;
+
+    // POS MÓVIL: total siempre visible en el header superior
+    const hmTotal = document.getElementById('mobile-total');
+    if (hmTotal) hmTotal.innerText = '$ ' + totales.total_usd;
 }
 
 // ==============================================================================
@@ -1179,8 +1193,35 @@ async function procesarFactura(tipoPago) {
 // 8. VISUALES
 // ==============================================================================
 // REEMPLAZAR la función renderizarCatalogoHTML completa
+// ═══════════════════════════════════════════════════════════════════════════
+// POS MÓVIL (FASE 1): dispatchers PC / Móvil.
+// En PC (>= 768px) se ejecuta EXACTAMENTE el mismo render de siempre
+// (renderizarCatalogoPC / renderizarCarritoPC). En móvil se dibuja la vista
+// táctil. Ninguna de las dos ramas cambia a la otra: al rotar el teléfono se
+// re-renderiza con el resize listener del final del archivo.
+// ═══════════════════════════════════════════════════════════════════════════
+function esVistaMovilPOS() {
+    return window.innerWidth < 768;
+}
+
 function renderizarCatalogoHTML(productosAMostrar) {
     if (productosAMostrar === undefined) productosAMostrar = catalogo;
+
+    const listaMobile = document.getElementById('lista-productos-mobile');
+    if (esVistaMovilPOS() && listaMobile) {
+        let lista = productosAMostrar;
+        if (typeof categoriaActiva !== 'undefined' && categoriaActiva && categoriaActiva !== 'todos') {
+            lista = productosAMostrar.filter(function(p) {
+                return (p.producto.categoria_nombre || 'General') === categoriaActiva;
+            });
+        }
+        renderizarCatalogoMobile(lista, listaMobile);
+        return;
+    }
+    renderizarCatalogoPC(productosAMostrar);
+}
+
+function renderizarCatalogoPC(productosAMostrar) {
     const contenedor = document.getElementById('gridProductos');
     contenedor.innerHTML = '';
 
@@ -1281,6 +1322,15 @@ function agregarDesdeTarjeta(idSelect) {
 }
 
 function renderizarCarritoHTML() {
+    const listaMobile = document.getElementById('carrito-lista-mobile');
+    if (esVistaMovilPOS() && listaMobile) {
+        renderizarCarritoMobile(listaMobile);
+        return;
+    }
+    renderizarCarritoPC();
+}
+
+function renderizarCarritoPC() {
     const tbody = document.getElementById('tablaCarrito');
     tbody.innerHTML = '';
     if (carrito.length === 0) {
@@ -2904,3 +2954,340 @@ document.addEventListener('keydown', function(e) {
 });
 
 inicializarPOS();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  POS MÓVIL — módulo táctil (solo actúa por debajo de 768px)
+//  Nada de esto cambia el comportamiento en PC.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ¿Cerrar el panel de productos al agregar un ítem?
+// El plan original lo cerraba; para facturas con varios productos resulta más
+// rápido dejarlo abierto (el total del header se actualiza igual).
+const CERRAR_SIDEBAR_AL_AGREGAR = false;
+
+var categoriaActiva = 'todos';
+
+// ── Panel lateral (off-canvas) ──────────────────────────────────────────────
+function abrirPanelProductos() {
+    const sidebar = document.getElementById('sidebar-productos');
+    const overlay = document.getElementById('productos-overlay');
+    if (!sidebar) return;
+    sidebar.classList.add('open');
+    if (overlay) overlay.classList.add('open');
+    setTimeout(function() {
+        const input = document.getElementById('buscador-productos');
+        if (input) input.focus();
+    }, 300);
+}
+
+function cerrarPanelProductos() {
+    const sidebar = document.getElementById('sidebar-productos');
+    const overlay = document.getElementById('productos-overlay');
+    if (sidebar) sidebar.classList.remove('open');
+    if (overlay) overlay.classList.remove('open');
+}
+
+function toggleProductosPanel() {
+    const sidebar = document.getElementById('sidebar-productos');
+    if (!sidebar) return;
+    if (sidebar.classList.contains('open')) {
+        cerrarPanelProductos();
+    } else {
+        abrirPanelProductos();
+    }
+}
+
+// ── Catálogo táctil ─────────────────────────────────────────────────────────
+function iconoCategoria(prod) {
+    const mapa = {
+        'carnes': '\uD83E\uDD69', 'carne': '\uD83E\uDD69',
+        'bebidas': '\uD83E\uDD64', 'bebida': '\uD83E\uDD64',
+        'lacteos': '\uD83E\uDD5B', 'lacteo': '\uD83E\uDD5B',
+        'abarrotes': '\uD83C\uDF5E', 'alimentos': '\uD83C\uDF5E',
+        'limpieza': '\uD83E\uDDF9', 'higiene': '\uD83E\uDDD1'
+    };
+    const cat = ((prod && prod.categoria_nombre) || 'general').toLowerCase();
+    return mapa[cat] || '\uD83D\uDCE6';
+}
+
+function renderizarCatalogoMobile(productos, contenedor) {
+    renderizarCategoriasChips();
+    contenedor.innerHTML = '';
+
+    if (!productos || productos.length === 0) {
+        contenedor.innerHTML = '<div class="text-center text-muted py-5">' +
+            '<i class="bi bi-search fs-1 d-block mb-2"></i>No se encontraron productos</div>';
+        return;
+    }
+
+    // Agrupar presentaciones por producto base (misma lógica que el PC)
+    const grupos = {};
+    productos.forEach(function(pres) {
+        const idProd = pres.producto.id;
+        if (!grupos[idProd]) {
+            grupos[idProd] = { productoBase: pres.producto, presentaciones: [] };
+        }
+        grupos[idProd].presentaciones.push(pres);
+    });
+
+    Object.values(grupos).forEach(function(grupo) {
+        const prod = grupo.productoBase;
+        const presList = grupo.presentaciones;
+        const presDefault = presList[0];
+
+        const stock = parseFloat(presDefault.stock_disponible) || 0;
+        const unidad = presDefault.unidad_sigla || 'und';
+        const precioUSD = parseFloat(presDefault.precio_venta_principal) || 0;
+        const precioBS = (precioUSD * (tasaCambio || 0)).toFixed(2);
+        const stockClase = stock <= 0 ? 'text-danger fw-bold' : (stock <= 5 ? 'text-warning' : 'text-success');
+
+        const item = document.createElement('div');
+        item.className = 'producto-tactil';
+        item.innerHTML = '' +
+            '<div class="prod-icono">' + iconoCategoria(prod) + '</div>' +
+            '<div class="prod-info">' +
+                '<div class="prod-nombre">' + escHtml(prod.nombre) + '</div>' +
+                '<div class="prod-meta">' + escHtml(presDefault.nombre_presentacion) +
+                    ' · <span class="' + stockClase + '">Stock: ' + stock.toFixed(2) + ' ' + unidad + '</span></div>' +
+                '<div class="prod-precio">$ ' + precioUSD.toFixed(2) +
+                    ' <small class="text-muted">BS ' + precioBS + '</small></div>' +
+            '</div>' +
+            '<button type="button" class="btn-agregar" aria-label="Agregar">+</button>';
+
+        function alAgregar() {
+            if (presList.length > 1) {
+                mostrarSelectorPresentacion(presList);
+                return;
+            }
+            agregarAlCarrito(presDefault.id);
+            if (navigator.vibrate) { try { navigator.vibrate(35); } catch (e) {} }
+            if (CERRAR_SIDEBAR_AL_AGREGAR) cerrarPanelProductos();
+        }
+
+        item.querySelector('.btn-agregar').addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            alAgregar();
+        });
+        item.addEventListener('click', alAgregar);
+
+        contenedor.appendChild(item);
+    });
+}
+
+// ── Chips de categoría (solo móvil) ─────────────────────────────────────────
+function renderizarCategoriasChips() {
+    const cont = document.getElementById('categorias-chips');
+    if (!cont) return;
+
+    const cats = {};
+    catalogo.forEach(function(p) {
+        const nombre = (p.producto && p.producto.categoria_nombre) || 'General';
+        cats[nombre] = true;
+    });
+    const lista = Object.keys(cats).sort();
+
+    cont.innerHTML = '';
+    const todos = document.createElement('button');
+    todos.type = 'button';
+    todos.className = 'chip-cat' + (categoriaActiva === 'todos' ? ' activo' : '');
+    todos.innerText = 'Todos';
+    todos.addEventListener('click', function() { filtrarCategoria('todos'); });
+    cont.appendChild(todos);
+
+    lista.forEach(function(cat) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip-cat' + (categoriaActiva === cat ? ' activo' : '');
+        btn.innerText = cat;
+        btn.addEventListener('click', function() { filtrarCategoria(cat); });
+        cont.appendChild(btn);
+    });
+}
+
+function filtrarCategoria(categoria) {
+    categoriaActiva = categoria;
+
+    // Respetar también el texto del buscador
+    const input = document.getElementById('buscador-productos');
+    const texto = input ? input.value.toLowerCase().trim() : '';
+    let lista = catalogo;
+    if (texto) {
+        lista = catalogo.filter(function(item) {
+            const nombreProd = item.producto.nombre ? item.producto.nombre.toLowerCase() : '';
+            const codigoProd = item.producto.codigo_base ? item.producto.codigo_base.toLowerCase() : '';
+            const nombrePres = item.nombre_presentacion ? item.nombre_presentacion.toLowerCase() : '';
+            return nombreProd.includes(texto) || codigoProd.includes(texto) || nombrePres.includes(texto);
+        });
+    }
+    renderizarCatalogoHTML(lista);
+}
+
+// ── Selector de presentaciones (bottom sheet) ───────────────────────────────
+function mostrarSelectorPresentacion(presentaciones) {
+    cerrarBottomSheet(true);
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'bottom-sheet-backdrop';
+    backdrop.className = 'bottom-sheet-backdrop';
+    backdrop.addEventListener('click', cerrarBottomSheet);
+
+    const sheet = document.createElement('div');
+    sheet.id = 'bottom-sheet-presentacion';
+    sheet.className = 'bottom-sheet';
+
+    let html = '<div class="bs-grab"></div>' +
+        '<h6 class="fw-bold mb-3 px-2">Seleccionar presentación</h6>' +
+        '<div class="list-group list-group-flush">';
+    presentaciones.forEach(function(p) {
+        const stock = parseFloat(p.stock_disponible) || 0;
+        const unidad = p.unidad_sigla || 'und';
+        html += '<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center py-3" data-pres-id="' + p.id + '">' +
+            '<span class="text-start">' +
+                '<span class="fw-semibold d-block">' + escHtml(p.nombre_presentacion) + '</span>' +
+                '<small class="' + (stock <= 0 ? 'text-danger' : 'text-muted') + '">Stock: ' + stock.toFixed(2) + ' ' + unidad + '</small>' +
+            '</span>' +
+            '<span class="fw-bold text-success">$ ' + (parseFloat(p.precio_venta_principal) || 0).toFixed(2) + '</span>' +
+        '</button>';
+    });
+    html += '</div>' +
+        '<button type="button" class="btn btn-outline-secondary w-100 mt-3" id="bs-cancelar">Cancelar</button>';
+    sheet.innerHTML = html;
+
+    sheet.querySelectorAll('[data-pres-id]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const idPres = parseInt(btn.getAttribute('data-pres-id'));
+            agregarAlCarrito(idPres);
+            if (navigator.vibrate) { try { navigator.vibrate(35); } catch (e) {} }
+            cerrarBottomSheet();
+            if (CERRAR_SIDEBAR_AL_AGREGAR) cerrarPanelProductos();
+        });
+    });
+    sheet.querySelector('#bs-cancelar').addEventListener('click', cerrarBottomSheet);
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(sheet);
+    requestAnimationFrame(function() {
+        backdrop.classList.add('open');
+        sheet.classList.add('open');
+    });
+}
+
+function cerrarBottomSheet(inmediato) {
+    const sheet = document.getElementById('bottom-sheet-presentacion');
+    const backdrop = document.getElementById('bottom-sheet-backdrop');
+    if (sheet) sheet.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('open');
+    if (inmediato === true) {
+        if (sheet) sheet.remove();
+        if (backdrop) backdrop.remove();
+        return;
+    }
+    setTimeout(function() {
+        const s = document.getElementById('bottom-sheet-presentacion');
+        const b = document.getElementById('bottom-sheet-backdrop');
+        if (s) s.remove();
+        if (b) b.remove();
+    }, 280);
+}
+
+// ── Carrito táctil ──────────────────────────────────────────────────────────
+function renderizarCarritoMobile(contenedor) {
+    contenedor.innerHTML = '';
+
+    if (carrito.length === 0) {
+        contenedor.innerHTML = '<div class="text-center text-muted py-5">' +
+            '<i class="bi bi-cart-x fs-1 d-block mb-2"></i>El carrito está vacío</div>';
+        return;
+    }
+
+    carrito.forEach(function(item) {
+        const div = document.createElement('div');
+        div.className = 'carrito-item-mobile';
+        div.innerHTML = '' +
+            '<div class="item-info">' +
+                '<div class="item-nombre">' + escHtml(item.nombre) + '</div>' +
+                '<div class="item-precio-unit' + (puedeCambiarPrecio ? ' precio-editable' : '') + '">' +
+                    '$ ' + item.precio_unitario.toFixed(2) + ' c/u' +
+                    (puedeCambiarPrecio ? ' · <i class="bi bi-pencil-square"></i>' : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="cantidad-control">' +
+                '<button type="button" class="btn-cant" aria-label="Restar">-</button>' +
+                '<input type="number" class="input-cant" inputmode="decimal" min="0.001" step="0.001" value="' + item.cantidad + '">' +
+                '<button type="button" class="btn-cant" aria-label="Sumar">+</button>' +
+            '</div>' +
+            '<div class="item-subtotal">$ ' + item.subtotal.toFixed(2) + '</div>' +
+            '<button type="button" class="btn-eliminar" aria-label="Quitar"><i class="bi bi-trash"></i></button>';
+
+        const botones = div.querySelectorAll('.btn-cant');
+        botones[0].addEventListener('click', function() { quitarDelCarrito(item.presentacion_id); });
+        botones[1].addEventListener('click', function() { agregarAlCarrito(item.presentacion_id); });
+
+        const input = div.querySelector('.input-cant');
+        input.addEventListener('click', function() { this.select(); });
+        input.addEventListener('change', function() {
+            actualizarCantidadManual(item.presentacion_id, this.value);
+        });
+
+        div.querySelector('.btn-eliminar').addEventListener('click', function() {
+            eliminarFila(item.presentacion_id);
+        });
+
+        const precioEl = div.querySelector('.item-precio-unit');
+        if (puedeCambiarPrecio) {
+            precioEl.addEventListener('click', function() {
+                ejecutarCambioPrecioItem(item.presentacion_id);
+            });
+        }
+
+        contenedor.appendChild(div);
+    });
+}
+
+// ── Altura real (barra de direcciones dinámica de Android) ──────────────────
+function ajustarAlturaPOS() {
+    const nav = document.querySelector('#erp-navbar nav');
+    const headerMovil = document.getElementById('header-movil');
+    const altoNav = nav ? nav.offsetHeight : 56;
+    const altoHeader = (headerMovil && headerMovil.offsetParent !== null) ? headerMovil.offsetHeight : 0;
+    document.documentElement.style.setProperty('--pos-navbar-h', altoNav + 'px');
+    document.documentElement.style.setProperty('--pos-header-movil-h', altoHeader + 'px');
+}
+
+// ── Init del módulo móvil ───────────────────────────────────────────────────
+(function initPosMovil() {
+    // El teclado virtual no debe abrirse solo al cargar (el sidebar arranca cerrado)
+    if (esVistaMovilPOS()) {
+        const input = document.getElementById('buscador-productos');
+        if (input && document.activeElement === input) input.blur();
+    }
+
+    ajustarAlturaPOS();
+    window.addEventListener('load', ajustarAlturaPOS);
+
+    // Cambiar entre vista PC y vista móvil al rotar / redimensionar
+    var vistaMovilActual = esVistaMovilPOS();
+    var resizeTimer = null;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            ajustarAlturaPOS();
+            const movil = esVistaMovilPOS();
+            if (movil !== vistaMovilActual) {
+                vistaMovilActual = movil;
+                if (!movil) cerrarPanelProductos();
+                renderizarCatalogoHTML();
+                renderizarCarritoHTML();
+            }
+        }, 200);
+    });
+
+    // Android puede matar la pestaña del POS por falta de RAM: refuerzo del
+    // guardado del carrito cada 5 segundos (además del guardado por acción).
+    setInterval(function() {
+        if (typeof carrito !== 'undefined' && carrito.length > 0) {
+            guardarCarritoEnStorage();
+        }
+    }, 5000);
+})();

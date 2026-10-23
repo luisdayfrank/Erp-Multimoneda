@@ -94,20 +94,33 @@ function renderizarNavbar(config) {
                         ${menuItemsHTML}
                     </ul>
                 </div>
-                <span class="navbar-brand mb-0 h1"><i class="bi bi-cpu-fill me-2"></i>ERP Sistema de Ventas</span>
+                <span class="navbar-brand mb-0 h1 d-none d-md-inline-block"><i class="bi bi-cpu-fill me-2"></i>ERP Sistema de Ventas</span>
                 <div class="d-flex text-white align-items-center">
-                    <span class="badge bg-primary me-3 fs-6" id="tasaDisplay">Tasa: BS 0.00</span>
-                    <span class="me-3">Cajero: <b id="nombreCajero">Cargando...</b></span>
-                    <button class="btn btn-sm btn-warning fw-bold me-2 text-dark" data-bs-toggle="modal" data-bs-target="#modalEgresos">
+                    <span class="badge bg-primary me-2 me-md-3 fs-6" id="tasaDisplay">Tasa: BS 0.00</span>
+                    <span class="me-3 d-none d-md-inline">Cajero: <b id="nombreCajero">Cargando...</b></span>
+                    <button class="btn btn-sm btn-warning fw-bold me-2 text-dark d-none d-md-inline-block" data-bs-toggle="modal" data-bs-target="#modalEgresos">
                         <i class="bi bi-box-arrow-up-right"></i> Gastos / Salidas
                     </button>
-                    <button class="btn btn-outline-info btn-sm" onclick="abrirModalHistorial()">
+                    <button class="btn btn-outline-info btn-sm me-2 d-none d-md-inline-block" onclick="abrirModalHistorial()">
                         <i class="bi bi-receipt"></i> Historial Turno
                     </button>
-                    <a href="mercado.html" class="btn btn-sm btn-info fw-bold me-2 text-white">
+                    <a href="mercado.html" class="btn btn-sm btn-info fw-bold me-2 text-white d-none d-md-inline-block">
                         <i class="bi bi-truck"></i> Mercado
                     </a>
-                    <button class="btn btn-sm btn-danger fw-bold" onclick="abrirModalCierreCaja()">Cerrar Turno</button>
+                    <button class="btn btn-sm btn-danger fw-bold d-none d-md-inline-block" onclick="abrirModalCierreCaja()">Cerrar Turno</button>
+                    <!-- POS MÓVIL: mismas acciones en menú compacto (solo < 768px) -->
+                    <div class="dropdown d-md-none">
+                        <button class="btn btn-sm btn-outline-light" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Acciones">
+                            <i class="bi bi-three-dots-vertical"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+                            <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#modalEgresos"><i class="bi bi-box-arrow-up-right me-2"></i>Gastos / Salidas</button></li>
+                            <li><button class="dropdown-item" onclick="abrirModalHistorial()"><i class="bi bi-receipt me-2"></i>Historial Turno</button></li>
+                            <li><a class="dropdown-item" href="mercado.html"><i class="bi bi-truck me-2"></i>Ir a Ruta de Mercado</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><button class="dropdown-item text-danger fw-bold" onclick="abrirModalCierreCaja()"><i class="bi bi-power me-2"></i>Cerrar Turno</button></li>
+                        </ul>
+                    </div>
                 </div>
             </div>
         </nav>`;

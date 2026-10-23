@@ -680,7 +680,11 @@ class _RutaCerradaMixin:
     def has_add_permission(self, request, obj=None):
         if self._bloqueada(obj):
             return False
-        return super().has_add_permission(request, obj)
+        # OJO: ModelAdmin.has_add_permission(request) no acepta obj;
+        # InlineModelAdmin.has_add_permission(request, obj) sí.
+        if isinstance(self, admin.InlineModelAdmin):
+            return super().has_add_permission(request, obj)
+        return admin.ModelAdmin.has_add_permission(self, request)
 
     def has_change_permission(self, request, obj=None):
         if self._bloqueada(obj):

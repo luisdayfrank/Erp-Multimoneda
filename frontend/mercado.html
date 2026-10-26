@@ -54,9 +54,147 @@
         .ticket-totales .fila-total { display: flex; justify-content: space-between; margin-bottom: 0.3mm; }
         .ticket-totales .total-final { font-size: 11px; font-weight: 700; }
         .ticket-footer { text-align: center; border-top: 1px dashed #000; padding-top: 1mm; font-size: 8px; }
+        /* ============================================================ */
+        /* REPORTE COMPLETO DE RUTA - Formato A4/Carta                   */
+        /* ============================================================ */
+        .reporte-impresion {
+            display: none;
+            width: 100%;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 10px;
+            line-height: 1.3;
+            color: #000;
+            background: #fff;
+            box-sizing: border-box;
+        }
+        .reporte-impresion * { margin: 0; padding: 0; box-sizing: border-box; }
+        .reporte-impresion .rep-header {
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+        }
+        .reporte-impresion .rep-header h1 { font-size: 16px; font-weight: 700; }
+        .reporte-impresion .rep-header p { font-size: 9px; color: #555; margin-top: 2px; }
+        .reporte-impresion .rep-info-tabla {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 10px;
+            border: 1px solid #666;
+        }
+        .reporte-impresion .rep-info-tabla td {
+            padding: 4px 6px;
+            font-size: 10px;
+            vertical-align: top;
+            border: 1px solid #ccc;
+        }
+        .reporte-impresion h2 {
+            font-size: 11px;
+            background: #2c3e50;
+            color: #fff;
+            padding: 3px 6px;
+            margin: 10px 0 4px;
+            font-weight: 700;
+        }
+        .reporte-impresion h3 {
+            font-size: 10px;
+            background: #e9ecef;
+            padding: 2px 6px;
+            margin-bottom: 3px;
+            font-weight: 700;
+            border-left: 3px solid #2c3e50;
+        }
+        .reporte-impresion .rep-tabla {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 10px;
+        }
+        .reporte-impresion .rep-tabla th {
+            background: #dee2e6;
+            border: 1px solid #666;
+            padding: 3px;
+            font-size: 9px;
+            font-weight: 700;
+            text-align: left;
+        }
+        .reporte-impresion .rep-tabla td {
+            border: 1px solid #999;
+            padding: 2px 3px;
+            font-size: 9px;
+        }
+        .reporte-impresion .rep-tabla tfoot td { background: #f0f0f0; font-weight: 700; }
+        .reporte-impresion .num { text-align: right; }
+        .reporte-impresion .rep-secciones {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .reporte-impresion .rep-seccion { flex: 1 1 45%; min-width: 45%; }
+        .reporte-impresion .rep-tabla-sm {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 6px;
+        }
+        .reporte-impresion .rep-tabla-sm td {
+            border-bottom: 1px dotted #999;
+            padding: 2px 3px;
+            font-size: 9px;
+        }
+        .reporte-impresion .rep-resumen {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+            border-top: 2px solid #000;
+            padding-top: 8px;
+        }
+        .reporte-impresion .rep-resumen-item {
+            flex: 1;
+            border: 1px solid #333;
+            padding: 6px;
+            text-align: center;
+        }
+        .reporte-impresion .rep-resumen-item .label {
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            color: #555;
+        }
+        .reporte-impresion .rep-resumen-item .valor {
+            display: block;
+            font-size: 13px;
+            font-weight: 700;
+            margin: 2px 0;
+        }
+        .reporte-impresion .rep-resumen-item .small { display: block; font-size: 9px; color: #666; }
+        .reporte-impresion .rep-resumen-item.ok   { border-color: #198754; background: #d1e7dd; }
+        .reporte-impresion .rep-resumen-item.bad  { border-color: #dc3545; background: #f8d7da; }
+        .reporte-impresion .rep-resumen-item.warn { border-color: #ffc107; background: #fff3cd; }
+
         @media print {
-            body > *:not(.ticket-impresion) { display: none !important; }
-            .ticket-impresion { display: block !important; position: absolute; left: 0; top: 0; width: 58mm; margin: 0; padding: 2mm; }
+            /* Se oculta todo excepto los contenedores de impresión */
+            body > *:not(.ticket-impresion):not(.reporte-impresion) { display: none !important; }
+
+            /* Ticket térmico (comportamiento original preservado) */
+            .ticket-impresion {
+                display: block !important;
+                position: absolute;
+                left: 0; top: 0;
+                width: 58mm;
+                margin: 0;
+                padding: 2mm;
+            }
+
+            /* Reporte A4: cuando el body tiene la clase .printing-reporte,
+               se oculta el ticket y se muestra el reporte */
+            body.printing-reporte .ticket-impresion { display: none !important; }
+            body.printing-reporte .reporte-impresion {
+                display: block !important;
+                width: 100%;
+                margin: 0;
+                padding: 0;
+            }
+
             @page { size: 58mm auto; margin: 0; }
         }
     </style>
@@ -301,9 +439,13 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                    <button class="btn btn-primary fw-bold" onclick="imprimirDetalleRuta()">
+                        <i class="bi bi-printer"></i> Imprimir Reporte
+                    </button>
                     <button class="btn btn-warning fw-bold" id="btn-reabrir-ruta" onclick="reabrirRutaActual()" style="display:none;">
                         <i class="bi bi-unlock"></i> Reabrir Ruta
                     </button>
+                </div>
                 </div>
             </div>
         </div>
@@ -312,7 +454,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/api.js?v=8"></script>
     <script src="assets/js/menu.js?v=1"></script>
-    <script src="assets/js/ruta-mercado.js?v=8"></script>script>
+    <script src="assets/js/ruta-mercado.js?v=8"></script>
 
     <!-- Ticket Resumen Ruta 58mm -->
     <div id="ticket-ruta-impresion" class="ticket-impresion">
@@ -352,5 +494,7 @@
             <p>Documento interno</p>
         </div>
     </div>
+    <!-- Reporte Completo de Ruta (A4 / Carta) -->
+    <div id="reporte-impresion" class="reporte-impresion"></div>
 </body>
 </html>

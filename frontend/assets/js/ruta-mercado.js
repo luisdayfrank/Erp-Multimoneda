@@ -1328,3 +1328,215 @@ function cerrarSesionLocal() {
     localStorage.removeItem('refresh_token');
     window.location.href = 'index.html';
 }
+
+// ==============================================================================
+// IMPRIMIR REPORTE COMPLETO DE RUTA (A4 / Carta)
+// ==============================================================================
+
+/**
+ * Cambia dinámicamente el tamaño de página (@page) para la impresión.
+ * Se usa para alternar entre 58mm (ticket) y A4 (reporte completo).
+ */
+function setPageSize(size, margin) {
+    let styleEl = document.getElementById('dynamic-page-style');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'dynamic-page-style';
+        document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `@page { size: ${size}; margin: ${margin}; }`;
+}
+
+/**
+ * Imprime el detalle COMPLETO de la ruta que está cargada en el modal.
+ * Requiere que `rutaEnVista` esté definido (se asigna en verRuta()).
+ */
+function imprimirDetalleRuta() {
+    if (!rutaEnVista) {
+        alert('No hay una ruta cargada para imprimir. Abre el detalle primero.');
+        return;
+    }
+
+    const r = rutaEnVista;
+    const tasa = parseFloat(r.tasa_cambio) || 0;
+    const aPrincipal = (montoBS) => tasa > 0 ? parseFloat(montoBS || 0) / tasa : 0;
+
+    // ── Totales ──
+    let pagosUSD = 0;
+    (r.pagos || []).forEach(p => {
+        pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(p.monto_bs);
+    });
+    const creditosUSD  = (r.creditos || []).reduce((s, c) => s + aPrincipal(c.monto_bs), 0);
+    const gastosUSD    = (r.gastos   || []).reduce((s, g) => s + aPrincipal(g.monto_bs), 0);
+    const cobranzasUSD = aPrincipal(r.total_cobranzas_bs);
+    const cobranzasBS  = parseFloat(r.total_cobranzas_bs || 0);
+
+    const recaudadoUSD = pagosUSD + creditosUSD + gastosUSD - cobranzasUSD;
+
+    const ventaBS  = parseFloat(r.total_venta_bs  || 0);
+    const ventaUSD = parseFloat(r.total_venta_usd || 0) || aPrincipal(ventaBS);
+    const difUSD   = recaudadoUSD - ventaUSD;
+    const difBS    = difUSD * tasa;
+
+    // ── Nombre del almacén ──
+    const almacenNombre = (almacenesCache.find(a => a.id == r.almacen)?.nombre)
+        || r.almacen_nombre
+        || ('Almacén #' + (r.almacen || 'N/A'));
+
+    const estadoTxt = r.estado || 'BORRADOR';
+    const difClass  = Math.abs(difUSD) <= 0.01 ? 'ok' : (difUSD < 0 ? 'bad' : 'warn');
+
+    // ── HTML del reporte ──
+    const html = `
+        <div class="rep-header">
+            <h1>REPORTE DE RUTA #${r.id}</h1>
+            <p>Impreso el ${new Date().toLocaleString('es-VE')}</p>
+        </div>
+
+        <table class="rep-info-tabla">
+            <tr>
+                <td><strong>Fecha Ruta:</strong> ${new Date(r.fecha).toLocaleDateString('es-VE')}</td>
+                <td><strong>Estado:</strong> ${estadoTxt}</td>
+                <td><strong>Tasa:</strong> ${monedaSecundaria} ${tasa.toFixed(2)}</td>
+            </tr>
+            <tr>
+                <td><strong>Almacén:</strong> ${almacenNombre}</td>
+                <td><strong>Usuario:</strong> ${r.usuario_nombre || 'Admin'}</td>
+                <td><strong>Observación:</strong> ${r.observacion || 'N/A'}</td>
+            </tr>
+        </table>
+
+        <h2>PRODUCTOS DE LA RUTA</h2>
+        <table class="rep-tabla">
+            <thead>
+                <tr>
+                    <th style="width:24px;">#</th>
+                    <th>Producto</th>
+                    <th class="num">Salida</th>
+                    <th class="num">Entrada</th>
+                    <th class="num">Vendido</th>
+                    <th class="num">Precio ${monedaSecundaria}</th>
+                    <th class="num">Total ${monedaSecundaria}</th>
+                    <th class="num">Total ${monedaPrincipal}</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${(r.detalles || []).map((d, i) => {
+                    const precioBs = parseFloat(d.precio_venta_bs || 0);
+                    const vendido  = parseFloat(d.cantidad_vendida || 0);
+                    const totalBs  = parseFloat(d.subtotal_bs  || 0) || (vendido * precioBs);
+                    const totalUsd = parseFloat(d.subtotal_usd || 0) || aPrincipal(totalBs);
+                    return `<tr>
+                        <td>${i + 1}</td>
+                        <td>${d.nombre_producto || d.nombre_presentacion || ''}</td>
+                        <td class="num">${parseFloat(d.cantidad_salida  || 0).toFixed(2)}</td>
+                        <td class="num">${parseFloat(d.cantidad_entrada || 0).toFixed(2)}</td>
+                        <td class="num">${vendido.toFixed(2)}</td>
+                        <td class="num">${precioBs.toFixed(2)}</td>
+                        <td class="num">${totalBs.toFixed(2)}</td>
+                        <td class="num">${totalUsd.toFixed(2)}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="6" class="num"><strong>TOTAL</strong></td>
+                    <td class="num"><strong>${ventaBS.toFixed(2)}</strong></td>
+                    <td class="num"><strong>${ventaUSD.toFixed(2)}</strong></td>
+                </tr>
+            </tfoot>
+        </table>
+
+        <div class="rep-secciones">
+            <div class="rep-seccion">
+                <h3>PAGOS RECIBIDOS</h3>
+                <table class="rep-tabla-sm">
+                    ${(r.pagos || []).map(p => {
+                        const montoBS  = parseFloat(p.monto_bs || 0);
+                        const montoUSD = parseFloat(p.monto_usd_equivalente) || aPrincipal(montoBS);
+                        return `<tr>
+                            <td>${p.metodo_nombre || 'N/A'}</td>
+                            <td class="num">${monedaSecundaria} ${montoBS.toFixed(2)}</td>
+                            <td class="num">$ ${montoUSD.toFixed(2)}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="3">Sin pagos registrados</td></tr>'}
+                </table>
+            </div>
+
+            <div class="rep-seccion">
+                <h3>CRÉDITOS (FIADO)</h3>
+                <table class="rep-tabla-sm">
+                    ${(r.creditos || []).map(c => {
+                        const montoUSD = aPrincipal(c.monto_bs);
+                        return `<tr>
+                            <td>${c.cliente_nombre || 'N/A'}</td>
+                            <td class="num">$ ${montoUSD.toFixed(2)}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="2">Sin créditos</td></tr>'}
+                </table>
+            </div>
+
+            <div class="rep-seccion">
+                <h3>GASTOS DE RUTA</h3>
+                <table class="rep-tabla-sm">
+                    ${(r.gastos || []).map(g => {
+                        const montoBS = parseFloat(g.monto_bs || 0);
+                        return `<tr>
+                            <td>${g.concepto_nombre || 'N/A'}</td>
+                            <td class="num">${monedaSecundaria} ${montoBS.toFixed(2)}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="2">Sin gastos</td></tr>'}
+                </table>
+            </div>
+
+            <div class="rep-seccion">
+                <h3>COBRANZAS (DEUDAS ANTERIORES)</h3>
+                <table class="rep-tabla-sm">
+                    <tr>
+                        <td>Recibido de deudas viejas</td>
+                        <td class="num">${monedaPrincipal} ${cobranzasUSD.toFixed(2)}</td>
+                        <td class="num">${monedaSecundaria} ${cobranzasBS.toFixed(2)}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="rep-resumen">
+            <div class="rep-resumen-item">
+                <span class="label">VENTA TOTAL</span>
+                <span class="valor">$ ${ventaUSD.toFixed(2)}</span>
+                <span class="small">${monedaSecundaria} ${ventaBS.toFixed(2)}</span>
+            </div>
+            <div class="rep-resumen-item">
+                <span class="label">TOTAL RECAUDADO</span>
+                <span class="valor">$ ${recaudadoUSD.toFixed(2)}</span>
+                <span class="small">Pagos + Créditos + Gastos − Cobranzas</span>
+            </div>
+            <div class="rep-resumen-item ${difClass}">
+                <span class="label">DIFERENCIA</span>
+                <span class="valor">$ ${difUSD.toFixed(2)}</span>
+                <span class="small">${monedaSecundaria} ${difBS.toFixed(2)}</span>
+            </div>
+        </div>
+
+        <div style="margin-top:22px; text-align:center; font-size:9px; color:#777; border-top:1px solid #ccc; padding-top:6px;">
+            Documento generado por el sistema ERP — ${new Date().toLocaleString('es-VE')}
+        </div>
+    `;
+
+    const cont = document.getElementById('reporte-impresion');
+    cont.innerHTML = html;
+
+    // Cambiar tamaño de página a A4 solo para este reporte
+    setPageSize('A4', '8mm');
+    document.body.classList.add('printing-reporte');
+
+    setTimeout(() => {
+        window.print();
+        setTimeout(() => {
+            document.body.classList.remove('printing-reporte');
+            // Restaurar tamaño de página por defecto (ticket 58mm)
+            setPageSize('58mm auto', '0');
+        }, 500);
+    }, 150);
+}

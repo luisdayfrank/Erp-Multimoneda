@@ -15,6 +15,8 @@ let gastos = [];
 let rutaActualId = null;
 let monedaPrincipal = 'USD';
 let monedaSecundaria = 'BS';
+// Evita doble envío al guardar/cerrar la ruta con internet lento.
+let rutaEnCurso = false;
 
 function formatearErrorDRF(error, profundidad = 0) {
     if (!error) return 'Error desconocido';
@@ -50,6 +52,76 @@ function fechaLocalISO(d) {
     const m = String(fecha.getMonth() + 1).padStart(2, '0');
     const dia = String(fecha.getDate()).padStart(2, '0');
     return `${y}-${m}-${dia}`;
+}
+
+// ==============================================================================
+// FÓRMULA ÚNICA DEL CUADRE DE RUTA (P15)
+// ==============================================================================
+// Todos los módulos (formulario, modal, ticket y reporte impreso) deben usar
+// esta misma función. Recibe importes YA normalizados y no mezcla unidades:
+//   - Los montos en moneda secundaria (Bs) son la fuente canónica.
+//   - Los equivalentes en moneda principal son opcionales; si no se pasan,
+//     se derivan de Bs con la tasa de la ruta.
+// Regla de negocio (idéntica a RutaMercado.calcular_totales en el backend):
+//   Recaudado  = Pagos + Créditos + Gastos − Cobranzas
+//   Diferencia = Recaudado − Venta
+// Los pagos negativos son válidos: representan efectivo llevado a la ruta que
+// no proviene de la venta, y por eso se suman con su signo.
+function calcularCuadreRuta(datos) {
+    const d = datos || {};
+    const num = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+    };
+    const tasa = num(d.tasa);
+
+    const ventaBs = num(d.ventaBs);
+    const ventaUsdDirecta = num(d.ventaUsd);
+    // Igual que antes: si el servidor no tiene venta en USD (0), se deriva.
+    const ventaUsd = (ventaUsdDirecta === 0 && ventaBs !== 0 && tasa > 0)
+        ? ventaBs / tasa
+        : ventaUsdDirecta;
+
+    const pagosBs = num(d.pagosBs);
+    const creditosBs = num(d.creditosBs);
+    const gastosBs = num(d.gastosBs);
+    const cobranzasBs = num(d.cobranzasBs);
+
+    const aUsd = (bs, usd) => {
+        const u = num(usd);
+        if (u !== 0) return u;
+        return (bs !== 0 && tasa > 0) ? bs / tasa : u;
+    };
+
+    const pagosUsd = aUsd(pagosBs, d.pagosUsd);
+    const creditosUsd = aUsd(creditosBs, d.creditosUsd);
+    const gastosUsd = aUsd(gastosBs, d.gastosUsd);
+    const cobranzasUsd = aUsd(cobranzasBs, d.cobranzasUsd);
+
+    const recaudadoBs = pagosBs + creditosBs + gastosBs - cobranzasBs;
+    const recaudadoUsd = pagosUsd + creditosUsd + gastosUsd - cobranzasUsd;
+    const diferenciaUsd = recaudadoUsd - ventaUsd;
+
+    return {
+        tasa,
+        ventaBs,
+        ventaUsd,
+        pagosBs,
+        pagosUsd,
+        creditosBs,
+        creditosUsd,
+        gastosBs,
+        gastosUsd,
+        cobranzasBs,
+        cobranzasUsd,
+        recaudadoBs,
+        recaudadoUsd,
+        diferenciaUsd,
+        // La diferencia en Bs se obtiene de la de USD para que las cuatro
+        // vistas (formulario, modal, ticket e impresión) muestren exactamente
+        // los mismos céntimos que antes de centralizar la fórmula.
+        diferenciaBs: tasa > 0 ? diferenciaUsd * tasa : recaudadoBs - ventaBs,
+    };
 }
 
 // ==============================================================================
@@ -637,15 +709,27 @@ function recalcularCuadre() {
     // ═════════════════════════════════════════
     // CUADRE: 3 NÚMEROS SOLAMENTE
     // ═════════════════════════════════════════
-    // VENTA          = totalVenta
-    // TOTAL RECAUDADO= Pagos + Créditos + Gastos - Cobranzas
-    // DIFERENCIA     = Venta - Total Recaudado
+    // VENTA           = totalVenta
+    // TOTAL RECAUDADO = Pagos + Créditos + Gastos - Cobranzas
+    // DIFERENCIA      = Total Recaudado - Venta
     // ═════════════════════════════════════════
-    const totalRecaudadoPrincipal = totalPagosPrincipal + totalCreditosPrincipal + totalGastosPrincipal - cobranzasPrincipal;
-    const totalRecaudadoSecundaria = totalPagosSecundaria + totalCreditosSecundaria + totalGastosSecundaria - cobranzasSecundaria;
+    const cuadre = calcularCuadreRuta({
+        tasa,
+        ventaBs: totalVentaBS,
+        ventaUsd: totalVentaUSD,
+        pagosBs: totalPagosSecundaria,
+        pagosUsd: totalPagosPrincipal,
+        creditosBs: totalCreditosSecundaria,
+        creditosUsd: totalCreditosPrincipal,
+        gastosBs: totalGastosSecundaria,
+        gastosUsd: totalGastosPrincipal,
+        cobranzasBs: cobranzasSecundaria,
+        cobranzasUsd: cobranzasPrincipal,
+    });
 
-    const diferenciaPrincipal = totalRecaudadoPrincipal - totalVentaUSD;
-    const diferenciaSecundaria = totalRecaudadoSecundaria - totalVentaBS;
+    const totalRecaudadoPrincipal = cuadre.recaudadoUsd;
+    const totalRecaudadoSecundaria = cuadre.recaudadoBs;
+    const diferenciaPrincipal = cuadre.diferenciaUsd;
 
     // ─────────────────────────────────────────
     // MOSTRAR EN PANTALLA (3 columnas)
@@ -702,7 +786,9 @@ function construirPayload() {
         }));
 
     const pagosPayload = pagos
-        .filter(p => p.metodo_id && (p.monto_input > 0 || p.monto_bs > 0))
+        // Decisión de negocio: los montos negativos son válidos (efectivo
+        // llevado a la ruta que no es de la venta). Solo se descarta el cero.
+        .filter(p => p.metodo_id && Number(p.monto_input || p.monto_bs || 0) !== 0)
         .map(p => {
             const metodo = metodosPagoCache.find(m => m.id === p.metodo_id);
             const montoInput = parseFloat(p.monto_input || p.monto_bs || 0);
@@ -718,7 +804,9 @@ function construirPayload() {
                 metodo_id: p.metodo_id,
                 monto_bs: monto_bs,
                 monto_usd_equivalente: monto_usd,
-                referencia: ''
+                referencia: montoInput < 0
+                    ? 'Ajuste: efectivo llevado a la ruta (no es venta)'
+                    : ''
             };
         });
 
@@ -752,6 +840,11 @@ function construirPayload() {
 }
 
 async function guardarRuta(estado) {
+    if (rutaEnCurso) {
+        console.warn('Guardado de ruta ya en curso. Se ignora el clic duplicado.');
+        return;
+    }
+
     let payload;
     try {
         payload = construirPayload();
@@ -775,6 +868,10 @@ async function guardarRuta(estado) {
         }
     }
 
+    rutaEnCurso = true;
+    const btnAccion = document.getElementById(estado === 'CERRADA' ? 'btn-cerrar-ruta' : 'btn-guardar-ruta');
+    setBotonProcesando(btnAccion, true, estado === 'CERRADA' ? 'CERRANDO...' : 'GUARDANDO...');
+
     try {
         let resp;
         if (rutaActualId) {
@@ -793,6 +890,9 @@ async function guardarRuta(estado) {
         console.error('Error guardando (objeto crudo):', JSON.stringify(e, null, 2));
         const mensaje = formatearErrorDRF(e);
         alert('❌ Error al guardar:\n' + mensaje);
+    } finally {
+        rutaEnCurso = false;
+        setBotonProcesando(btnAccion, false);
     }
 }
 
@@ -960,26 +1060,37 @@ async function cargarRutaExistente(id) {
 // ==============================================================================
 async function cargarHistorial() {
     const tbody = document.getElementById('tbodyHistorial');
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Cargando...</td></tr>';
 
     try {
         const rutas = await apiFetch('/rutas/', 'GET');
         tbody.innerHTML = '';
         if (rutas.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No hay rutas registradas</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No hay rutas registradas</td></tr>';
             return;
         }
 
         rutas.forEach(r => {
             const tr = document.createElement('tr');
             tr.className = 'historial-item';
-            const difClass = parseFloat(r.diferencia_bs) < -0.01 ? 'text-danger' : (parseFloat(r.diferencia_bs) > 0.01 ? 'text-success' : 'text-muted');
+            const difBs = parseFloat(r.diferencia_bs || 0);
+            const tasa = parseFloat(r.tasa_cambio || 0);
+            const difUsd = r.diferencia_usd !== undefined && r.diferencia_usd !== null
+                ? parseFloat(r.diferencia_usd)
+                : (tasa > 0 ? difBs / tasa : 0);
+            const difClass = difUsd < -0.01 ? 'text-danger' : (difUsd > 0.01 ? 'text-success' : 'text-muted');
+            const utilidad = parseFloat(r.total_utilidad_usd || 0);
+            const utilClass = utilidad < -0.01 ? 'text-danger' : (utilidad > 0.01 ? 'text-success' : 'text-muted');
             tr.innerHTML = `
                 <td>${r.id}</td>
                 <td>${new Date(r.fecha).toLocaleDateString('es-VE')}</td>
                 <td><span class="badge bg-${r.estado === 'CERRADA' ? 'success' : 'warning'}">${r.estado}</span></td>
                 <td>${monedaPrincipal} ${parseFloat(r.total_venta_usd || 0).toFixed(2)}</td>
-                <td class="${difClass} fw-bold">${monedaSecundaria} ${parseFloat(r.diferencia_bs || 0).toFixed(2)}</td>
+                <td class="${utilClass} fw-bold">${monedaPrincipal} ${utilidad.toFixed(2)}</td>
+                <td class="${difClass} fw-bold">
+                    ${monedaPrincipal} ${difUsd.toFixed(2)}
+                    <small class="d-block text-muted fw-normal">${monedaSecundaria} ${difBs.toFixed(2)}</small>
+                </td>
                 <td>${r.usuario_nombre || 'Admin'}</td>
                 <td>
                     <button class="btn btn-sm btn-primary me-1" onclick="verRuta(${r.id})" title="Ver"><i class="bi bi-eye"></i></button>
@@ -989,7 +1100,7 @@ async function cargarHistorial() {
             tbody.appendChild(tr);
         });
     } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">Error al cargar historial</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-danger py-4">Error al cargar historial</td></tr>';
     }
 }
 
@@ -1015,22 +1126,36 @@ async function verRuta(id) {
         );
 
         // ══════════════════════════════════════════
-        // CÁLCULO DEL RECAUDADO: Pagos + Créditos + Gastos − Cobranzas
+        // CUADRE: helper único (Pagos + Créditos + Gastos − Cobranzas)
         // ══════════════════════════════════════════
+        let pagosBS = 0;
         let pagosUSD = 0;
         (r.pagos || []).forEach(p => {
-            pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(p.monto_bs);
+            const montoBS = parseFloat(p.monto_bs || 0);
+            pagosBS += montoBS;
+            pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(montoBS);
         });
-        const creditosUSD = (r.creditos || []).reduce((s, c) => s + aPrincipal(c.monto_bs), 0);
-        const gastosUSD = (r.gastos || []).reduce((s, g) => s + aPrincipal(g.monto_bs), 0);
-        const cobranzasUSD = aPrincipal(r.total_cobranzas_bs);
+        const creditosBS = (r.creditos || []).reduce((s, c) => s + parseFloat(c.monto_bs || 0), 0);
+        const gastosBS = (r.gastos || []).reduce((s, g) => s + parseFloat(g.monto_bs || 0), 0);
         const cobranzasBS = parseFloat(r.total_cobranzas_bs || 0);
 
-        const recaudadoUSD = pagosUSD + creditosUSD + gastosUSD - cobranzasUSD;
-        const ventaBS = parseFloat(r.total_venta_bs || 0);
-        const ventaUSD = parseFloat(r.total_venta_usd || 0) || aPrincipal(ventaBS);
-        const difUSD = recaudadoUSD - ventaUSD;
-        const difBS = difUSD * tasa;
+        const cuadre = calcularCuadreRuta({
+            tasa,
+            ventaBs: r.total_venta_bs,
+            ventaUsd: r.total_venta_usd,
+            pagosBs: pagosBS,
+            pagosUsd: pagosUSD,
+            creditosBs: creditosBS,
+            gastosBs: gastosBS,
+            cobranzasBs: cobranzasBS,
+        });
+
+        const recaudadoUSD = cuadre.recaudadoUsd;
+        const ventaBS = cuadre.ventaBs;
+        const ventaUSD = cuadre.ventaUsd;
+        const difUSD = cuadre.diferenciaUsd;
+        const difBS = cuadre.diferenciaBs;
+        const cobranzasUSD = cuadre.cobranzasUsd;
 
         let html = `
             <div class="row mb-3">
@@ -1210,17 +1335,20 @@ function imprimirResumenRuta() {
     // Pagos desglosados
     let efectivo = 0, movil = 0, punto = 0;
     let totalPagosPrincipal = 0;
+    let totalPagosBS = 0;
     const contPagos = document.getElementById('contenedor-pagos');
     Array.from(contPagos.children).forEach((div) => {
         const montoInput = parseFloat(div.querySelector('input[type="number"]').value) || 0;
         const metodoId = parseInt(div.querySelector('select').value);
         const metodo = metodosPagoCache.find(m => m.id === metodoId);
+        const esPrincipal = !!(metodo && metodo.moneda_referencia === 'PRINCIPAL');
         let montoPrincipal = 0;
-        if (metodo && metodo.moneda_referencia === 'PRINCIPAL') {
+        if (esPrincipal) {
             montoPrincipal = montoInput;
         } else {
             montoPrincipal = tasa > 0 ? montoInput / tasa : 0;
         }
+        totalPagosBS += esPrincipal ? montoInput * tasa : montoInput;
         const nombre = metodo ? metodo.nombre.toLowerCase() : '';
         if (nombre.includes('efectivo')) efectivo += montoPrincipal;
         else if (nombre.includes('movil')) movil += montoPrincipal;
@@ -1244,13 +1372,25 @@ function imprimirResumenRuta() {
     const cobranzasPrincipal = parseFloat(document.getElementById('cobranzas-principal').value) || 0;
     document.getElementById('r-ticket-cobranzas').innerText = cobranzasPrincipal.toFixed(2);
 
-    // TOTAL RECAUDADO = Pagos + Créditos + Gastos - Cobranzas
+    // TOTAL RECAUDADO / DIFERENCIA con el helper único
     const totalGastosPrincipal = gastos.reduce((s, g) => s + (tasa > 0 ? (g.monto_bs || 0) / tasa : 0), 0);
-    const totalRecaudado = totalPagosPrincipal + totalCreditosPrincipal + totalGastosPrincipal - cobranzasPrincipal;
-    document.getElementById('r-ticket-recaudado').innerText = totalRecaudado.toFixed(2);
+    const cuadre = calcularCuadreRuta({
+        tasa,
+        ventaBs: totalVentaBS,
+        ventaUsd: totalVentaUSD,
+        pagosBs: totalPagosBS,
+        pagosUsd: totalPagosPrincipal,
+        creditosBs: totalCreditosPrincipal * tasa,
+        creditosUsd: totalCreditosPrincipal,
+        gastosBs: totalGastosSec,
+        gastosUsd: totalGastosPrincipal,
+        cobranzasBs: cobranzasPrincipal * tasa,
+        cobranzasUsd: cobranzasPrincipal,
+    });
+    document.getElementById('r-ticket-recaudado').innerText = cuadre.recaudadoUsd.toFixed(2);
 
-    // DIFERENCIA = Venta - Total Recaudado
-    const dif = totalRecaudado - totalVentaUSD;
+    // DIFERENCIA = Total Recaudado - Venta
+    const dif = cuadre.diferenciaUsd;
     const elDif = document.getElementById('r-ticket-diferencia');
     elDif.innerText = (dif >= 0 ? '+ ' : '- ') + monedaPrincipal + ' ' + Math.abs(dif).toFixed(2);
     elDif.style.color = dif < -0.01 ? '#dc3545' : (dif > 0.01 ? '#198754' : '#000');
@@ -1361,22 +1501,50 @@ function imprimirDetalleRuta() {
     const tasa = parseFloat(r.tasa_cambio) || 0;
     const aPrincipal = (montoBS) => tasa > 0 ? parseFloat(montoBS || 0) / tasa : 0;
 
-    // ── Totales ──
+    // ── Totales (helper único del cuadre) ──
+    let pagosBS = 0;
     let pagosUSD = 0;
     (r.pagos || []).forEach(p => {
-        pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(p.monto_bs);
+        const montoBS = parseFloat(p.monto_bs || 0);
+        pagosBS += montoBS;
+        pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(montoBS);
     });
-    const creditosUSD  = (r.creditos || []).reduce((s, c) => s + aPrincipal(c.monto_bs), 0);
-    const gastosUSD    = (r.gastos   || []).reduce((s, g) => s + aPrincipal(g.monto_bs), 0);
-    const cobranzasUSD = aPrincipal(r.total_cobranzas_bs);
+    const creditosBS = (r.creditos || []).reduce((s, c) => s + parseFloat(c.monto_bs || 0), 0);
+    const gastosBS    = (r.gastos   || []).reduce((s, g) => s + parseFloat(g.monto_bs || 0), 0);
     const cobranzasBS  = parseFloat(r.total_cobranzas_bs || 0);
 
-    const recaudadoUSD = pagosUSD + creditosUSD + gastosUSD - cobranzasUSD;
+    const cuadre = calcularCuadreRuta({
+        tasa,
+        ventaBs: r.total_venta_bs,
+        ventaUsd: r.total_venta_usd,
+        pagosBs: pagosBS,
+        pagosUsd: pagosUSD,
+        creditosBs: creditosBS,
+        gastosBs: gastosBS,
+        cobranzasBs: cobranzasBS,
+    });
 
-    const ventaBS  = parseFloat(r.total_venta_bs  || 0);
-    const ventaUSD = parseFloat(r.total_venta_usd || 0) || aPrincipal(ventaBS);
-    const difUSD   = recaudadoUSD - ventaUSD;
-    const difBS    = difUSD * tasa;
+    const recaudadoUSD = cuadre.recaudadoUsd;
+    const cobranzasUSD = cuadre.cobranzasUsd;
+    const creditosUSD = cuadre.creditosUsd;
+    const ventaBS  = cuadre.ventaBs;
+    const ventaUSD = cuadre.ventaUsd;
+    const difUSD   = cuadre.diferenciaUsd;
+    const difBS    = cuadre.diferenciaBs;
+    const gastosUSD = cuadre.gastosUsd;
+
+    // ── Rentabilidad (costo congelado al cerrar o calculado en vivo) ──
+    let costoTotalRuta = 0;
+    let utilidadBruta = 0;
+    (r.detalles || []).forEach(d => {
+        const costoUnit = parseFloat(d.costo_unitario_usd || 0);
+        const costoTotal = parseFloat(d.costo_total_usd || 0);
+        const totalUsd = parseFloat(d.subtotal_usd || 0) || aPrincipal(d.subtotal_bs);
+        costoTotalRuta += costoTotal;
+        utilidadBruta += (totalUsd - costoTotal);
+    });
+    const margenRuta = ventaUSD > 0 ? (utilidadBruta / ventaUSD) * 100 : 0;
+    const utilidadNeta = utilidadBruta - gastosUSD;
 
     // ── Nombre del almacén ──
     const almacenNombre = (almacenesCache.find(a => a.id == r.almacen)?.nombre)
@@ -1446,6 +1614,73 @@ function imprimirDetalleRuta() {
                 </tr>
             </tfoot>
         </table>
+
+        <h2>RENTABILIDAD DE LA RUTA</h2>
+        <table class="rep-tabla">
+            <thead>
+                <tr>
+                    <th style="width:24px;">#</th>
+                    <th>Producto</th>
+                    <th class="num">Vendido</th>
+                    <th class="num">Costo unit. $</th>
+                    <th class="num">Costo total $</th>
+                    <th class="num">Venta $</th>
+                    <th class="num">Utilidad $</th>
+                    <th class="num">Margen %</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${(r.detalles || []).map((d, i) => {
+                    const vendido = parseFloat(d.cantidad_vendida || 0);
+                    const costoUnit = parseFloat(d.costo_unitario_usd || 0);
+                    const costoTotal = parseFloat(d.costo_total_usd || 0);
+                    const totalUsd = parseFloat(d.subtotal_usd || 0) || aPrincipal(d.subtotal_bs);
+                    const utilidad = parseFloat(d.utilidad_usd ?? (totalUsd - costoTotal));
+                    const margen = parseFloat(d.margen_porcentaje ?? (totalUsd > 0 ? (utilidad / totalUsd) * 100 : 0));
+                    return `<tr>
+                        <td>${i + 1}</td>
+                        <td>${d.nombre_producto || d.nombre_presentacion || ''}</td>
+                        <td class="num">${vendido.toFixed(2)}</td>
+                        <td class="num">${costoUnit.toFixed(2)}</td>
+                        <td class="num">${costoTotal.toFixed(2)}</td>
+                        <td class="num">${totalUsd.toFixed(2)}</td>
+                        <td class="num" style="color:${utilidad < 0 ? '#b00020' : '#0a6b2d'};">${utilidad.toFixed(2)}</td>
+                        <td class="num">${margen.toFixed(2)}%</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="4" class="num"><strong>TOTAL</strong></td>
+                    <td class="num"><strong>${costoTotalRuta.toFixed(2)}</strong></td>
+                    <td class="num"><strong>${ventaUSD.toFixed(2)}</strong></td>
+                    <td class="num"><strong>${utilidadBruta.toFixed(2)}</strong></td>
+                    <td class="num"><strong>${margenRuta.toFixed(2)}%</strong></td>
+                </tr>
+            </tfoot>
+        </table>
+
+        <div class="rep-secciones">
+            <div class="rep-seccion">
+                <h3>RESUMEN DE RENTABILIDAD</h3>
+                <table class="rep-tabla-sm">
+                    <tr><td>Venta total</td><td class="num">$ ${ventaUSD.toFixed(2)}</td></tr>
+                    <tr><td>(−) Costo total</td><td class="num">$ ${costoTotalRuta.toFixed(2)}</td></tr>
+                    <tr><td><strong>= Utilidad bruta</strong></td><td class="num"><strong>$ ${utilidadBruta.toFixed(2)} (${margenRuta.toFixed(2)}%)</strong></td></tr>
+                    <tr><td>(−) Gastos de ruta</td><td class="num">$ ${gastosUSD.toFixed(2)}</td></tr>
+                    <tr><td><strong>= Utilidad neta</strong></td><td class="num"><strong>$ ${utilidadNeta.toFixed(2)}</strong></td></tr>
+                    <tr><td>Diferencia de caja</td><td class="num" style="color:${difUSD < -0.01 ? '#b00020' : '#0a6b2d'};">$ ${difUSD.toFixed(2)}</td></tr>
+                </table>
+            </div>
+            <div class="rep-seccion">
+                <h3>NOTA</h3>
+                <p style="font-size:9px; margin:0;">
+                    La utilidad es devengada: incluye las ventas a crédito de la ruta
+                    (${creditosUSD.toFixed(2)} USD). La diferencia de caja es el dinero
+                    real: pagos + créditos + gastos − cobranzas, comparado con la venta.
+                </p>
+            </div>
+        </div>
 
         <div class="rep-secciones">
             <div class="rep-seccion">

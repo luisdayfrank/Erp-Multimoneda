@@ -1,7 +1,9 @@
 // assets/js/proveedores.js
 
 let proveedoresData = [];
-let datosFichaProv = null; 
+let datosFichaProv = null;
+// Evita doble envio del abono a proveedor con internet lento.
+let abonoProvEnCurso = false; 
 
 document.addEventListener('DOMContentLoaded', () => {
     cargarProveedores();
@@ -54,11 +56,11 @@ function renderizarTabla(lista) {
 
 function formatLimite(valor) {
     const v = parseFloat(valor);
-    if (v === 0) return '<span class="badge bg-info">Sin Límite Definido</span>';
+    if (v === 0) return '<span class="badge bg-info">Sin LÃ­mite Definido</span>';
     return `<span class="badge bg-success">$ ${v.toFixed(2)}</span>`;
 }
 
-// CREACIÓN Y EDICIÓN
+// CREACIÃ“N Y EDICIÃ“N
 function editarProvDesdeFicha() {
     if(!datosFichaProv) return;
     const p = datosFichaProv.proveedor;
@@ -97,6 +99,8 @@ async function guardarProveedor() {
 
     if (!payload.nombre) { alert("El nombre es obligatorio"); return; }
 
+    const btn = document.getElementById('btn-guardar-proveedor');
+    setBotonProcesando(btn, true, 'GUARDANDO...');
     try {
         if (id) {
             await apiFetch(`/proveedores/${id}/editar/`, 'PUT', payload);
@@ -112,6 +116,8 @@ async function guardarProveedor() {
 
     } catch (error) {
         alert("Error al guardar: " + (error.detail || error.messageForUser || "Revisa la consola."));
+    } finally {
+        setBotonProcesando(btn, false);
     }
 }
 
@@ -132,7 +138,7 @@ async function verFichaProveedor(id) {
         const modal = new bootstrap.Modal(document.getElementById('modalEstadoCuentaProv'));
         modal.show();
     } catch (error) {
-        alert("No se pudo cargar la información del proveedor.");
+        alert("No se pudo cargar la informaciÃ³n del proveedor.");
     }
 }
 
@@ -159,7 +165,7 @@ function renderizarMovimientosProv(compras, pagos) {
                 <div class="me-3 fs-4 ${m.color}"><i class="bi ${m.icon}"></i></div>
                 <div class="flex-grow-1">
                     <div class="fw-bold text-uppercase small text-muted">${m.clase} ${m.clase === 'PAGO EMITIDO' ? '(A Fact. #'+m.factura_id+')' : '#'+m.id}</div>
-                    <div class="fw-bold">${m.clase === 'COMPRA' ? 'Recepción de Mercancía' : 'Pago: ' + m.referencia}</div>
+                    <div class="fw-bold">${m.clase === 'COMPRA' ? 'RecepciÃ³n de MercancÃ­a' : 'Pago: ' + m.referencia}</div>
                     <div class="small text-muted">${fecha} - ${hora}</div>
                 </div>
                 <div class="text-end">
@@ -189,15 +195,15 @@ function abrirModalNuevoAbonoProv() {
     document.getElementById('abono-referencia-prov').value = '';
 
     bootstrap.Modal.getInstance(document.getElementById('modalEstadoCuentaProv')).hide();
-    new bootstrap.Modal(document.getElementById('modalNuevoAbonoProv')).show();
 }
 
 async function procesarAbonoProv() {
+    if (abonoProvEnCurso) return;
     const cxp_id = document.getElementById('abono-factura-prov').value;
     const monto = parseFloat(document.getElementById('abono-monto-prov').value);
     const referencia = document.getElementById('abono-referencia-prov').value.trim();
 
-    if (!monto || monto <= 0) { alert("Ingresa un monto válido."); return; }
+    if (!monto || monto <= 0) { alert("Ingresa un monto vÃ¡lido."); return; }
 
     const payload = {
         cuenta: cxp_id,
@@ -207,6 +213,9 @@ async function procesarAbonoProv() {
         referencia: referencia || "Pago emitido"
     };
 
+    abonoProvEnCurso = true;
+    const btn = document.getElementById('btn-confirmar-abono-prov');
+    setBotonProcesando(btn, true, 'PROCESANDO...');
     try {
         await apiFetch('/cxp/abonar/', 'POST', payload);
         alert("Pago a proveedor registrado exitosamente.");
@@ -216,6 +225,9 @@ async function procesarAbonoProv() {
         verFichaProveedor(datosFichaProv.proveedor.id); 
         
     } catch (error) {
-        alert("Error al procesar el pago: " + (error.detail || error.messageForUser || error.error || "Monto inválido."));
+        alert("Error al procesar el pago: " + (error.detail || error.messageForUser || error.error || "Monto invÃ¡lido."));
+    } finally {
+        abonoProvEnCurso = false;
+        setBotonProcesando(btn, false);
     }
 }

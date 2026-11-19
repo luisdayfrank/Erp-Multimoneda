@@ -11,6 +11,8 @@ let almacenesCache = [];
 let indiceConteo = 0;
 let conteoModificado = false;
 let informeActual = null; // Último informe cargado (para impresión en hoja completa)
+// Evita doble envío en operaciones de toma física (crear, procesar, anular, Excel).
+let tomaEnCurso = false;
 
 // ==============================================================================
 // 2. INICIALIZACIÓN
@@ -304,6 +306,11 @@ function filtrarProductosToma() {
 }
 
 async function crearNuevaToma() {
+    if (tomaEnCurso) {
+        console.warn('Operación de toma ya en curso.');
+        return;
+    }
+
     const almacenId = document.getElementById('nueva-toma-almacen').value;
     const tipo = document.getElementById('nueva-toma-tipo').value;
     const muestra = parseInt(document.getElementById('nueva-toma-muestra').value) || 10;
@@ -325,6 +332,7 @@ async function crearNuevaToma() {
     };
 
     try {
+        tomaEnCurso = true;
         const resp = await apiFetch('/inventarios/tomas/crear/', 'POST', payload);
         alert(resp.mensaje);
 
@@ -335,6 +343,8 @@ async function crearNuevaToma() {
         seleccionarToma(resp.toma_id);
     } catch (e) {
         alert("Error: " + (e.detail || e.error || e.messageForUser || "Desconocido"));
+    } finally {
+        tomaEnCurso = false;
     }
 }
 
@@ -485,6 +495,7 @@ function abrirModalCargarExcel() {
 }
 
 async function procesarCargaExcel() {
+    if (tomaEnCurso) return;
     const input = document.getElementById('input-excel-toma');
     if (!input.files.length) {
         alert("Selecciona un archivo.");
@@ -495,6 +506,7 @@ async function procesarCargaExcel() {
     formData.append('archivo', input.files[0]);
 
     try {
+        tomaEnCurso = true;
         const token = localStorage.getItem('access_token');
         const resp = await fetch('/api/v1/inventarios/tomas/' + tomaActiva.id + '/importar-excel/', {
             method: 'POST',
@@ -509,6 +521,8 @@ async function procesarCargaExcel() {
         await seleccionarToma(tomaActiva.id);
     } catch (e) {
         alert("Error cargando Excel: " + (e.detail || e.error || e.messageForUser || "Desconocido"));
+    } finally {
+        tomaEnCurso = false;
     }
 }
 
@@ -517,32 +531,40 @@ async function procesarCargaExcel() {
 // ==============================================================================
 async function procesarToma() {
     if (!tomaActiva) return;
+    if (tomaEnCurso) return;
     if (!confirm("¿Procesar esta toma? Se crearán los ajustes de stock y no podrás editarla.")) return;
 
     try {
+        tomaEnCurso = true;
         const resp = await apiFetch('/inventarios/tomas/' + tomaActiva.id + '/procesar/', 'POST');
         alert(resp.mensaje);
         await cargarTomas();
         seleccionarToma(tomaActiva.id);
     } catch (e) {
         alert("Error: " + (e.detail || e.error || e.messageForUser || "Desconocido"));
+    } finally {
+        tomaEnCurso = false;
     }
 }
 
 async function anularToma() {
     if (!tomaActiva) return;
+    if (tomaEnCurso) return;
     const msg = tomaActiva.estado === 'PROCESADO'
         ? "¿Anular esta toma? Se REVERTIRÁN los movimientos de stock."
         : "¿Anular esta toma?";
     if (!confirm(msg)) return;
 
     try {
+        tomaEnCurso = true;
         const resp = await apiFetch('/inventarios/tomas/' + tomaActiva.id + '/anular/', 'POST');
         alert(resp.mensaje);
         await cargarTomas();
         seleccionarToma(tomaActiva.id);
     } catch (e) {
         alert("Error: " + (e.detail || e.error || e.messageForUser || "Desconocido"));
+    } finally {
+        tomaEnCurso = false;
     }
 }
 

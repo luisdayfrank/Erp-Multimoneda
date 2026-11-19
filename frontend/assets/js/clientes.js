@@ -6,6 +6,8 @@ let metodosPagoCache = [];
 let tasaCambioActual = 0;
 let ordenActual = { columna: 'nombre', ascendente: true };
 let vistaOrigenDetalle = 'facturas';
+// Evita que un doble clic con internet lento registre el abono varias veces.
+let abonoEnCurso = false;
 
 // ==============================================================================
 // INICIALIZACIÓN
@@ -266,8 +268,11 @@ async function verFichaCliente(id) {
         document.getElementById('ec-cliente-doc').innerText = data.cliente.documento || 'S/N';
         document.getElementById('ec-cliente-tlf').innerText = data.cliente.telefono || 'S/N';
 
-        document.getElementById('ec-deuda-total').innerText = `$ ${data.deuda_total.toFixed(2)}`;
-        document.getElementById('ec-limite').innerText = data.limite_credito <= 0 ? 'N/A' : `$ ${data.limite_credito.toFixed(2)}`;
+        const deudaUsd = parseFloat(data.deuda_total || 0);
+        const tasaMostrar = parseFloat(data.tasa_actual) || tasaCambioActual || 1;
+        document.getElementById('ec-deuda-total').innerText = `$ ${deudaUsd.toFixed(2)}`;
+        // La ficha muestra la deuda pendiente convertida a moneda secundaria.
+        document.getElementById('ec-limite').innerText = `Bs ${(deudaUsd * tasaMostrar).toFixed(2)}`;
 
         // >>> NUEVO: Mostrar saldo a favor si existe <<<
         const saldoFavorEl = document.getElementById('ec-saldo-favor');
@@ -322,9 +327,11 @@ function renderizarFacturasPendientes(facturas) {
         const esVenta = !!f.venta_id;
         let tituloDoc;
         if (esVenta) {
-            const badgeTipo = f.tipo_venta === 'CREDITO'
-                ? '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>'
-                : '<span class="badge bg-success ms-1">CONTADO</span>';
+            const badgeTipo = f.estado === 'ANULADA'
+                ? '<span class="badge bg-danger ms-1">ANULADA</span>'
+                : (f.tipo_venta === 'CREDITO'
+                    ? '<span class="badge bg-warning text-dark ms-1">CRÉDITO</span>'
+                    : '<span class="badge bg-success ms-1">CONTADO</span>');
             tituloDoc = `<div class="fw-bold text-primary fs-5" style="cursor:pointer; text-decoration:underline;"
                          onclick="verDetalleFactura(${f.venta_id}, 'facturas')"
                          title="Haga clic para ver los artículos comprados">
@@ -380,10 +387,15 @@ function renderizarMovimientos(ventas, recibos) {
         const fecha = fmtFecha(m.fecha);
         const hora = fmtHora(m.fecha);
 
-        // Badge de tipo
+        // Badge de tipo / estado
+        // Prioridad: si la factura está ANULADA, ese es el estado real y no
+        // debe mostrarse como CONTADO o CRÉDITO.
         let badgeTipo = '';
+        const esAnulada = m.clase === 'VENTA' && m.estado === 'ANULADA';
         if (m.clase === 'VENTA') {
-            if (m.tipo === 'DEUDA_INICIAL') {
+            if (esAnulada) {
+                badgeTipo = '<span class="badge bg-danger ms-1">ANULADA</span>';
+            } else if (m.tipo === 'DEUDA_INICIAL') {
                 badgeTipo = '<span class="badge bg-secondary ms-1">DEUDA INICIAL</span>';
             } else if (m.tipo === 'CREDITO_RUTA') {
                 badgeTipo = '<span class="badge bg-info text-dark ms-1">CRÉDITO DE RUTA</span>';
@@ -419,12 +431,12 @@ function renderizarMovimientos(ventas, recibos) {
         // Monto y signo
         const esNegativo = m.clase === 'VENTA';
         const montoDisplay = esNegativo 
-            ? `-$ ${m.monto.toFixed(2)}` 
+            ? `-${esAnulada ? '<s>' : ''}$ ${m.monto.toFixed(2)}${esAnulada ? '</s>' : ''}` 
             : `+$ ${(m.monto_total_entregado || m.monto).toFixed(2)}`;
 
         const html = `
-            <div class="d-flex align-items-center p-3 border-bottom bg-white text-dark">
-                <div class="me-3 fs-4 ${m.color}"><i class="bi ${m.icon}"></i></div>
+            <div class="d-flex align-items-center p-3 border-bottom bg-white text-dark ${esAnulada ? 'opacity-75' : ''}">
+                <div class="me-3 fs-4 ${esAnulada ? 'text-danger' : m.color}"><i class="bi ${m.icon}"></i></div>
                 <div class="flex-grow-1">
                     <div class="fw-bold text-uppercase small text-muted">${m.clase} ${m.clase === 'RECIBO' ? `#${m.id}` : ''}</div>
                     ${tituloCelda}
@@ -432,7 +444,7 @@ function renderizarMovimientos(ventas, recibos) {
                     <div class="small text-muted">${fecha} - ${hora}</div>
                 </div>
                 <div class="text-end">
-                    <h5 class="mb-0 fw-bold ${esNegativo ? 'text-dark' : 'text-success'}">
+                    <h5 class="mb-0 fw-bold ${esAnulada ? 'text-danger text-decoration-line-through' : (esNegativo ? 'text-dark' : 'text-success')}">
                         ${montoDisplay}
                     </h5>
                     ${m.sobrante_a_favor > 0 ? `<small class="text-success">+Saldo: $${m.sobrante_a_favor.toFixed(2)}</small>` : ''}
@@ -535,6 +547,15 @@ function abrirModalNuevoAbono() {
 
     // Tasa editable
     document.getElementById('abono-tasa-cambio').value = tasaCambioActual.toFixed(2);
+
+    // Fecha del abono: por defecto hoy; máximo hoy (no se permiten futuras).
+    const hoy = new Date();
+    const fechaISO = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+    const inputFecha = document.getElementById('abono-fecha');
+    if (inputFecha) {
+        inputFecha.value = fechaISO;
+        inputFecha.max = fechaISO;
+    }
 
     // Limpiar y preparar líneas de pago
     document.getElementById('abono-contenedor-pagos').innerHTML = '';
@@ -756,6 +777,11 @@ async function recargarTasaAbono() {
 }
 
 async function procesarAbono() {
+    if (abonoEnCurso) {
+        console.warn('Abono ya en curso. Se ignora el clic duplicado.');
+        return;
+    }
+
     const tasa = parseFloat(document.getElementById('abono-tasa-cambio').value) || 1;
     const referencia = document.getElementById('abono-referencia-global').value.trim();
 
@@ -809,24 +835,35 @@ async function procesarAbono() {
         cliente_id: datosFichaActual.cliente.id,
         tasa_cambio: tasa.toFixed(2),
         guardar_saldo_favor: guardarSaldoFavor,
+        // Solo fecha actual o pasada; el backend rechaza futuras.
+        fecha: (document.getElementById('abono-fecha') || {}).value || null,
         pagos: pagos
     };
 
+    let btnConfirmar = null;
     try {
+        abonoEnCurso = true;
+        btnConfirmar = document.getElementById('btn-confirmar-abono');
+        if (btnConfirmar) {
+            btnConfirmar.disabled = true;
+            btnConfirmar.dataset.textoOriginal = btnConfirmar.innerHTML;
+            btnConfirmar.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> PROCESANDO...';
+        }
+
         const respuesta = await apiFetch('/cxc/abonar-masivo/', 'POST', payload);
 
-        let mensaje = "Abono procesado exitosamente.\\n\\n";
+        let mensaje = "Abono procesado exitosamente.\n\n";
         if (respuesta.facturas_afectadas && respuesta.facturas_afectadas.length > 0) {
-            mensaje += "Facturas pagadas/actualizadas:\\n";
+            mensaje += "Facturas pagadas/actualizadas:\n";
             respuesta.facturas_afectadas.forEach(f => {
-                mensaje += `  - Factura #${f.venta_id}: $${f.monto_aplicado.toFixed(2)} aplicado\\n`;
+                mensaje += `  - Factura #${f.venta_id}: $${f.monto_aplicado.toFixed(2)} aplicado\n`;
             });
         }
         if (respuesta.saldo_sobrante_guardado > 0) {
-            mensaje += `\\nSaldo a favor guardado: $${respuesta.saldo_sobrante_guardado.toFixed(2)}`;
+            mensaje += `\nSaldo a favor guardado: $${respuesta.saldo_sobrante_guardado.toFixed(2)}`;
         }
         if (respuesta.saldo_a_favor > 0) {
-            mensaje += `\\nSaldo a favor total del cliente: $${respuesta.saldo_a_favor.toFixed(2)}`;
+            mensaje += `\nSaldo a favor total del cliente: $${respuesta.saldo_a_favor.toFixed(2)}`;
         }
 
         alert(mensaje);
@@ -836,26 +873,16 @@ async function procesarAbono() {
         verFichaCliente(datosFichaActual.cliente.id);
 
     } catch (error) {
-        if (error.requiere_confirmacion_saldo) {
-            const confirmar = confirm(
-                `El monto ($${error.monto_sobrante.toFixed(2)}) supera la deuda total.\\n\\n` +
-                `¿Deseas guardar el excedente como saldo a favor?`
-            );
-            if (confirmar) {
-                // Reintentar con guardar_saldo_favor = true
-                payload.guardar_saldo_favor = true;
-                try {
-                    const respuesta = await apiFetch('/cxc/abonar-masivo/', 'POST', payload);
-                    alert("Abono y saldo a favor procesados exitosamente.");
-                    bootstrap.Modal.getInstance(document.getElementById('modalNuevoAbono')).hide();
-                    cargarClientes();
-                    verFichaCliente(datosFichaActual.cliente.id);
-                } catch (e2) {
-                    alert("Error al procesar: " + (e2.error || e2.detail || "Error desconocido"));
-                }
+        // No se reintenta automáticamente: la confirmacion de sobrante ya se
+        // hizo antes de enviar. Un reintento a ciegas duplicaba el abono.
+        alert("Error al procesar el abono: " + (error.error || error.detail || error.messageForUser || "Error desconocido."));
+    } finally {
+        abonoEnCurso = false;
+        if (btnConfirmar) {
+            btnConfirmar.disabled = false;
+            if (btnConfirmar.dataset.textoOriginal) {
+                btnConfirmar.innerHTML = btnConfirmar.dataset.textoOriginal;
             }
-        } else {
-            alert("Error al procesar el abono: " + (error.error || error.detail || error.messageForUser || "Error desconocido."));
         }
     }
 }

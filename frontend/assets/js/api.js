@@ -1,5 +1,33 @@
 const BASE_URL = '/api/v1';
 
+// Registro de peticiones de escritura en vuelo. Evita que un doble clic o un
+// reintento por internet lento registre la misma operación varias veces.
+const peticionesEnVuelo = new Set();
+
+function _clavePeticion(endpoint, method, body) {
+    try {
+        return `${method}:${endpoint}:${body ? JSON.stringify(body) : ''}`;
+    } catch (e) {
+        return `${method}:${endpoint}`;
+    }
+}
+
+function setBotonProcesando(btn, activo, texto = 'PROCESANDO...') {
+    if (!btn) return;
+    if (activo) {
+        if (btn.dataset.textoOriginal) return; // ya está en curso
+        btn.dataset.textoOriginal = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> ${texto}`;
+    } else {
+        btn.disabled = false;
+        if (btn.dataset.textoOriginal) {
+            btn.innerHTML = btn.dataset.textoOriginal;
+            delete btn.dataset.textoOriginal;
+        }
+    }
+}
+
 async function refreshAccessToken() {
     const refresh = localStorage.getItem('refresh_token');
     if (!refresh) throw new Error('No hay refresh_token. Inicia sesión de nuevo.');
@@ -42,6 +70,25 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
 
     if (body) {
         config.body = JSON.stringify(body);
+    }
+
+    // Guardia anti-duplicado: solo para escrituras y solo si no es el
+    // reintento automático tras refrescar el token.
+    const esEscritura = String(method).toUpperCase() !== 'GET';
+    const clavePeticion = _clavePeticion(endpoint, method, body);
+    const aplicarGuardia = esEscritura && !_retried;
+
+    if (aplicarGuardia && peticionesEnVuelo.has(clavePeticion)) {
+        console.warn('Petición duplicada ignorada:', clavePeticion);
+        const err = {
+            duplicate: true,
+            detail: 'La operación ya está en proceso. Espera la respuesta antes de reintentar.'
+        };
+        throw Object.assign(err, { messageForUser: err.detail });
+    }
+
+    if (aplicarGuardia) {
+        peticionesEnVuelo.add(clavePeticion);
     }
 
     try {
@@ -116,5 +163,9 @@ async function apiFetch(endpoint, method = 'GET', body = null, _retried = false)
             throw Object.assign(error, { messageForUser: msg });
         }
         throw new Error('Error de red o conexión rechazada. Revisa la URL de la API y que el servidor esté encendido.');
+    } finally {
+        if (aplicarGuardia) {
+            peticionesEnVuelo.delete(clavePeticion);
+        }
     }
 }

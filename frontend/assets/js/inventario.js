@@ -51,7 +51,7 @@ function renderizarTabla(lista) {
     }
 
     lista.forEach(p => {
-        // Alerta visual si el stock es cr�tico
+        // Alerta visual si el stock es crítico
         let stockClass = "text-dark";
         if (p.stock_total <= 0) stockClass = "text-danger fw-bold";
         else if (p.stock_total <= 10) stockClass = "text-warning fw-bold";
@@ -169,7 +169,7 @@ async function verFichaProducto(id) {
         document.getElementById('ficha-codigo').innerText = data.producto.codigo;
         const unidadMedida = data.producto.unidad;
 
-        // Stock por almac�n
+        // Stock por almacén
         const listAlmacenes = document.getElementById('ficha-stock-almacenes');
         listAlmacenes.innerHTML = '';
         data.stock_por_almacen.forEach(s => {
@@ -230,7 +230,7 @@ async function verFichaProducto(id) {
         modal.show();
 
     } catch (error) {
-        alert("No se pudo cargar la informaci�n del producto.");
+        alert("No se pudo cargar la información del producto.");
         console.error(error);
     }
 }

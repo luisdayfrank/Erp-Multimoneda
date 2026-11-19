@@ -1,4 +1,5 @@
 import random
+import logging
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
 from openpyxl.utils import get_column_letter
@@ -36,6 +37,7 @@ from .serializers import (
     MetodoPagoSerializer, PagoCuentaPagarSerializer, ProveedorSerializer,
     ConceptoEgresoSerializer, EgresoCajaSerializer, EgresoInventarioSerializer,
     BorradorFacturaSerializer, AbonoMasivoSerializer,
+    ReciboAbonoDetalleSerializer,
     RutaMercadoSerializer,
     ImportarExcelRutaSerializer,
     TomaFisicaListSerializer, TomaFisicaDetalleSerializer, CrearTomaFisicaSerializer,
@@ -46,6 +48,11 @@ from . import cierre_service
 from .services.tasas import ProveedorTasaBCV  # FASE 1.6
 from .permissions import IsCajeroOrSuperior, IsGerenteOrAdmin
 from decimal import Decimal
+
+
+# P16: logging en lugar de print() (evita UnicodeEncodeError con emojis en
+# consolas cp1252 y no escribe diagnósticos en la salida estándar).
+logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
@@ -61,6 +68,21 @@ def _fecha_doc(fecha):
     if not fecha:
         return None
     return timezone.make_aware(datetime.combine(fecha, time.min))
+
+
+def _fecha_abono_dt(fecha):
+    """
+    Convierte la fecha (date) de un abono en datetime consciente al mediodía
+    local. Así un abono registrado con fecha manual no se corre de día por UTC.
+    Si no se recibe fecha, devuelve None para que el modelo use timezone.now().
+    """
+    if not fecha:
+        return None
+    if isinstance(fecha, datetime):
+        if timezone.is_naive(fecha):
+            return timezone.make_aware(fecha)
+        return fecha
+    return timezone.make_aware(datetime.combine(fecha, time(hour=12)))
 
 
 def _tipo_documento_cxc(cxc):
@@ -201,7 +223,7 @@ class CatalogoPosAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        print(f"📦 CATÁLOGO SOLICITADO POR: {request.user.username} (Caja OK)")
+        logger.debug("Catalogo solicitado por: %s (caja OK)", request.user.username)
 
         presentaciones = PresentacionProducto.objects.all()
         serializer = PresentacionProductoSerializer(presentaciones, many=True)
@@ -320,34 +342,67 @@ class RegistrarAbonoMasivoAPIView(APIView):
 
         cliente_id = serializer.validated_data['cliente_id']
         pagos_data = serializer.validated_data['pagos']
-        tasa_cambio = serializer.validated_data.get('tasa_cambio', Decimal('0.00'))
+        tasa_cambio = serializer.validated_data.get('tasa_cambio') or Decimal('0.00')
         guardar_saldo_favor = serializer.validated_data.get('guardar_saldo_favor', False)
+        fecha_dia = serializer.validated_data.get('fecha')
+        fecha_dt = _fecha_abono_dt(fecha_dia) or timezone.now()
 
         # CORRECCIÓN: Definir tolerancia global para toda la operación
         TOLERANCIA = Decimal('0.01')
 
         try:
-            cliente = Cliente.objects.get(pk=cliente_id)
+            # Bloquea al cliente mientras se distribuye el abono.
+            cliente = Cliente.objects.select_for_update().get(pk=cliente_id)
         except Cliente.DoesNotExist:
             return Response({"error": "Cliente no encontrado."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Calcular total del abono en USD
+        # Resolver métodos en lote (antes: una consulta por cada pago).
+        # Nota: el serializer entrega los valores del DictField como texto, así
+        # que metodo_id debe normalizarse a entero antes de usarlo como clave.
+        def _metodo_id(valor):
+            try:
+                return int(valor)
+            except (TypeError, ValueError):
+                return None
+
+        ids_metodos = [
+            mid for mid in (_metodo_id(p.get('metodo_id')) for p in pagos_data)
+            if mid is not None
+        ]
+        metodos_map = {m.id: m for m in MetodoPago.objects.filter(id__in=ids_metodos)}
+        metodos_usados = []
+
+        # Calcular total del abono en USD. Toda validación ocurre ANTES de
+        # escribir: un 400 ya no puede dejar pagos o saldos a medio aplicar.
         total_abono_usd = Decimal('0.00')
         desglose_metodos = []
-        metodos_usados = []
-        # FASE 1B: sesión abierta del cajero (null = offline, no suma al arqueo)
-        sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
         for pago in pagos_data:
-            monto = Decimal(str(pago['monto_pagado']))
-            metodo = MetodoPago.objects.get(pk=pago['metodo_id'])
-            metodos_usados.append(metodo)
+            metodo = metodos_map.get(_metodo_id(pago.get('metodo_id')))
+            if not metodo:
+                return Response(
+                    {"error": f"Método de pago inválido: {pago.get('metodo_id')}."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            if metodo.moneda_referencia == 'SECUNDARIA' and tasa_cambio > 0:
-                # CORRECCIÓN PASO 1: Redondear después de la conversión
+            monto = Decimal(str(pago['monto_pagado']))
+            if monto <= Decimal('0.00'):
+                return Response(
+                    {"error": "Cada línea de pago debe tener un monto mayor a cero."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if metodo.moneda_referencia == 'SECUNDARIA' and tasa_cambio <= 0:
+                return Response(
+                    {"error": "Debes indicar una tasa de cambio mayor a cero para pagos en bolívares."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if metodo.moneda_referencia == 'SECUNDARIA':
                 monto_usd = (monto / tasa_cambio).quantize(Decimal('0.01'))
             else:
                 monto_usd = monto
             total_abono_usd += monto_usd
+            metodos_usados.append(metodo)
 
             desglose_metodos.append({
                 'metodo_id': metodo.id,
@@ -357,57 +412,118 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 'referencia': pago.get('referencia', '')
             })
 
-        facturas_pendientes = CuentaPorCobrar.objects.filter(
-            cliente=cliente,
-            estado__in=['PENDIENTE', 'VENCIDA']
-        ).select_related('venta').order_by('fecha_creacion', 'id')  # FIFO por antigüedad de la deuda
+        if total_abono_usd <= Decimal('0.00'):
+            return Response(
+                {"error": "El total del abono debe ser mayor a cero."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Caso: no hay facturas y el cliente quiere guardar saldo a favor
-        if not facturas_pendientes.exists() and total_abono_usd > 0:
-            if not guardar_saldo_favor:
-                return Response({
-                    "error": "El cliente no tiene facturas pendientes. El monto excedería la deuda.",
-                    "requiere_confirmacion_saldo": True,
-                    "monto_sobrante": float(total_abono_usd)
-                }, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                cliente.saldo_a_favor += total_abono_usd
-                cliente.save(update_fields=['saldo_a_favor'])
-                
-                ReciboAbono.objects.create(
-                    cliente=cliente,
-                    usuario=request.user,
-                    monto_total_entregado=total_abono_usd,
-                    desglose_metodos=desglose_metodos,
-                    tasa_cambio=tasa_cambio,
-                    sobrante_a_favor=total_abono_usd,
-                    origen='ABONO_MASIVO',
-                    sesion_caja=sesion,
-                    referencia="Saldo a favor - Cliente sin facturas pendientes"
-                )
-                
-                return Response({
-                    "mensaje": "Saldo a favor guardado exitosamente.",
-                    "saldo_a_favor_total": float(cliente.saldo_a_favor),
-                    "monto_guardado": float(total_abono_usd)
-                }, status=status.HTTP_200_OK)
+        # FASE 1B: sesión abierta del cajero (null = offline, no suma al arqueo).
+        # Un abono con fecha pasada no pertenece al turno abierto de hoy.
+        sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
+        if fecha_dia is not None and fecha_dia < timezone.localdate():
+            sesion = None
 
-        # Distribuir abono FIFO
-        abono_restante = total_abono_usd
-        facturas_pagadas = []
-        abonos_para_recibo = []
+        facturas_pendientes = list(
+            CuentaPorCobrar.objects.select_for_update().filter(
+                cliente=cliente,
+                estado__in=['PENDIENTE', 'VENCIDA']
+            ).select_related('venta').order_by('fecha_creacion', 'id')  # FIFO por antigüedad
+        )
 
+        saldo_favor_disponible = cliente.saldo_a_favor or Decimal('0.00')
+        total_deuda = sum((c.saldo_pendiente for c in facturas_pendientes), Decimal('0.00'))
+        # El saldo a favor cubre deuda antes de aplicar el dinero nuevo.
+        deuda_neta = max(total_deuda - saldo_favor_disponible, Decimal('0.00'))
+        sobrante_previsto = total_abono_usd - deuda_neta
+
+        # Validar ANTES de escribir. Si el abono excede la deuda y no se
+        # autorizó guardar saldo a favor, se devuelve 400 sin efectos.
+        if sobrante_previsto > TOLERANCIA and not guardar_saldo_favor:
+            return Response({
+                "error": "El monto del abono supera la deuda total del cliente.",
+                "requiere_confirmacion_saldo": True,
+                "monto_sobrante": float(sobrante_previsto),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Caso: no hay facturas pendientes y el cliente quiere guardar saldo a favor.
+        if not facturas_pendientes:
+            cliente.saldo_a_favor += total_abono_usd
+            cliente.save(update_fields=['saldo_a_favor'])
+
+            ReciboAbono.objects.create(
+                cliente=cliente,
+                usuario=request.user,
+                fecha=fecha_dt,
+                monto_total_entregado=total_abono_usd,
+                desglose_metodos=desglose_metodos,
+                tasa_cambio=tasa_cambio,
+                sobrante_a_favor=total_abono_usd,
+                origen='ABONO_MASIVO',
+                sesion_caja=sesion,
+                referencia="Saldo a favor - Cliente sin facturas pendientes"
+            )
+
+            return Response({
+                "mensaje": "Saldo a favor guardado exitosamente.",
+                "saldo_a_favor_total": float(cliente.saldo_a_favor),
+                "monto_guardado": float(total_abono_usd)
+            }, status=status.HTTP_200_OK)
+
+        # Guardar saldo_antes de cada cuenta para el recibo y el reporte.
+        saldo_antes_por_cxc = {c.id: c.saldo_pendiente for c in facturas_pendientes}
+        efectivo_por_cxc = {}
+
+        # 1) Aplicar el saldo a favor existente (FIFO) antes del dinero nuevo.
+        saldo_favor_usado = Decimal('0.00')
         for cxc in facturas_pendientes:
-            # CORRECCIÓN PASO 3: Usar tolerancia en el break
-            if abono_restante <= TOLERANCIA:
+            if saldo_favor_disponible <= TOLERANCIA:
                 break
 
-            saldo_antes = cxc.saldo_pendiente
-            monto_aplicar = min(abono_restante, saldo_antes)
+            aplicar = min(saldo_favor_disponible, cxc.saldo_pendiente)
+            if aplicar <= Decimal('0.00'):
+                continue
 
             PagoCuentaCobrar.objects.create(
                 cuenta=cxc,
                 usuario=request.user,
+                fecha=fecha_dt,
+                monto_abono_principal=aplicar,
+                monto_entregado_secundaria=Decimal('0.00'),
+                tasa_cambio_pago=tasa_cambio or Decimal('1.00'),
+                metodo=None,
+                sesion_caja=None,
+                origen='SALDO_FAVOR',
+                referencia='Saldo a favor aplicado automáticamente'
+            )
+
+            cxc.saldo_pendiente -= aplicar
+            if cxc.saldo_pendiente <= TOLERANCIA:
+                cxc.saldo_pendiente = Decimal('0.00')
+                cxc.estado = 'PAGADA'
+            cxc.save(update_fields=['saldo_pendiente', 'estado'])
+
+            saldo_favor_disponible -= aplicar
+            cliente.saldo_a_favor -= aplicar
+            saldo_favor_usado += aplicar
+
+        if saldo_favor_usado > Decimal('0.00'):
+            cliente.save(update_fields=['saldo_a_favor'])
+
+        # 2) Distribuir el dinero nuevo FIFO.
+        abono_restante = total_abono_usd
+        for cxc in facturas_pendientes:
+            if abono_restante <= TOLERANCIA:
+                break
+            if cxc.saldo_pendiente <= Decimal('0.00'):
+                continue
+
+            monto_aplicar = min(abono_restante, cxc.saldo_pendiente)
+
+            PagoCuentaCobrar.objects.create(
+                cuenta=cxc,
+                usuario=request.user,
+                fecha=fecha_dt,
                 monto_abono_principal=monto_aplicar,
                 monto_entregado_secundaria=Decimal('0.00'),
                 tasa_cambio_pago=tasa_cambio,
@@ -415,63 +531,66 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 metodo=(metodos_usados[0] if len(metodos_usados) == 1 else None),
                 sesion_caja=sesion,
                 origen='ABONO_MASIVO',
-                referencia=f"Abono distribuido automáticamente"
+                referencia="Abono distribuido automáticamente"
             )
 
             cxc.saldo_pendiente -= monto_aplicar
-            # CORRECCIÓN PASO 4: Usar tolerancia en la validación del saldo
             if cxc.saldo_pendiente <= TOLERANCIA:
                 cxc.saldo_pendiente = Decimal('0.00')
                 cxc.estado = 'PAGADA'
-            cxc.save()
+            cxc.save(update_fields=['saldo_pendiente', 'estado'])
 
             abono_restante -= monto_aplicar
+            efectivo_por_cxc[cxc.id] = monto_aplicar
+
+        # 3) Excedente del dinero nuevo → saldo a favor (ya autorizado arriba).
+        saldo_sobrante = Decimal('0.00')
+        if abono_restante > TOLERANCIA:
+            abono_restante = abono_restante.quantize(Decimal('0.01'))
+            cliente.saldo_a_favor += abono_restante
+            cliente.save(update_fields=['saldo_a_favor'])
+            saldo_sobrante = abono_restante
+        elif abono_restante > Decimal('0.00'):
+            abono_restante = Decimal('0.00')
+
+        # 4) Reporte de facturas afectadas (incluye las pagadas con saldo a favor).
+        facturas_pagadas = []
+        aplicaciones = []
+        for cxc in facturas_pendientes:
+            saldo_antes = saldo_antes_por_cxc.get(cxc.id, Decimal('0.00'))
+            total_aplicado = saldo_antes - cxc.saldo_pendiente
+            if total_aplicado <= Decimal('0.00'):
+                continue
 
             facturas_pagadas.append({
                 "cxc_id": cxc.id,
                 "venta_id": cxc.venta.id if cxc.venta else None,
-                "monto_aplicado": float(monto_aplicar),
+                "monto_aplicado": float(total_aplicado),
                 "saldo_restante": float(cxc.saldo_pendiente),
                 "estado": cxc.estado
             })
 
-            abonos_para_recibo.append({
+            aplicaciones.append({
                 'cxc': cxc,
-                'monto_aplicado': monto_aplicar,
+                'monto_aplicado': total_aplicado,
                 'saldo_antes': saldo_antes,
                 'saldo_despues': cxc.saldo_pendiente,
-                'origen_dinero': 'EFECTIVO'
+                'origen_dinero': (
+                    'EFECTIVO' if efectivo_por_cxc.get(cxc.id, Decimal('0.00')) > Decimal('0.00')
+                    else 'SALDO_FAVOR'
+                )
             })
 
-        saldo_sobrante = Decimal('0.00')
-        # CORRECCIÓN PASO 2: Usar tolerancia y redondear antes de guardar
-        if abono_restante > TOLERANCIA:
-            if guardar_saldo_favor:
-                # Redondear a 2 decimales antes de guardar
-                abono_restante = abono_restante.quantize(Decimal('0.01'))
-                cliente.saldo_a_favor += abono_restante
-                cliente.save(update_fields=['saldo_a_favor'])
-                saldo_sobrante = abono_restante
-            else:
-                return Response({
-                    "error": "El monto del abono supera la deuda total del cliente.",
-                    "requiere_confirmacion_saldo": True,
-                    "monto_sobrante": float(abono_restante),
-                    "facturas_pagadas": facturas_pagadas
-                }, status=status.HTTP_400_BAD_REQUEST)
-        elif abono_restante > Decimal('0.00'):
-            # CORRECCIÓN NUEVA: Ignorar residuos menores a 1 centavo
-            abono_restante = Decimal('0.00')
-
-        if abonos_para_recibo:
+        if aplicaciones:
             ReciboAbono.crear_desde_abonos(
                 cliente=cliente,
                 usuario=request.user,
+                fecha=fecha_dt,
                 tasa_cambio=tasa_cambio,
                 monto_total=total_abono_usd,
                 desglose_metodos=desglose_metodos,
                 origen='ABONO_MASIVO',
-                abonos_list=abonos_para_recibo,
+                abonos_list=aplicaciones,
                 sobrante=saldo_sobrante,
                 sesion_caja=sesion,
                 referencia=f"Abono masivo - {len(facturas_pagadas)} facturas afectadas"
@@ -480,10 +599,12 @@ class RegistrarAbonoMasivoAPIView(APIView):
         return Response({
             "mensaje": "Abono procesado exitosamente.",
             "total_abono": float(total_abono_usd),
+            "saldo_favor_usado": float(saldo_favor_usado),
             "facturas_afectadas": facturas_pagadas,
             "saldo_a_favor": float(cliente.saldo_a_favor),
             "saldo_sobrante_guardado": float(saldo_sobrante)
         }, status=status.HTTP_201_CREATED)
+
 
 class RegistrarAbonoCxCAPIView(APIView):
     permission_classes = [IsAuthenticated, IsGerenteOrAdmin]
@@ -492,14 +613,29 @@ class RegistrarAbonoCxCAPIView(APIView):
     def post(self, request):
         serializer = PagoCuentaCobrarSerializer(data=request.data, context={'request': request})
 
-        if serializer.is_valid():
-            try:
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Bloque interno: si procesar_pago o el recibo fallan, se revierte
+            # TODO (antes quedaba el PagoCuentaCobrar creado y se devolvía 400).
+            with transaction.atomic():
                 pago = serializer.save()
                 pago.procesar_pago()
+
+                fecha_dia = (
+                    timezone.localtime(pago.fecha).date()
+                    if pago.fecha else timezone.localdate()
+                )
+                fecha_dt = _fecha_abono_dt(fecha_dia)
 
                 # FASE 1B: todo abono directo genera ReciboAbono vinculado a la
                 # sesión abierta (antes había pagos sin recibo y sin turno).
                 sesion = SesionCaja.objects.filter(usuario=request.user, estado='ABIERTA').first()
+                # Un abono con fecha pasada no pertenece al turno abierto de hoy.
+                if fecha_dia < timezone.localdate():
+                    sesion = None
+
                 if pago.metodo:
                     desglose = [{
                         'metodo_id': pago.metodo.id,
@@ -523,9 +659,11 @@ class RegistrarAbonoCxCAPIView(APIView):
                         'monto_equivalente_usd': float(pago.monto_abono_principal),
                         'referencia': pago.referencia or '',
                     }]
+
                 recibo = ReciboAbono.crear_desde_abonos(
                     cliente=pago.cuenta.cliente,
                     usuario=request.user,
+                    fecha=fecha_dt,
                     tasa_cambio=pago.tasa_cambio_pago,
                     monto_total=pago.monto_abono_principal,
                     desglose_metodos=desglose,
@@ -541,20 +679,20 @@ class RegistrarAbonoCxCAPIView(APIView):
                     referencia=pago.referencia or f"Abono directo a CxC #{pago.cuenta_id}",
                 )
 
-                return Response({
+                respuesta = {
                     "mensaje": "Abono registrado exitosamente",
                     "pago_id": pago.id,
                     "recibo_id": recibo.id,
                     "nuevo_saldo_pendiente": pago.cuenta.saldo_pendiente,
                     "estado_cuenta": pago.cuenta.estado
-                }, status=status.HTTP_201_CREATED)
+                }
 
-            except ValueError as e:
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({"error": "Error interno del servidor."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(respuesta, status=status.HTTP_201_CREATED)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response({"error": "Error interno del servidor."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class DashboardResumenAPIView(APIView):
@@ -864,7 +1002,8 @@ class ClienteDetalleHistorialAPIView(APIView):
                     # Fecha estable del documento (fecha de la venta o fecha del registro de la deuda)
                     "fecha": c.venta.fecha if c.venta else _fecha_doc(c.fecha_creacion or c.fecha_vencimiento),
                     "monto_total": float(c.monto_total),
-                    "tipo_venta": c.venta.tipo if c.venta else "INICIAL"
+                    "tipo_venta": c.venta.tipo if c.venta else "INICIAL",
+                    "estado": c.estado
                 } for c in cxc_pendientes.order_by('fecha_creacion', 'id')],
                 "ventas": documentos,
                 "recibos": recibos_data,
@@ -1774,7 +1913,7 @@ class ImportarExcelRutaAPIView(APIView):
                 })
 
             except Exception as e:
-                print(f"⚠️ Error procesando fila {row_idx}: {e}")
+                logger.warning("Error procesando fila %s: %s", row_idx, e)
                 continue
 
         return Response({
@@ -1904,9 +2043,19 @@ class ReabrirRutaMercadoAPIView(APIView):
                                 "error": f"No se puede reabrir: el crédito de {credito.cliente.nombre} ya tiene pagos registrados."
                             }, status=400)
 
-                # 3. Cambiar estado
+                # 3. Limpiar costos congelados: al volver a cerrar se toma el
+                #    costo vigente en ese momento.
+                ruta.detalles.update(
+                    costo_unitario_usd=None,
+                    costo_total_usd=None,
+                    utilidad_usd=None,
+                    margen_porcentaje=None,
+                )
+
+                # 4. Cambiar estado
                 ruta.estado = 'BORRADOR'
-                ruta.save()
+                ruta.costo_congelado_el = None
+                ruta.save(update_fields=['estado', 'costo_congelado_el'])
 
                 return Response({
                     "mensaje": "Ruta reabierta. Inventario restaurado y CxC eliminadas.",
@@ -2355,7 +2504,7 @@ class ImportarExcelTomaAPIView(APIView):
                     no_encontrados.append(str(detalle_id))
 
             except Exception as e:
-                print(f"⚠️ Error procesando fila {row_idx}: {e}")
+                logger.warning("Error procesando fila %s: %s", row_idx, e)
                 continue
 
         toma.calcular_totales()

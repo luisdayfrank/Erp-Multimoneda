@@ -1,4 +1,5 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime, time
 from rest_framework import serializers
 from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, SesionCaja,
     PagoCuentaCobrar, MetodoPago, PagoVenta, Cliente, Proveedor, PagoCuentaPagar, ConfiguracionGlobal,
@@ -18,6 +19,32 @@ from .models import (Producto, PresentacionProducto, Venta, DetalleVenta, Sesion
     CierreCaja, CierrePorMetodoPago
     )
 from django.utils import timezone
+
+
+def _fecha_local_mediodia(valor):
+    """
+    Convierte una fecha (date/datetime) en datetime consciente de la zona local
+    al mediodía. Se usa para abonos con fecha manual: evita que un
+    'YYYY-MM-DD' se interprete como UTC y termine mostrando el día anterior.
+    Devuelve None si no se recibió fecha (el modelo aplica su default).
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        if timezone.is_naive(valor):
+            return timezone.make_aware(valor)
+        return valor
+    return timezone.make_aware(datetime.combine(valor, time(hour=12)))
+
+
+def _validar_fecha_no_futura(valor):
+    """Permite fecha actual o pasada. Rechaza fechas futuras."""
+    if valor is not None and valor > timezone.localdate():
+        raise serializers.ValidationError(
+            "La fecha del abono no puede ser futura. Solo se permite la fecha actual o una anterior."
+        )
+    return valor
+
 
 # --- SERIALIZADORES DE CAJA ---
 
@@ -154,6 +181,12 @@ class DetalleVentaSerializer(serializers.ModelSerializer):
 
 class PagoVentaSerializer(serializers.ModelSerializer):
     metodo_id = serializers.IntegerField(write_only=True)
+    # El equivalente en moneda principal lo calcula el servidor: si el cliente
+    # lo envía se ignora (antes se guardaba tal cual y permitía pagar 1 Bs
+    # declarando 1000 USD).
+    monto_equivalente_principal = serializers.DecimalField(
+        max_digits=15, decimal_places=2, required=False
+    )
 
     class Meta:
         model = PagoVenta
@@ -164,6 +197,18 @@ class PagoVentaSerializer(serializers.ModelSerializer):
             'tasa_cambio_pago', 
             'referencia'
         ]
+
+    def validate(self, data):
+        monto = data.get('monto_pagado')
+        tasa = data.get('tasa_cambio_pago')
+
+        if monto is None or monto < 0:
+            raise serializers.ValidationError("El monto pagado no puede ser negativo.")
+        if tasa is None or tasa <= 0:
+            raise serializers.ValidationError(
+                "La tasa de cambio del pago debe ser mayor a cero."
+            )
+        return data
 
 class VentaSerializer(serializers.ModelSerializer):
     detalles = DetalleVentaSerializer(many=True, write_only=True)
@@ -301,6 +346,48 @@ class VentaSerializer(serializers.ModelSerializer):
                         "Si son dos ventas realmente iguales, espera unos segundos e intenta de nuevo."
                     )
 
+        # El equivalente en moneda principal NO se toma del navegador: se
+        # recalcula con el método de pago real y la tasa enviada. Se resuelve
+        # ANTES de crear la venta para no dejar una cabecera a medias si un
+        # método no existe.
+        metodos_map = {
+            m.id: m for m in MetodoPago.objects.filter(
+                id__in=[p['metodo_id'] for p in pagos_data]
+            )
+        }
+        pagos_normalizados = []
+        for pago_data in pagos_data:
+            metodo = metodos_map.get(pago_data['metodo_id'])
+            if metodo is None:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError(
+                    f"El método de pago #{pago_data['metodo_id']} no existe."
+                )
+
+            monto = Decimal(str(pago_data['monto_pagado']))
+            tasa_pago = Decimal(str(pago_data['tasa_cambio_pago']))
+            if monto < 0:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError("El monto pagado no puede ser negativo.")
+            if tasa_pago <= 0:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError("La tasa de cambio del pago debe ser mayor a cero.")
+
+            if metodo.moneda_referencia == 'SECUNDARIA':
+                equivalente = (monto / tasa_pago).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP
+                )
+            else:
+                equivalente = monto.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            pagos_normalizados.append({
+                'metodo': metodo,
+                'monto_pagado': monto,
+                'monto_equivalente_principal': equivalente,
+                'tasa_cambio_pago': tasa_pago,
+                'referencia': pago_data.get('referencia', ''),
+            })
+
         venta = Venta.objects.create(
             cliente_id=cliente_id,
             almacen_id=almacen_id,
@@ -325,14 +412,15 @@ class VentaSerializer(serializers.ModelSerializer):
                 subtotal=detalle_data['cantidad_presentacion'] * detalle_data['precio_unitario_aplicado']
             )
 
-        for pago_data in pagos_data:
+        # Pagos ya validados y normalizados arriba (equivalente calculado aquí).
+        for pago in pagos_normalizados:
             PagoVenta.objects.create(
                 venta=venta,
-                metodo_id=pago_data['metodo_id'],
-                monto_pagado=pago_data['monto_pagado'],
-                monto_equivalente_principal=pago_data['monto_equivalente_principal'],
-                tasa_cambio_pago=pago_data['tasa_cambio_pago'],
-                referencia=pago_data.get('referencia', '')
+                metodo=pago['metodo'],
+                monto_pagado=pago['monto_pagado'],
+                monto_equivalente_principal=pago['monto_equivalente_principal'],
+                tasa_cambio_pago=pago['tasa_cambio_pago'],
+                referencia=pago['referencia']
             )
 
         return venta
@@ -341,6 +429,14 @@ class VentaSerializer(serializers.ModelSerializer):
 
 class DetalleCompraSerializer(serializers.ModelSerializer):
     presentacion_id = serializers.IntegerField(write_only=True)
+    # El impuesto sale del producto y el subtotal de cantidad x precio: si el
+    # cliente los envía se recalculan en CompraSerializer.validate().
+    porcentaje_impuesto_aplicado = serializers.DecimalField(
+        max_digits=15, decimal_places=2, required=False
+    )
+    subtotal = serializers.DecimalField(
+        max_digits=15, decimal_places=2, required=False
+    )
 
     class Meta:
         model = DetalleCompra
@@ -361,6 +457,90 @@ class CompraSerializer(serializers.ModelSerializer):
             'subtotal_principal', 'total_impuestos_principal', 
             'total_principal', 'total_secundaria', 'detalles'
         ]
+
+    def validate(self, data):
+        """
+        Recalcula en el servidor la compra completa.
+
+        ANTES se guardaban el subtotal de cada renglón y los totales de la
+        cabecera tal como llegaban del navegador. Un carrito manipulado podía
+        registrar una compra de $1 y meter stock por miles, o declarar un
+        impuesto distinto al del producto. AHORA:
+          - subtotal de línea = cantidad x precio (redondeado a centavos),
+          - impuesto de línea = porcentaje REAL del producto,
+          - totales de cabecera y total_secundaria = suma calculada aquí.
+        """
+        detalles = data.get('detalles') or []
+        if not detalles:
+            raise serializers.ValidationError("La compra debe tener al menos un producto.")
+
+        tasa = data.get('tasa_cambio_historica')
+        if tasa is None or tasa <= 0:
+            raise serializers.ValidationError(
+                "La tasa de cambio histórica debe ser mayor a cero."
+            )
+
+        presentaciones = {
+            p.id: p for p in PresentacionProducto.objects.select_related(
+                'producto__impuesto'
+            ).filter(id__in=[d.get('presentacion_id') for d in detalles])
+        }
+
+        subtotal_calc = Decimal('0.00')
+        impuestos_calc = Decimal('0.00')
+
+        for d in detalles:
+            presentacion = presentaciones.get(d.get('presentacion_id'))
+            if presentacion is None:
+                raise serializers.ValidationError(
+                    f"La presentación #{d.get('presentacion_id')} no existe."
+                )
+
+            cantidad = d.get('cantidad_presentacion')
+            precio = d.get('precio_unitario_aplicado')
+            if cantidad is None or cantidad <= 0:
+                raise serializers.ValidationError(
+                    "Hay un producto con cantidad igual o menor a cero."
+                )
+            if precio is None or precio < 0:
+                raise serializers.ValidationError("Hay un producto con precio negativo.")
+
+            porcentaje = Decimal(str(presentacion.producto.impuesto.porcentaje))
+            linea = (cantidad * precio).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            # Estos dos valores ya no se confían al navegador.
+            d['porcentaje_impuesto_aplicado'] = porcentaje
+            d['subtotal'] = linea
+
+            subtotal_calc += linea
+            impuestos_calc += (linea * porcentaje / Decimal('100')).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP
+            )
+
+        total_calc = subtotal_calc + impuestos_calc
+        total_secundaria_calc = (total_calc * tasa).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+
+        # Si el cliente envió un total, se contrasta para detectar un carrito
+        # corrupto (catálogo desactualizado, precio mal tipeado). La tolerancia
+        # cubre solo el redondeo de centavos.
+        total_recibido = data.get('total_principal')
+        if total_recibido is not None:
+            tolerancia = max(Decimal('0.50'), total_calc * Decimal('0.02'))
+            if abs(total_calc - total_recibido) > tolerancia:
+                raise serializers.ValidationError(
+                    f"Total inconsistente: con los productos enviados el sistema "
+                    f"calcula ${total_calc:.2f} pero se recibió ${total_recibido:.2f}. "
+                    "Revisa cantidades, costos e impuestos antes de registrar."
+                )
+
+        data['subtotal_principal'] = subtotal_calc
+        data['total_impuestos_principal'] = impuestos_calc
+        data['total_principal'] = total_calc
+        data['total_secundaria'] = total_secundaria_calc
+
+        return data
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles')
@@ -393,24 +573,36 @@ class PagoCuentaCobrarSerializer(serializers.ModelSerializer):
     metodo = serializers.PrimaryKeyRelatedField(
         queryset=MetodoPago.objects.all(), required=False, allow_null=True
     )
+    # Fecha manual del abono: actual o pasada (nunca futura).
+    fecha = serializers.DateField(required=False, allow_null=True)
 
     class Meta:
         model = PagoCuentaCobrar
         fields = [
             'cuenta', 'monto_abono_principal', 'monto_entregado_secundaria', 
-            'tasa_cambio_pago', 'referencia', 'metodo'
+            'tasa_cambio_pago', 'referencia', 'metodo', 'fecha'
         ]
+
+    def validate_fecha(self, value):
+        return _validar_fecha_no_futura(value)
 
     def create(self, validated_data):
         usuario = self.context['request'].user
+        fecha_dia = validated_data.pop('fecha', None)
         # FASE 1B: abono directo → origen='ABONO_CXC' y sesión abierta del usuario
         # (null si no hay turno abierto: se marca como offline, no suma al arqueo).
         sesion = SesionCaja.objects.filter(usuario=usuario, estado='ABIERTA').first()
+        # Un abono retroactivo no pertenece al turno abierto de hoy.
+        if fecha_dia is not None and fecha_dia < timezone.localdate():
+            sesion = None
+        datos = dict(validated_data)
+        if fecha_dia is not None:
+            datos['fecha'] = _fecha_local_mediodia(fecha_dia)
         pago = PagoCuentaCobrar.objects.create(
             usuario=usuario,
             origen='ABONO_CXC',
             sesion_caja=sesion,
-            **validated_data
+            **datos
         )
         return pago
 
@@ -458,6 +650,8 @@ class AbonoMasivoSerializer(serializers.Serializer):
     cliente_id = serializers.IntegerField(required=True)
     tasa_cambio = serializers.DecimalField(max_digits=15, decimal_places=2, required=False, allow_null=True)
     guardar_saldo_favor = serializers.BooleanField(default=False)
+    # Fecha manual del abono: actual o pasada (nunca futura).
+    fecha = serializers.DateField(required=False, allow_null=True)
 
     pagos = serializers.ListField(
         child=serializers.DictField(
@@ -482,7 +676,59 @@ class AbonoMasivoSerializer(serializers.Serializer):
 
     def validate(self, data):
         tasa = data.get('tasa_cambio')
+        _validar_fecha_no_futura(data.get('fecha'))
         return data
+
+class ReciboAbonoAplicacionSerializer(serializers.ModelSerializer):
+    cuenta_id = serializers.IntegerField(read_only=True)
+    venta_id = serializers.SerializerMethodField()
+    cliente_id = serializers.SerializerMethodField()
+    cliente_nombre = serializers.SerializerMethodField()
+    saldo_pendiente_actual = serializers.SerializerMethodField()
+    origen_dinero_display = serializers.CharField(source='get_origen_dinero_display', read_only=True)
+
+    class Meta:
+        model = ReciboAbonoAplicacion
+        fields = [
+            'id', 'cuenta_id', 'venta_id', 'cliente_id', 'cliente_nombre',
+            'monto_aplicado', 'saldo_antes', 'saldo_despues',
+            'saldo_pendiente_actual', 'saldo_la_factura',
+            'origen_dinero', 'origen_dinero_display',
+        ]
+
+    def get_venta_id(self, obj):
+        return obj.cuenta.venta_id if obj.cuenta else None
+
+    def get_cliente_id(self, obj):
+        return obj.cuenta.cliente_id if obj.cuenta else None
+
+    def get_cliente_nombre(self, obj):
+        return obj.cuenta.cliente.nombre if obj.cuenta and obj.cuenta.cliente else None
+
+    def get_saldo_pendiente_actual(self, obj):
+        return float(obj.cuenta.saldo_pendiente) if obj.cuenta else 0.0
+
+
+class ReciboAbonoDetalleSerializer(serializers.ModelSerializer):
+    """
+    Detalle completo de un recibo de abono: métodos usados, facturas afectadas
+    y saldos antes/después de cada aplicación.
+    """
+    cliente = serializers.IntegerField(source='cliente_id', read_only=True)
+    cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    aplicaciones = ReciboAbonoAplicacionSerializer(many=True, read_only=True)
+    total_aplicado = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    facturas_afectadas_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ReciboAbono
+        fields = [
+            'id', 'cliente', 'cliente_nombre', 'usuario', 'usuario_nombre', 'fecha',
+            'monto_total_entregado', 'desglose_metodos', 'tasa_cambio',
+            'sobrante_a_favor', 'referencia', 'origen', 'venta_origen', 'sesion_caja',
+            'aplicaciones', 'total_aplicado', 'facturas_afectadas_count',
+        ]
 
 class ProveedorSerializer(serializers.ModelSerializer):
     class Meta:
@@ -588,14 +834,58 @@ class RutaMercadoDetalleSerializer(serializers.ModelSerializer):
     cantidad_vendida = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
     subtotal_bs = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
     subtotal_usd = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    costo_unitario_usd = serializers.SerializerMethodField()
+    costo_total_usd = serializers.SerializerMethodField()
+    utilidad_usd = serializers.SerializerMethodField()
+    margen_porcentaje = serializers.SerializerMethodField()
 
     class Meta:
         model = RutaMercadoDetalle
         fields = [
             'id', 'presentacion', 'presentacion_id', 'nombre_producto', 'nombre_presentacion',
             'cantidad_salida', 'cantidad_entrada', 'cantidad_vendida',
-            'precio_venta_bs', 'subtotal_bs', 'subtotal_usd'
+            'precio_venta_bs', 'subtotal_bs', 'subtotal_usd',
+            'costo_unitario_usd', 'costo_total_usd', 'utilidad_usd', 'margen_porcentaje'
         ]
+
+    @staticmethod
+    def _rentabilidad(obj):
+        """
+        Si la ruta ya se cerró, usa los valores congelados. Si sigue en
+        borrador, calcula en vivo con el costo actual de la presentación.
+        """
+        if obj.costo_unitario_usd is not None:
+            return (
+                float(obj.costo_unitario_usd or 0),
+                float(obj.costo_total_usd or 0),
+                float(obj.utilidad_usd or 0),
+                float(obj.margen_porcentaje or 0),
+            )
+
+        costo_unit = obj.presentacion.costo_presentacion or Decimal('0.00')
+        cantidad = obj.cantidad_vendida
+        costo_total = cantidad * costo_unit
+        venta = obj.subtotal_usd
+        utilidad = venta - costo_total
+        margen = (utilidad / venta * Decimal('100')) if venta > 0 else Decimal('0.00')
+        return (
+            float(costo_unit),
+            float(costo_total),
+            float(utilidad),
+            float(margen),
+        )
+
+    def get_costo_unitario_usd(self, obj):
+        return self._rentabilidad(obj)[0]
+
+    def get_costo_total_usd(self, obj):
+        return self._rentabilidad(obj)[1]
+
+    def get_utilidad_usd(self, obj):
+        return self._rentabilidad(obj)[2]
+
+    def get_margen_porcentaje(self, obj):
+        return self._rentabilidad(obj)[3]
 
     def get_nombre_presentacion(self, obj):
         factor = int(obj.presentacion.factor_conversion) if obj.presentacion.factor_conversion % 1 == 0 else float(obj.presentacion.factor_conversion)
@@ -622,6 +912,16 @@ class RutaMercadoPagoSerializer(serializers.ModelSerializer):
         model = RutaMercadoPago
         fields = ['id', 'metodo', 'metodo_id', 'metodo_nombre', 'monto_bs', 'monto_usd_equivalente', 'referencia']
 
+    def validate_monto_bs(self, value):
+        # Decisión de negocio: los montos negativos son válidos. Representan
+        # efectivo llevado a la ruta que no proviene de la venta y se resta al
+        # efectivo que regresa. Solo se rechaza el cero (no aporta información).
+        if value == Decimal('0.00'):
+            raise serializers.ValidationError(
+                "El monto del pago no puede ser cero. Usa un monto negativo si es un ajuste de efectivo llevado."
+            )
+        return value
+
 
 class RutaMercadoGastoSerializer(serializers.ModelSerializer):
     concepto = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -638,6 +938,11 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
     pagos = RutaMercadoPagoSerializer(many=True, required=False)
     gastos = RutaMercadoGastoSerializer(many=True, required=False)
     usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+    total_pagos_recibidos_bs = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    diferencia_usd = serializers.SerializerMethodField()
+    total_costo_usd = serializers.SerializerMethodField()
+    total_utilidad_usd = serializers.SerializerMethodField()
+    margen_porcentaje = serializers.SerializerMethodField()
 
     class Meta:
         model = RutaMercado
@@ -645,8 +950,10 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             'id', 'fecha', 'usuario', 'usuario_nombre', 'estado', 'almacen', 'tasa_cambio',
             'total_venta_bs', 'total_venta_usd',
             'total_efectivo_bs', 'total_pago_movil_bs', 'total_punto_venta_bs',
+            'total_pagos_recibidos_bs',
             'total_cobranzas_bs', 'total_creditos_bs', 'total_gastos_bs',
-            'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs',
+            'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs', 'diferencia_usd',
+            'total_costo_usd', 'total_utilidad_usd', 'margen_porcentaje', 'costo_congelado_el',
             'observacion',
             'detalles', 'creditos', 'pagos', 'gastos'
         ]
@@ -657,7 +964,64 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             'total_creditos_bs', 'total_gastos_bs',
             'recaudado_esperado_bs', 'recaudado_real_bs', 'diferencia_bs'
         ]
-    
+
+    def get_diferencia_usd(self, obj):
+        if obj.tasa_cambio and obj.tasa_cambio > 0:
+            return float(obj.diferencia_bs / obj.tasa_cambio)
+        return 0.0
+
+    @staticmethod
+    def _rentabilidad_ruta(obj):
+        """Costo, utilidad y margen totales (congelados si la ruta está cerrada)."""
+        costo_total = Decimal('0.00')
+        venta_total = Decimal('0.00')
+        for detalle in obj.detalles.all():
+            if detalle.costo_unitario_usd is not None:
+                costo = detalle.costo_total_usd or Decimal('0.00')
+            else:
+                costo = detalle.cantidad_vendida * (
+                    detalle.presentacion.costo_presentacion or Decimal('0.00')
+                )
+            costo_total += costo
+            venta_total += detalle.subtotal_usd
+
+        utilidad_total = venta_total - costo_total
+        margen = (
+            (utilidad_total / venta_total * Decimal('100'))
+            if venta_total > 0 else Decimal('0.00')
+        )
+        return costo_total, utilidad_total, margen
+
+    def get_total_costo_usd(self, obj):
+        return float(self._rentabilidad_ruta(obj)[0])
+
+    def get_total_utilidad_usd(self, obj):
+        return float(self._rentabilidad_ruta(obj)[1])
+
+    def get_margen_porcentaje(self, obj):
+        return float(self._rentabilidad_ruta(obj)[2])
+
+    @staticmethod
+    def _pagos_normalizados(pagos_data, tasa_cambio):
+        """
+        Recalcula en servidor la equivalencia en dólares desde monto_bs / tasa.
+        No se confía en el valor que envía el navegador, y así un ajuste
+        negativo también queda negativo en USD.
+        """
+        normalizados = []
+        for pago in pagos_data:
+            datos = dict(pago)
+            monto_bs = datos.get('monto_bs')
+            if monto_bs is not None:
+                if tasa_cambio and tasa_cambio > 0:
+                    datos['monto_usd_equivalente'] = (
+                        Decimal(str(monto_bs)) / tasa_cambio
+                    ).quantize(Decimal('0.01'))
+                else:
+                    datos['monto_usd_equivalente'] = Decimal('0.00')
+            normalizados.append(datos)
+        return normalizados
+
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])
         creditos_data = validated_data.pop('creditos', [])
@@ -675,7 +1039,7 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
             RutaMercadoDetalle.objects.create(ruta=ruta, **d)
         for c in creditos_data:
             RutaMercadoCredito.objects.create(ruta=ruta, **c)
-        for p in pagos_data:
+        for p in self._pagos_normalizados(pagos_data, ruta.tasa_cambio):
             RutaMercadoPago.objects.create(ruta=ruta, **p)
         for g in gastos_data:
             RutaMercadoGasto.objects.create(ruta=ruta, **g)
@@ -748,7 +1112,7 @@ class RutaMercadoSerializer(serializers.ModelSerializer):
 
         if pagos_data is not None:
             instance.pagos.all().delete()
-            for p in pagos_data:
+            for p in self._pagos_normalizados(pagos_data, instance.tasa_cambio):
                 RutaMercadoPago.objects.create(ruta=instance, **p)
 
         if gastos_data is not None:

@@ -486,10 +486,13 @@ class CompraAdmin(admin.ModelAdmin):
             except Compra.DoesNotExist:
                 estado_anterior = None
 
-        super().save_model(request, obj, form, change)
+        # El estado previo se guarda en memoria y los movimientos se aplican
+        # en save_related(): allí los renglones del inline ya existen y los
+        # totales están recalculados. Antes se aplicaba aquí y el stock/costo
+        # se calculaba con una compra todavía sin detalles.
+        obj._estado_anterior_compra = estado_anterior
 
-        if obj.estado == "PROCESADA" and estado_anterior != "PROCESADA":
-            obj._aplicar_movimientos_compra()
+        super().save_model(request, obj, form, change)
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
@@ -523,6 +526,12 @@ class CompraAdmin(admin.ModelAdmin):
                 "total_secundaria",
             ]
         )
+
+        # Recién ahora, con detalles y totales definitivos, se ingresan las
+        # unidades al inventario y se crea la CxP si corresponde.
+        estado_anterior = getattr(compra, "_estado_anterior_compra", None)
+        if compra.estado == "PROCESADA" and estado_anterior != "PROCESADA":
+            compra._aplicar_movimientos_compra()
 
     class Media:
         js = ("nucleo/js/compra_admin.js",)

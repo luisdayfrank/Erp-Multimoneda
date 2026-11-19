@@ -1172,9 +1172,16 @@ class Venta(TransaccionBase):
                 inventario.stock_actual_unidades_base += cantidad_reversar_base
                 inventario.save()
 
-            # 2. Eliminar o anular Cuenta por Cobrar
+            # 2. Anular la Cuenta por Cobrar SIN borrarla.
+            #    Antes se hacía .delete() y el CASCADE se llevaba por delante
+            #    todos los abonos (PagoCuentaCobrar) y con ellos la evidencia
+            #    de que el cliente había pagado. Ahora la deuda se marca
+            #    ANULADA con saldo cero y el historial de pagos se conserva.
             if hasattr(self, 'cuentaporcobrar'):
-                self.cuentaporcobrar.delete() # O cambiar su estado a 'ANULADA' según tu regla de negocio
+                cxc = self.cuentaporcobrar
+                cxc.estado = 'ANULADA'
+                cxc.saldo_pendiente = Decimal('0.00')
+                cxc.save(update_fields=['estado', 'saldo_pendiente'])
 
             # 3. Cambiar estado
             self.estado = 'ANULADA'
@@ -1297,6 +1304,7 @@ class CuentaBase(models.Model):
         ('PENDIENTE', 'Pendiente'),
         ('PAGADA', 'Pagada'),
         ('VENCIDA', 'Vencida'),
+        ('ANULADA', 'Anulada'),
     )
     monto_total = models.DecimalField(max_digits=15, decimal_places=2)
     saldo_pendiente = models.DecimalField(max_digits=15, decimal_places=2)
@@ -1317,7 +1325,9 @@ class CuentaBase(models.Model):
 
 class CuentaPorCobrar(CuentaBase):
     # >>> MODIFICADO: venta es opcional para permitir deudas iniciales <<<
-    venta = models.OneToOneField(Venta, on_delete=models.CASCADE, null=True, blank=True)
+    # PROTECT: borrar una venta ya no puede arrastrar en cascada su CxC, sus
+    # abonos y los recibos asociados. Si hace falta anular, se usa anular_venta().
+    venta = models.OneToOneField(Venta, on_delete=models.PROTECT, null=True, blank=True)
     cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE)
     # >>> NUEVO: distingue la deuda inicial de los créditos de ruta <<<
     es_deuda_inicial = models.BooleanField(
@@ -1333,7 +1343,9 @@ class CuentaPorCobrar(CuentaBase):
         return f"CxC Crédito de Ruta - {self.cliente.nombre} - Saldo: {self.saldo_pendiente}"
 
 class CuentaPorPagar(CuentaBase):
-    compra = models.OneToOneField(Compra, on_delete=models.CASCADE)
+    # PROTECT: borrar una compra ya no puede arrastrar en cascada su CxP, sus
+    # pagos y los recibos asociados. Si hace falta anular, se usa anular_compra().
+    compra = models.OneToOneField(Compra, on_delete=models.PROTECT)
     proveedor = models.ForeignKey(Proveedor, on_delete=models.CASCADE)
 
     def __str__(self):
@@ -1372,7 +1384,9 @@ class PagoBase(models.Model):
         abstract = True
 
 class PagoCuentaCobrar(PagoBase):
-    cuenta = models.ForeignKey(CuentaPorCobrar, on_delete=models.CASCADE, related_name='pagos')
+    # PROTECT: un abono nunca debe desaparecer porque se borre la cuenta.
+    # Es evidencia de dinero recibido y debe conservarse.
+    cuenta = models.ForeignKey(CuentaPorCobrar, on_delete=models.PROTECT, related_name='pagos')
     usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, help_text="Cajero que recibió el pago")
     # >>> FASE 1A: sesión de caja en la que se recibió este abono <<<
     # null si fue registrado por admin/offline (no suma al arqueo de ningún turno).
@@ -1403,6 +1417,8 @@ class PagoCuentaCobrar(PagoBase):
         """Aplica el abono a la cuenta del cliente y actualiza su estado."""
         from django.db import transaction
         with transaction.atomic():
+            if self.cuenta.estado == 'ANULADA':
+                raise ValueError("Esta cuenta fue anulada y no admite abonos.")
             if self.cuenta.estado == 'PAGADA':
                 raise ValueError("Esta cuenta ya está totalmente pagada.")
 
@@ -1603,6 +1619,10 @@ class RutaMercado(models.Model):
     recaudado_real_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     diferencia_bs = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
 
+    # Momento en que se congelaron costo/utilidad de los detalles (al cerrar).
+    # Si está vacío, la ruta sigue en borrador y la rentabilidad se calcula en vivo.
+    costo_congelado_el = models.DateTimeField(null=True, blank=True)
+
     observacion = models.TextField(blank=True)
 
     class Meta:
@@ -1615,8 +1635,12 @@ class RutaMercado(models.Model):
 
     @property
     def total_pagos_recibidos_bs(self):
-        """Suma de efectivo + pago móvil + punto de venta"""
-        return self.total_efectivo_bs + self.total_pago_movil_bs + self.total_punto_venta_bs
+        """
+        Total de pagos de la ruta, sumando TODOS los métodos (no solo efectivo,
+        móvil y punto) e incluyendo los ajustes negativos. Un monto negativo
+        representa efectivo llevado a la ruta que no es de la venta.
+        """
+        return sum((p.monto_bs for p in self.pagos.all()), Decimal('0.00'))
 
     def calcular_totales(self):
         """Recalcula totales desde los detalles y pagos."""
@@ -1646,7 +1670,7 @@ class RutaMercado(models.Model):
         # ═══════════════════════════════════════════════════════
         # VENTA           = total_venta_bs
         # TOTAL RECAUDADO = Pagos + Créditos + Gastos - Cobranzas
-        # DIFERENCIA      = Venta - Total Recaudado
+        # DIFERENCIA      = Total Recaudado - Venta
         # ═══════════════════════════════════════════════════════
         total_recaudado = (
             self.total_pagos_recibidos_bs
@@ -1660,7 +1684,10 @@ class RutaMercado(models.Model):
         self.diferencia_bs = total_recaudado - self.total_venta_bs
 
     def cerrar_ruta(self):
-        """Procesa el cierre: descuenta inventario, crea CxC, bloquea edición."""
+        """
+        Procesa el cierre: descuenta inventario, congela costo/utilidad,
+        crea las CxC de los créditos (aplicando saldo a favor) y bloquea edición.
+        """
         from django.db import transaction
 
         with transaction.atomic():
@@ -1670,7 +1697,7 @@ class RutaMercado(models.Model):
             self.calcular_totales()
 
             # 1. Descontar del inventario SOLO lo vendido (salida - entrada)
-            for detalle in self.detalles.all():
+            for detalle in self.detalles.select_related('presentacion'):
                 cantidad_vendida = detalle.cantidad_vendida
                 if cantidad_vendida <= Decimal('0.00'):
                     continue
@@ -1694,27 +1721,111 @@ class RutaMercado(models.Model):
                 inventario.stock_actual_unidades_base -= cantidad_base
                 inventario.save()
 
-            # 2. Crear Cuentas por Cobrar por cada crédito
-            for credito in self.creditos.all():
-                if credito.cuenta_cobrar:
+            # 2. Congelar costo, utilidad y margen de cada detalle.
+            #    Se usa el costo vigente AL CERRAR. Reabrir limpia estos campos.
+            for detalle in self.detalles.select_related('presentacion'):
+                cantidad = detalle.cantidad_vendida
+                costo_unit = detalle.presentacion.costo_presentacion or Decimal('0.00')
+                costo_total = (cantidad * costo_unit).quantize(Decimal('0.01'))
+                venta_usd = (
+                    (detalle.subtotal_bs / self.tasa_cambio).quantize(Decimal('0.01'))
+                    if self.tasa_cambio > 0 else Decimal('0.00')
+                )
+                utilidad = (venta_usd - costo_total).quantize(Decimal('0.01'))
+                margen = (
+                    ((utilidad / venta_usd) * Decimal('100')).quantize(Decimal('0.01'))
+                    if venta_usd > 0 else Decimal('0.00')
+                )
+
+                detalle.costo_unitario_usd = Decimal(costo_unit).quantize(Decimal('0.0001'))
+                detalle.costo_total_usd = costo_total
+                detalle.utilidad_usd = utilidad
+                detalle.margen_porcentaje = margen
+                detalle.save(update_fields=[
+                    'costo_unitario_usd', 'costo_total_usd',
+                    'utilidad_usd', 'margen_porcentaje'
+                ])
+
+            self.costo_congelado_el = timezone.now()
+
+            # 3. Crear Cuentas por Cobrar por cada crédito, aplicando el saldo
+            #    a favor del cliente antes de dejar la deuda pendiente.
+            fecha_ruta = (
+                timezone.localtime(self.fecha).date() if self.fecha else timezone.localdate()
+            )
+
+            for credito in self.creditos.select_related('cliente'):
+                if credito.cuenta_cobrar_id:
                     continue  # Ya fue creada
+
+                monto_usd = (
+                    (credito.monto_bs / self.tasa_cambio).quantize(Decimal('0.01'))
+                    if self.tasa_cambio > 0 else Decimal('0.00')
+                )
+
+                cliente = Cliente.objects.select_for_update().get(pk=credito.cliente_id)
+                saldo_favor = cliente.saldo_a_favor or Decimal('0.00')
+                aplicar = min(saldo_favor, monto_usd)
+                saldo_pendiente = (monto_usd - aplicar).quantize(Decimal('0.01'))
 
                 cxc = CuentaPorCobrar.objects.create(
                     venta=None,  # Crédito de ruta: deuda sin venta asociada
-                    es_deuda_inicial=False,  # NO es deuda inicial, es crédito de ruta
-                    cliente=credito.cliente,
-                    monto_total=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
-                    saldo_pendiente=credito.monto_bs / self.tasa_cambio if self.tasa_cambio > 0 else Decimal('0.00'),
-                    estado='PENDIENTE',
-                    fecha_creacion=timezone.localdate(),
+                    es_deuda_inicial=False,
+                    cliente=cliente,
+                    monto_total=monto_usd,
+                    saldo_pendiente=saldo_pendiente,
+                    estado='PAGADA' if saldo_pendiente <= Decimal('0.00') else 'PENDIENTE',
+                    fecha_creacion=fecha_ruta,
                 )
-                credito.cuenta_cobrar = cxc
-                credito.save()
 
-            # 3. Cambiar estado
+                if aplicar > Decimal('0.00'):
+                    PagoCuentaCobrar.objects.create(
+                        cuenta=cxc,
+                        usuario=self.usuario,
+                        fecha=self.fecha,
+                        monto_abono_principal=aplicar,
+                        monto_entregado_secundaria=Decimal('0.00'),
+                        tasa_cambio_pago=self.tasa_cambio,
+                        metodo=None,
+                        sesion_caja=None,
+                        origen='SALDO_FAVOR',
+                        referencia='Saldo a favor aplicado al crédito de ruta',
+                    )
+
+                    cliente.saldo_a_favor = saldo_favor - aplicar
+                    cliente.save(update_fields=['saldo_a_favor'])
+
+                    ReciboAbono.crear_desde_abonos(
+                        cliente=cliente,
+                        usuario=self.usuario,
+                        fecha=self.fecha,
+                        tasa_cambio=self.tasa_cambio,
+                        monto_total=aplicar,
+                        desglose_metodos=[{
+                            'metodo_id': None,
+                            'moneda': 'SALDO_FAVOR',
+                            'monto_pagado': float(aplicar),
+                            'monto_equivalente_usd': float(aplicar),
+                            'referencia': 'Saldo a favor aplicado al crédito de ruta',
+                        }],
+                        origen='RUTA_MERCADO',
+                        abonos_list=[{
+                            'cxc': cxc,
+                            'monto_aplicado': aplicar,
+                            'saldo_antes': monto_usd,
+                            'saldo_despues': saldo_pendiente,
+                            'origen_dinero': 'SALDO_FAVOR',
+                        }],
+                        sesion_caja=None,
+                        referencia=f"Saldo a favor aplicado al crédito de ruta #{credito.id}",
+                    )
+
+                credito.cuenta_cobrar = cxc
+                credito.save(update_fields=['cuenta_cobrar'])
+
+            # 4. Cambiar estado
             self.estado = 'CERRADA'
             self.save()
-
 
 class RutaMercadoDetalle(models.Model):
     ruta = models.ForeignKey(RutaMercado, on_delete=models.CASCADE, related_name='detalles')
@@ -1723,6 +1834,13 @@ class RutaMercadoDetalle(models.Model):
     cantidad_salida = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
     cantidad_entrada = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
     precio_venta_bs = models.DecimalField(max_digits=15, decimal_places=4, default=Decimal('0.0000'))
+
+    # Rentabilidad congelada al cerrar la ruta. Se guarda con el costo vigente
+    # en ese momento para que un cambio posterior de costo no altere el histórico.
+    costo_unitario_usd = models.DecimalField(max_digits=15, decimal_places=4, null=True, blank=True)
+    costo_total_usd = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    utilidad_usd = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    margen_porcentaje = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
 
     class Meta:
         verbose_name = "Detalle de Ruta"
@@ -2086,7 +2204,8 @@ class ReciboAbono(models.Model):
     @classmethod
     def crear_desde_abonos(cls, cliente, usuario, tasa_cambio, monto_total, 
                            desglose_metodos, origen, abonos_list, venta_origen=None, 
-                           sobrante=Decimal('0.00'), referencia='', sesion_caja=None):
+                           sobrante=Decimal('0.00'), referencia='', sesion_caja=None,
+                           fecha=None):
         """
         Crea un ReciboAbono + sus aplicaciones a partir de una lista de abonos ya ejecutados.
         Cada item de abonos_list debe ser: {
@@ -2103,6 +2222,7 @@ class ReciboAbono(models.Model):
             recibo = cls.objects.create(
                 cliente=cliente,
                 usuario=usuario,
+                fecha=fecha or timezone.now(),
                 monto_total_entregado=monto_total,
                 desglose_metodos=desglose_metodos,
                 tasa_cambio=tasa_cambio,

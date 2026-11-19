@@ -10,8 +10,6 @@ let tasaActual = 1.00;
 // =============================================================================
 let payloadCompraPendiente = null;
 let listaCambiosDetectados = [];
-// Evita registrar dos veces la misma compra (doble clic o modal de costos).
-let compraEnCurso = false;
 
 document.addEventListener('DOMContentLoaded', () => {
     cargarDatosIniciales();
@@ -220,10 +218,6 @@ function calcularTotales() {
 // PROCESAR Y ENVIAR AL BACKEND (INTERCEPTADO)
 // ==============================================================================
 async function procesarCompra() {
-    if (compraEnCurso) {
-        console.warn('Registro de compra ya en curso.');
-        return;
-    }
     const proveedorId = document.getElementById('compra-proveedor').value;
     if (!proveedorId) { alert("Por favor, selecciona un proveedor."); return; }
     if (carritoCompra.length === 0) { alert("El carrito de compras está vacío."); return; }
@@ -324,7 +318,6 @@ function inicializarEventosModal() {
     const btnOmitir = document.getElementById('btn-omitir-costos');
     if (btnOmitir) {
         btnOmitir.addEventListener('click', () => {
-            if (compraEnCurso) return;
             const modalEl = document.getElementById('modalAlertaCostos');
             bootstrap.Modal.getInstance(modalEl).hide();
             ejecutarGuardadoCompra();
@@ -334,8 +327,6 @@ function inicializarEventosModal() {
     const btnConfirmar = document.getElementById('btn-confirmar-costos');
     if (btnConfirmar) {
         btnConfirmar.addEventListener('click', async () => {
-            if (compraEnCurso) return;
-            setBotonProcesando(btnConfirmar, true, 'Aplicando...');
             const checkboxes = document.querySelectorAll('.chk-costo-update');
             const cambiosAProcesar = [];
 
@@ -360,7 +351,6 @@ function inicializarEventosModal() {
                 }
             }
 
-            setBotonProcesando(btnConfirmar, false);
             const modalEl = document.getElementById('modalAlertaCostos');
             bootstrap.Modal.getInstance(modalEl).hide();
             ejecutarGuardadoCompra();
@@ -370,10 +360,9 @@ function inicializarEventosModal() {
 
 // 4. GUARDADO FINAL DE LA TRANSACCIÓN DE COMPRA
 async function ejecutarGuardadoCompra() {
-    if (compraEnCurso) return;
     const btn = document.getElementById('btn-procesar-compra');
-    compraEnCurso = true;
-    setBotonProcesando(btn, true, 'Registrando...');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Registrando...';
 
     try {
         const respuesta = await apiFetch('/compras/registrar/', 'POST', payloadCompraPendiente);
@@ -388,7 +377,7 @@ async function ejecutarGuardadoCompra() {
         alert("Error al procesar la compra:\n" + (error.detail || error.error || error.messageForUser || "Revisa los logs del servidor."));
         console.error(error);
     } finally {
-        compraEnCurso = false;
-        setBotonProcesando(btn, false);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> REGISTRAR COMPRA E INGRESAR STOCK';
     }
 }

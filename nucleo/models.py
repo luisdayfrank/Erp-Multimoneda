@@ -1763,16 +1763,24 @@ class RutaMercado(models.Model):
                     if self.tasa_cambio > 0 else Decimal('0.00')
                 )
 
+                # Bloquear el cliente para evitar condiciones de carrera si hay
+                # varios créditos del mismo cliente en la misma ruta.
                 cliente = Cliente.objects.select_for_update().get(pk=credito.cliente_id)
                 saldo_favor = cliente.saldo_a_favor or Decimal('0.00')
+
+                # Aplicar primero el saldo a favor del cliente (si existe).
                 aplicar = min(saldo_favor, monto_usd)
                 saldo_pendiente = (monto_usd - aplicar).quantize(Decimal('0.01'))
 
+                # monto_total refleja la deuda REAL que queda tras aplicar el
+                # saldo a favor, no el monto bruto del crédito. Así no queda
+                # una CxC "deudora" por el monto completo cuando el cliente
+                # ya pagó parte (o todo) con su saldo a favor.
                 cxc = CuentaPorCobrar.objects.create(
                     venta=None,  # Crédito de ruta: deuda sin venta asociada
                     es_deuda_inicial=False,
                     cliente=cliente,
-                    monto_total=monto_usd,
+                    monto_total=saldo_pendiente,
                     saldo_pendiente=saldo_pendiente,
                     estado='PAGADA' if saldo_pendiente <= Decimal('0.00') else 'PENDIENTE',
                     fecha_creacion=fecha_ruta,
@@ -1792,7 +1800,11 @@ class RutaMercado(models.Model):
                         referencia='Saldo a favor aplicado al crédito de ruta',
                     )
 
-                    cliente.saldo_a_favor = saldo_favor - aplicar
+                    # Reducir el saldo a favor del cliente por lo consumido.
+                    nuevo_saldo_favor = saldo_favor - aplicar
+                    if nuevo_saldo_favor < Decimal('0.00'):
+                        nuevo_saldo_favor = Decimal('0.00')
+                    cliente.saldo_a_favor = nuevo_saldo_favor
                     cliente.save(update_fields=['saldo_a_favor'])
 
                     ReciboAbono.crear_desde_abonos(

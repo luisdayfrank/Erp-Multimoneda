@@ -346,6 +346,8 @@ class RegistrarAbonoMasivoAPIView(APIView):
         guardar_saldo_favor = serializer.validated_data.get('guardar_saldo_favor', False)
         fecha_dia = serializer.validated_data.get('fecha')
         fecha_dt = _fecha_abono_dt(fecha_dia) or timezone.now()
+        referencia = (serializer.validated_data.get('referencia') or '').strip()
+        idempotency_key = (serializer.validated_data.get('idempotency_key') or '').strip() or None
 
         # CORRECCIÓN: Definir tolerancia global para toda la operación
         TOLERANCIA = Decimal('0.01')
@@ -355,6 +357,26 @@ class RegistrarAbonoMasivoAPIView(APIView):
             cliente = Cliente.objects.select_for_update().get(pk=cliente_id)
         except Cliente.DoesNotExist:
             return Response({"error": "Cliente no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Idempotencia: si este mismo intento ya se registró (doble clic o
+        # reintento por internet lento), devolvemos el resultado sin volver a
+        # descontar deuda ni crear otro recibo. select_for_update garantiza que
+        # un segundo envío concurrente espere y vea el recibo ya confirmado.
+        if idempotency_key:
+            recibo_existente = ReciboAbono.objects.select_for_update().filter(
+                cliente=cliente,
+                idempotency_key=idempotency_key
+            ).first()
+            if recibo_existente:
+                return Response({
+                    "mensaje": "Este abono ya había sido registrado. No se duplicó.",
+                    "duplicado": True,
+                    "recibo_id": recibo_existente.id,
+                    "total_abono": float(recibo_existente.monto_total_entregado),
+                    "facturas_afectadas": [],
+                    "saldo_a_favor": float(cliente.saldo_a_favor),
+                    "saldo_sobrante_guardado": float(recibo_existente.sobrante_a_favor),
+                }, status=status.HTTP_200_OK)
 
         # Resolver métodos en lote (antes: una consulta por cada pago).
         # Nota: el serializer entrega los valores del DictField como texto, así
@@ -407,9 +429,10 @@ class RegistrarAbonoMasivoAPIView(APIView):
             desglose_metodos.append({
                 'metodo_id': metodo.id,
                 'metodo_nombre': metodo.nombre,
+                'moneda': metodo.moneda_referencia,
                 'monto_pagado': float(monto),
                 'monto_equivalente_usd': float(monto_usd),
-                'referencia': pago.get('referencia', '')
+                'referencia': str(pago.get('referencia') or referencia or '')
             })
 
         if total_abono_usd <= Decimal('0.00'):
@@ -461,12 +484,14 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 sobrante_a_favor=total_abono_usd,
                 origen='ABONO_MASIVO',
                 sesion_caja=sesion,
-                referencia="Saldo a favor - Cliente sin facturas pendientes"
+                referencia=referencia or "Saldo a favor - Cliente sin facturas pendientes",
+                idempotency_key=idempotency_key
             )
 
             return Response({
                 "mensaje": "Saldo a favor guardado exitosamente.",
                 "saldo_a_favor_total": float(cliente.saldo_a_favor),
+                "saldo_a_favor": float(cliente.saldo_a_favor),
                 "monto_guardado": float(total_abono_usd)
             }, status=status.HTTP_200_OK)
 
@@ -593,7 +618,25 @@ class RegistrarAbonoMasivoAPIView(APIView):
                 abonos_list=aplicaciones,
                 sobrante=saldo_sobrante,
                 sesion_caja=sesion,
-                referencia=f"Abono masivo - {len(facturas_pagadas)} facturas afectadas"
+                referencia=referencia or f"Abono masivo - {len(facturas_pagadas)} facturas afectadas",
+                idempotency_key=idempotency_key
+            )
+        elif saldo_sobrante > Decimal('0.00'):
+            # Caso borde: no hubo facturas que aplicar, pero el dinero quedó
+            # como saldo a favor. Se registra el recibo para dejar rastro y
+            # persistir la clave de idempotencia.
+            ReciboAbono.objects.create(
+                cliente=cliente,
+                usuario=request.user,
+                fecha=fecha_dt,
+                monto_total_entregado=total_abono_usd,
+                desglose_metodos=desglose_metodos,
+                tasa_cambio=tasa_cambio,
+                sobrante_a_favor=saldo_sobrante,
+                origen='ABONO_MASIVO',
+                sesion_caja=sesion,
+                referencia=referencia or "Abono a saldo a favor",
+                idempotency_key=idempotency_key
             )
 
         return Response({
@@ -896,7 +939,9 @@ class ClienteDetalleHistorialAPIView(APIView):
         try:
             cliente = Cliente.objects.get(pk=pk)
             ventas = Venta.objects.filter(cliente=cliente).order_by('-fecha')
-            pagos = PagoCuentaCobrar.objects.filter(cuenta__cliente=cliente).order_by('-fecha')
+            pagos = PagoCuentaCobrar.objects.filter(cuenta__cliente=cliente).select_related(
+                'cuenta__venta', 'metodo', 'usuario'
+            ).order_by('-fecha')
 
             cxc_pendientes = CuentaPorCobrar.objects.filter(cliente=cliente, estado__in=['PENDIENTE', 'VENCIDA'])
 
@@ -960,7 +1005,13 @@ class ClienteDetalleHistorialAPIView(APIView):
                     "id": p.id,
                     "fecha": p.fecha,
                     "monto": float(p.monto_abono_principal),
+                    "monto_entregado_secundaria": float(p.monto_entregado_secundaria),
                     "referencia": p.referencia,
+                    "metodo_id": p.metodo_id,
+                    "metodo_nombre": p.metodo.nombre if p.metodo else None,
+                    "moneda": p.metodo.moneda_referencia if p.metodo else None,
+                    "origen": p.origen,
+                    "usuario": p.usuario.username if p.usuario else None,
                     "tasa_cambio": float(p.tasa_cambio_pago),
                     "factura_id": p.cuenta.venta.id if p.cuenta.venta else None,
                     "cxc_id": p.cuenta.id,
@@ -971,20 +1022,52 @@ class ClienteDetalleHistorialAPIView(APIView):
             # ═══════════════════════════════════════════════════════
             # RECIBOS (un recibo = un acto de pago del cliente)
             # ═══════════════════════════════════════════════════════
-            recibos = ReciboAbono.objects.filter(cliente=cliente).order_by('-fecha')
+            recibos = ReciboAbono.objects.filter(cliente=cliente).select_related('usuario').prefetch_related(
+                'aplicaciones__cuenta__venta'
+            ).order_by('-fecha')
+            # Mapa de métodos para completar el desglose de registros antiguos
+            # que solo guardaron el metodo_id (sin nombre ni moneda).
+            metodos_map = {m.id: m for m in MetodoPago.objects.all()}
             recibos_data = []
             for r in recibos:
+                desglose = []
+                for item in (r.desglose_metodos or []):
+                    if not isinstance(item, dict):
+                        continue
+                    metodo = metodos_map.get(item.get('metodo_id'))
+                    equivalente = item.get('monto_equivalente_usd')
+                    if equivalente is None:
+                        equivalente = item.get('monto_equivalente_principal')
+                    desglose.append({
+                        'metodo_id': item.get('metodo_id'),
+                        'metodo_nombre': item.get('metodo_nombre') or (metodo.nombre if metodo else None),
+                        'moneda': item.get('moneda') or (metodo.moneda_referencia if metodo else None),
+                        'monto_pagado': item.get('monto_pagado'),
+                        'monto_equivalente_usd': equivalente,
+                        'referencia': item.get('referencia') or '',
+                    })
+
+                aplicaciones = [{
+                    "cxc_id": a.cuenta_id,
+                    "venta_id": a.cuenta.venta_id if a.cuenta else None,
+                    "monto_aplicado": float(a.monto_aplicado),
+                    "saldo_despues": float(a.saldo_despues),
+                    "origen_dinero": a.origen_dinero,
+                } for a in r.aplicaciones.all()]
+
                 recibos_data.append({
                     "id": r.id,
                     "fecha": r.fecha,
                     "monto_total_entregado": float(r.monto_total_entregado),
                     "total_aplicado": float(r.total_aplicado),
                     "sobrante_a_favor": float(r.sobrante_a_favor),
+                    "tasa_cambio": float(r.tasa_cambio),
                     "origen": r.origen,
                     "referencia": r.referencia,
                     "facturas_afectadas": r.facturas_afectadas_count,
                     "usuario": r.usuario.username if r.usuario else None,
-                    "desglose_metodos": r.desglose_metodos,
+                    "desglose_metodos": desglose,
+                    "aplicaciones": aplicaciones,
                 })
 
             return Response({

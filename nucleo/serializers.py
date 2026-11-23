@@ -652,6 +652,10 @@ class AbonoMasivoSerializer(serializers.Serializer):
     guardar_saldo_favor = serializers.BooleanField(default=False)
     # Fecha manual del abono: actual o pasada (nunca futura).
     fecha = serializers.DateField(required=False, allow_null=True)
+    # Referencia general del abono (se muestra en el historial del cliente).
+    referencia = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    # Clave única del intento: el backend la usa para no duplicar el abono.
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=64)
 
     pagos = serializers.ListField(
         child=serializers.DictField(

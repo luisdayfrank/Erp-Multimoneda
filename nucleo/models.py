@@ -2176,7 +2176,14 @@ class ReciboAbono(models.Model):
     tasa_cambio = models.DecimalField(max_digits=15, decimal_places=2)
     sobrante_a_favor = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
     referencia = models.CharField(max_length=200, blank=True)
-    
+    # Clave de idempotencia enviada por el frontend. Es la barrera definitiva
+    # contra un doble clic o un reintento por internet lento: si el mismo
+    # intento llega dos veces, solo se registra un recibo.
+    idempotency_key = models.CharField(
+        max_length=64, unique=True, null=True, blank=True,
+        help_text="Identificador único del intento de abono (protección anti doble envío)."
+    )
+
     ORIGENES = (
         ('POS_VENTA', 'Pago en Punto de Venta (al facturar)'),
         ('ABONO_MASIVO', 'Abono Masivo desde módulo Clientes'),
@@ -2205,7 +2212,7 @@ class ReciboAbono(models.Model):
     def crear_desde_abonos(cls, cliente, usuario, tasa_cambio, monto_total, 
                            desglose_metodos, origen, abonos_list, venta_origen=None, 
                            sobrante=Decimal('0.00'), referencia='', sesion_caja=None,
-                           fecha=None):
+                           fecha=None, idempotency_key=None):
         """
         Crea un ReciboAbono + sus aplicaciones a partir de una lista de abonos ya ejecutados.
         Cada item de abonos_list debe ser: {
@@ -2228,6 +2235,7 @@ class ReciboAbono(models.Model):
                 tasa_cambio=tasa_cambio,
                 sobrante_a_favor=sobrante,
                 referencia=referencia,
+                idempotency_key=idempotency_key,
                 origen=origen,
                 venta_origen=venta_origen,
                 sesion_caja=sesion_caja

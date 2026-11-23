@@ -1073,13 +1073,38 @@ async function cargarHistorial() {
         rutas.forEach(r => {
             const tr = document.createElement('tr');
             tr.className = 'historial-item';
-            const difBs = parseFloat(r.diferencia_bs || 0);
             const tasa = parseFloat(r.tasa_cambio || 0);
-            const difUsd = r.diferencia_usd !== undefined && r.diferencia_usd !== null
-                ? parseFloat(r.diferencia_usd)
-                : (tasa > 0 ? difBs / tasa : 0);
+
+            // La diferencia se calcula con los mismos registros y la misma
+            // fórmula que el detalle de la ruta (calcularCuadreRuta). El campo
+            // diferencia_bs es un snapshot que puede quedar desfasado respecto
+            // a pagos, créditos y gastos si se editaron sin guardar la ruta.
+            const aPrincipal = (montoBS) => tasa > 0 ? parseFloat(montoBS || 0) / tasa : 0;
+            let pagosBS = 0;
+            let pagosUSD = 0;
+            (r.pagos || []).forEach(p => {
+                const montoBS = parseFloat(p.monto_bs || 0);
+                pagosBS += montoBS;
+                pagosUSD += parseFloat(p.monto_usd_equivalente) || aPrincipal(montoBS);
+            });
+            const creditosBS = (r.creditos || []).reduce((s, c) => s + parseFloat(c.monto_bs || 0), 0);
+            const gastosBS = (r.gastos || []).reduce((s, g) => s + parseFloat(g.monto_bs || 0), 0);
+            const cobranzasBS = parseFloat(r.total_cobranzas_bs || 0);
+
+            const cuadre = calcularCuadreRuta({
+                tasa,
+                ventaBs: r.total_venta_bs,
+                ventaUsd: r.total_venta_usd,
+                pagosBs: pagosBS,
+                pagosUsd: pagosUSD,
+                creditosBs: creditosBS,
+                gastosBs: gastosBS,
+                cobranzasBs: cobranzasBS,
+            });
+
+            const difUsd = cuadre.diferenciaUsd;
             const difClass = difUsd < -0.01 ? 'text-danger' : (difUsd > 0.01 ? 'text-success' : 'text-muted');
-            const utilidad = parseFloat(r.total_utilidad_usd || 0);
+            const utilidad = parseFloat(r.total_utilidad_usd || 0) - cuadre.gastosUsd;
             const utilClass = utilidad < -0.01 ? 'text-danger' : (utilidad > 0.01 ? 'text-success' : 'text-muted');
             tr.innerHTML = `
                 <td>${r.id}</td>
@@ -1087,10 +1112,7 @@ async function cargarHistorial() {
                 <td><span class="badge bg-${r.estado === 'CERRADA' ? 'success' : 'warning'}">${r.estado}</span></td>
                 <td>${monedaPrincipal} ${parseFloat(r.total_venta_usd || 0).toFixed(2)}</td>
                 <td class="${utilClass} fw-bold">${monedaPrincipal} ${utilidad.toFixed(2)}</td>
-                <td class="${difClass} fw-bold">
-                    ${monedaPrincipal} ${difUsd.toFixed(2)}
-                    <small class="d-block text-muted fw-normal">${monedaSecundaria} ${difBs.toFixed(2)}</small>
-                </td>
+                <td class="${difClass} fw-bold">${monedaPrincipal} ${difUsd.toFixed(2)}</td>
                 <td>${r.usuario_nombre || 'Admin'}</td>
                 <td>
                     <button class="btn btn-sm btn-primary me-1" onclick="verRuta(${r.id})" title="Ver"><i class="bi bi-eye"></i></button>
